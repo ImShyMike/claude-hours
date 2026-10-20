@@ -504,3 +504,14 @@ test('an interrupt records how much answer had shown and the tools cut off', asy
   expect(cuts[1]!.toolsRunning).toBeUndefined()
   expect(JSON.stringify(lines)).not.toContain('lemme')
 })
+
+test("an MCP tool's file_path argument is never logged", async ($, on) => {
+  const { lines } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+
+  await $.tool.call({ tool: 'mcp__drive__upload', file_path: '/home/me/secret-plans.pdf' } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/proj/a.txt' })
+
+  expect(JSON.stringify(lines)).not.toContain('secret-plans')
+  expect(lines.find(l => l.event === 'tool_start' && l.tool === 'Read')).toMatchObject({ file: '/proj/a.txt' })
+})

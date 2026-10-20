@@ -11,6 +11,9 @@ const LOG_FILE = 'events.jsonl'
 const DRAFTS_DIR = `${LOG_DIR}/drafts`
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
+// built-in tools whose path we log; an MCP tool's file_path argument is its
+// own business and stays out of the log
+const FILE_TOOLS = new Set(['Read', ...EDIT_TOOLS])
 const PRUNE = ['.git', 'node_modules', 'target', '.venv', 'venv', '__pycache__', 'dist', 'build']
 const MAX_PATHS_PER_CALL = 50
 // Claude Code's own churn under ~/.claude, this log included
@@ -502,10 +505,11 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
     const ids = { tool, toolUseId: e.tool_use_id, agentId: e.agentId }
+    const file = !FILE_TOOLS.has(tool) ? undefined : 'file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : undefined
     const startedMs = await $.clock.now()
     await log($, 'tool_start', {
       ...ids,
-      file: 'file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : undefined,
+      file,
       commandChars: e.tool === 'Bash' ? e.command.length : undefined,
     })
 
@@ -522,8 +526,7 @@ export const register: Register = on => {
       await log($, 'tool_end', { ...ids, outcome, durationMs })
 
       if (outcome === 'ok' && EDIT_TOOLS.has(tool)) {
-        const path = 'file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : undefined
-        await log($, 'file_changed', { ...ids, path, via: 'tool' })
+        await log($, 'file_changed', { ...ids, path: file, via: 'tool' })
       } else if (e.tool === 'Bash' && outcome !== 'denied') {
         const paths = await filesChangedSince($, startedMs).catch(err => {
           $.ui.log(`${$.plugin.name}: ${String(err)}`)
