@@ -570,7 +570,7 @@ async function init() {
   // the Projects lane's legend too
   const idleCapMs = Number(load('idle', '5')) * MIN
   colors = palette(summarize(all, { idleCapMs }).projects)
-  $('projects').innerHTML = split.map(p => `${chip(colors!, p.project)}<span class="muted">${duration(p.ms)}</span>`).join(' ')
+  $('projects').innerHTML = split.map(p => chip(colors!, p.project, p.ms)).join('')
   const byProject = [...projectSpans(events, idleCapMs)].flatMap(([project, spans]) => spans.map(span => ({ project, span })))
   byProject.sort((a, b) => Number(b.project === project) - Number(a.project === project) || a.span[0] - b.span[0])
   projectTracks = []

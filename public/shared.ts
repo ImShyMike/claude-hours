@@ -114,5 +114,6 @@ export function projectLegend(colors: Palette, projects: string[]) {
     .join('')
 }
 
-export const chip = (colors: Palette, project: string) =>
-  `<span class="chip"><span class="swatch" style="background:${colors.color(project)}"></span>${esc(project)}</span>`
+// with ms, its time after the name: terra (1h 02m)
+export const chip = (colors: Palette, project: string, ms?: number) =>
+  `<span class="chip"><span class="swatch" style="background:${colors.color(project)}"></span>${esc(project)}${ms ? ` <span class="muted">(${duration(ms)})</span>` : ''}</span>`

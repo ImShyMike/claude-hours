@@ -354,14 +354,16 @@ function render() {
     shown
       .map(
         (x, i) => `<tr data-i="${i}"><td><a href="${withPerson(`/session?id=${encodeURIComponent(x.sessionId)}`)}">${when(x.start)}</a></td><td class="chips">${projectsOf(x)
-          .map(p => chip(colors, p.project))
+          .map(p => chip(colors, p.project, p.ms))
           .join('')}</td><td class="num">${duration(x.activeMs)}</td><td class="num">${x.prompts}</td><td class="muted"><code>${esc(x.sessionId.slice(0, 8))}</code></td></tr>`,
       )
       .join('')
   $('sessions').querySelectorAll<HTMLElement>('.chips').forEach(cell => {
     const x = shown[Number(cell.parentElement!.dataset.i)]!
     if (x.projects.length < 2) return
-    const tip = `<strong>${duration(x.activeMs)} active</strong>${stack(colors, Object.fromEntries(x.projects.map(p => [p.project, p.ms]))).lines}<span class="muted">shared time counts for each</span>`
+    // the times can add up to more than Active: a stretch two projects
+    // shared counts in full for each
+    const tip = `<strong>${duration(x.activeMs)} active</strong>time two projects shared counts for each`
     cell.addEventListener('mousemove', e => showTip(e, tip))
     cell.addEventListener('mouseleave', hideTip)
   })
