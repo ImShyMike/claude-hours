@@ -137,7 +137,7 @@ format. The full field list is in the mod's `TODO.md`; the short version:
 | `draft_abandoned` | a typed draft was cleared, undone, deleted or left at exit without being sent |
 | `turn_end` / `interrupt` | a turn finished, or was stopped with Esc (`answerChars` and `toolsRunning` say what got cut off); `waits` lists its permission dialogs as `[ms before the end it opened, ms open, tool]` |
 | `compact` | a compaction finished: trigger, tokens before and after, how long it took |
-| `tool` | a tool call finished, with outcome and duration (its row is written at the end, so it began `durationMs` earlier) |
+| `tool` | a tool call finished, with outcome and duration (its row is written at the end, so it began `durationMs` earlier); `repo` is the git root it worked in when that's not the cwd's (a file elsewhere, or a Bash command starting `cd other-repo`) |
 | `file_changed` | a file edited by a tool, or changed during a Bash call |
 | `cwd_changed` | the session's working directory moved |
 
@@ -245,8 +245,18 @@ the next session start resend it all (the hub skips what it already has).
   then a gap like the one before your next prompt: under the idle cap it
   still counts, over it it's idle. The session timeline shows it on the You
   lane.
-- Subagent turns don't add time, because they overlap the main thread. Their
-  tokens still count.
+- Time goes to the repo the work is in, not just the session's. Each thread
+  (the main one, or a subagent) starts in the cwd's project, and a tool call
+  that touches a file in another git repo, or a Bash command that `cd`s into
+  one, moves that thread there until a call works back home (any Bash with
+  no `cd`, or a file under the cwd). Files in no repo at all don't move it.
+- A subagent's turn adds time only where it works away from the main
+  thread's project, like a fork sent off to another codebase. Then both
+  projects get that stretch in full, while the total, days and hours count
+  it once. Alongside the main thread it adds nothing, since the main turn
+  covers it. Subagent tokens always count.
+- An idle gap is only bridged if nothing else was going on in it: time spent
+  in another project isn't idle in this one.
 - A main-thread compaction is a span of its `durationMs` too, so a `/compact`
   between turns counts as time spent. A `precompute` runs in the background
   and doesn't.
@@ -256,8 +266,11 @@ the next session start resend it all (the hub skips what it already has).
   keystroke and puts `typingMs` (pauses over 30 s left out) on the `prompt`
   line. Drafts that never get sent are logged as `draft_abandoned`. Both count
   as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
-- A project is named after the nearest git root above the event's `cwd`, so
-  subdirectories don't split a repo. `~/.claude` shows up as `~/.claude`.
+- A project is named after the nearest git root above the event's `cwd` (or
+  above the file or `repo` it worked in), so subdirectories don't split a
+  repo. `~/.claude` shows up as `~/.claude`. On a hub, where the paths are
+  someone else's disk, it's the folder's name, and only the mod's `repo`
+  moves time.
 - All aggregation happens in the browser, so days and hours are local time.
 
 ## Session page

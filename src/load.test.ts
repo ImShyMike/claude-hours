@@ -38,6 +38,32 @@ test('loadEvents reads every session file in events/ and skips other files', asy
   expect(events[0]!.project).toBe('proj')
 })
 
+test('loadEvents says which repo a tool call really worked in', async () => {
+  const dir = scratch()
+  const code = scratch()
+  mkdirSync(join(dir, 'events'))
+  mkdirSync(join(code, 'terra/.git'), { recursive: true })
+  mkdirSync(join(code, 'hub/.git'), { recursive: true })
+  mkdirSync(join(code, 'loose'), { recursive: true })
+  const rows = [
+    { v: 1, event: 'session', start: Date.parse('2026-10-19T12:00:00Z'), cwd: join(code, 'terra') },
+    // the mod's repo, a file outside the cwd, one in no repo, one inside it,
+    // a Bash with no repo, and a tool that says nothing
+    { t: 1, event: 'tool', tool: 'Bash', repo: join(code, 'hub') },
+    { t: 2, event: 'tool', tool: 'Edit', file: join(code, 'hub/src/a.ts') },
+    { t: 3, event: 'tool', tool: 'Read', file: join(code, 'loose/notes.txt') },
+    { t: 4, event: 'file_changed', path: 'src/b.ts' },
+    { t: 5, event: 'tool', tool: 'Bash' },
+    { t: 6, event: 'tool', tool: 'WebFetch' },
+  ]
+  writeFileSync(join(dir, 'events', 'abc-1.jsonl'), rows.map(r => `${JSON.stringify(r)}\n`).join(''))
+  const events = await loadEvents(dir)
+  expect(events.map(e => e.workProject)).toEqual(['hub', 'hub', undefined, 'terra', 'terra', undefined])
+  // on the hub, only what the mod said counts: someone else's disk can't be read
+  const remote = await loadEvents(dir, { remote: true })
+  expect(remote.map(e => e.workProject)).toEqual(['hub', undefined, undefined, 'terra', 'terra', undefined])
+})
+
 test('loadEvents on a missing dir is empty', async () => {
   expect(await loadEvents(join(scratch(), 'nope'))).toEqual([])
 })

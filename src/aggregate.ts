@@ -84,6 +84,7 @@ const time = (e: Event) => Date.parse(typeof e.endedAt === 'string' ? e.endedAt 
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')
 // subagent turns overlap the main thread's, so only main-thread turns make spans
 const isMainTurn = (e: Event) => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId
+const isAgentTurn = (e: Event) => (e.event === 'turn_end' || e.event === 'interrupt') && !!e.agentId
 
 // How long before its own line an event's activity began: a main-thread
 // turn's whole run, or the typing that went into a prompt (sent or not).
@@ -163,19 +164,97 @@ function nextHour(ms: number) {
 // Moments and spans closer than idleCapMs merge; anything further apart is
 // idle and doesn't count.
 export function activeIntervals(events: Event[], idleCapMs: number): Interval[] {
-  const waits = waitsOf(events)
-  const raw: Interval[] = events.flatMap(e => {
-    const end = time(e)
-    return isMainTurn(e) ? turnPieces(end, leadMs(e), waits) : [[end - leadMs(e), end] as Interval]
-  })
-  raw.sort((a, b) => a[0] - b[0])
+  return mergeWithin([...projectSpans(events, idleCapMs).values()].flat(), 0)
+}
+
+// Overlapping intervals join, and so do ones up to capMs apart, unless the
+// gap between them is busy with something else (`busy`: another project's
+// work isn't an idle gap in this one)
+function mergeWithin(intervals: Interval[], capMs: number, busy: Interval[] = []): Interval[] {
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0])
+  const others = busy.length ? mergeWithin(busy, 0) : []
+  // gaps come in time order, so one pointer walks the busy stretches
+  let j = 0
+  const quiet = (from: number, to: number) => {
+    while (j < others.length && others[j]![1] <= from) j++
+    return !(j < others.length && others[j]![0] < to)
+  }
   const merged: Interval[] = []
-  for (const [start, end] of raw) {
+  for (const [start, end] of sorted) {
     const last = merged[merged.length - 1]
-    if (last && start - last[1] <= idleCapMs) last[1] = Math.max(last[1], end)
+    if (last && (start <= last[1] || (start - last[1] <= capMs && quiet(last[1], start)))) last[1] = Math.max(last[1], end)
     else merged.push([start, end])
   }
   return merged
+}
+
+// Where each thread (the main one, or a subagent by agentId) is working: it
+// starts in the cwd's project, and a tool call that says where it ran (the
+// server's workProject: a file's repo, a Bash cd) moves it there from the
+// call's start until another one moves it again
+type Move = { at: number; away?: string }
+const threadOf = (e: Event) => (typeof e.agentId === 'string' ? e.agentId : '')
+
+function movesOf(events: Event[]) {
+  const moves = new Map<string, Move[]>()
+  for (const e of events) {
+    if (typeof e.workProject !== 'string') continue
+    const at = time(e) - (e.event === 'tool' ? Number(e.durationMs) || 0 : 0)
+    const list = moves.get(threadOf(e)) ?? []
+    list.push({ at, away: e.workProject === projectOf(e) ? undefined : e.workProject })
+    moves.set(threadOf(e), list)
+  }
+  for (const list of moves.values()) list.sort((a, b) => a.at - b.at)
+  return moves
+}
+
+// a span cut where its thread moved, each piece with its project
+function placed([start, end]: Interval, moves: Move[] | undefined, home: string): [string, Interval][] {
+  let away: string | undefined
+  const cuts: Move[] = []
+  for (const m of moves ?? []) {
+    if (m.at <= start) away = m.away
+    else if (m.at < end) cuts.push(m)
+  }
+  const pieces: [string, Interval][] = []
+  let from = start
+  for (const m of cuts) {
+    pieces.push([away ?? home, [from, m.at]])
+    from = m.at
+    away = m.away
+  }
+  pieces.push([away ?? home, [from, end]])
+  return pieces
+}
+
+// One session's active time by project. The main thread's spans count
+// wherever it was working. A subagent's turn counts only where it worked
+// away from the main thread's project: alongside it, the main turn already
+// covers that time. So two projects can share a stretch (each gets it in
+// full), and activeIntervals' total counts it once
+export function projectSpans(events: Event[], idleCapMs: number): Map<string, Interval[]> {
+  const waits = waitsOf(events)
+  const moves = movesOf(events)
+  const raw = new Map<string, Interval[]>()
+  const add = (project: string, interval: Interval) => {
+    const list = raw.get(project)
+    if (list) list.push(interval)
+    else raw.set(project, [interval])
+  }
+  for (const e of events) {
+    const end = time(e)
+    const home = projectOf(e)
+    const thread = moves.get(threadOf(e))
+    const spans: Interval[] = isMainTurn(e) ? turnPieces(end, leadMs(e), waits) : [[end - leadMs(e), end]]
+    for (const span of spans) for (const [project, piece] of placed(span, thread, home)) add(project, piece)
+    if (isAgentTurn(e)) {
+      for (const [project, piece] of placed([end - (Number(e.durationMs) || 0), end], thread, home)) {
+        if (project !== home) add(project, piece)
+      }
+    }
+  }
+  const elsewhere = (project: string) => [...raw].flatMap(([p, intervals]) => (p === project ? [] : intervals))
+  return new Map([...raw].map(([project, intervals]) => [project, mergeWithin(intervals, idleCapMs, elsewhere(project))]))
 }
 
 function clip([start, end]: Interval, from: number, to: number): Interval | undefined {
@@ -224,13 +303,14 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   const hi = to ?? last + 1
   const inWindow = (e: Event) => time(e) >= lo && time(e) < hi
 
-  // time: per session and project, so a cd between repos doesn't bridge them
-  const groups = new Map<string, Event[]>()
+  // time: per session, and within it per project, so a cd between repos
+  // doesn't bridge them. A stretch two projects share counts in full for
+  // each, and once for the total, days and hours
+  const sessionsOf = new Map<string, Event[]>()
   for (const e of valid) {
-    const key = `${e.sessionId}\u0000${projectOf(e)}`
-    const list = groups.get(key)
+    const list = sessionsOf.get(e.sessionId)
     if (list) list.push(e)
-    else groups.set(key, [e])
+    else sessionsOf.set(e.sessionId, [e])
   }
 
   const dayMs = new Map<string, number>()
@@ -238,17 +318,22 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   const projectMs = new Map<string, number>()
   const sessionMs = new Map<string, number>()
   let totalMs = 0
-  for (const [key, events] of groups) {
-    const [sessionId, project] = key.split('\u0000') as [string, string]
-    for (const interval of activeIntervals(events, idleCapMs)) {
-      const kept = valid.length ? clip(interval, lo, hi) : undefined
-      if (!kept) continue
-      for (const [day, ms] of byDay(kept)) inc(dayMs, day, ms)
-      for (const [hour, ms] of byHour(kept)) hours[hour]! += ms
-      const ms = kept[1] - kept[0]
-      totalMs += ms
-      inc(projectMs, project, ms)
-      inc(sessionMs, sessionId, ms)
+  const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
+  for (const [sessionId, events] of sessionsOf) {
+    const byProject = projectSpans(events, idleCapMs)
+    for (const [project, intervals] of byProject) {
+      for (const interval of intervals) {
+        const k = kept(interval)
+        if (k) inc(projectMs, project, k[1] - k[0])
+      }
+    }
+    for (const interval of mergeWithin([...byProject.values()].flat(), 0)) {
+      const k = kept(interval)
+      if (!k) continue
+      for (const [day, ms] of byDay(k)) inc(dayMs, day, ms)
+      for (const [hour, ms] of byHour(k)) hours[hour]! += ms
+      totalMs += k[1] - k[0]
+      inc(sessionMs, sessionId, k[1] - k[0])
     }
   }
 

@@ -303,17 +303,57 @@ const log = ($: EngineInterface, event: string, fields: Fields = {}) => logAll($
 
 // Bash (and python run from it) can touch anything, so look for files under
 // the working dir modified since the call started. Can't tell who did it.
-async function filesChangedSince($: EngineInterface, startedMs: number) {
+async function filesChangedSince($: EngineInterface, startedMs: number, repo?: string) {
   const [cwd, dir] = await Promise.all([$.session.cwd(), homeDir($)])
-  if (cwd === '/' || cwd === dir) return []
+  const roots = [cwd === '/' || cwd === dir ? undefined : cwd, repo].filter((root): root is string => !!root)
+  if (!roots.length) return []
   const prune = PRUNE.flatMap((name, i) => (i === 0 ? ['-name', name] : ['-o', '-name', name]))
-  const argv = ['find', cwd, '(', ...prune, ')', '-prune', '-o', '-type', 'f', '-newermt', isoSeconds(startedMs), '-print']
+  const argv = ['find', ...roots, '(', ...prune, ')', '-prune', '-o', '-type', 'f', '-newermt', isoSeconds(startedMs), '-print']
   const { stdout } = await $.process.run(argv, { timeoutMs: 3_000 })
   const noisy = NOISY_HOME_DIRS.map(sub => `${dir}/${sub}/`)
   return stdout
     .split('\n')
     .filter(path => path && !noisy.some(prefix => path.startsWith(prefix)))
     .slice(0, MAX_PATHS_PER_CALL)
+}
+
+// Where a call worked when that's another repo than the cwd's: the git root
+// of a file outside the cwd, or of where a Bash command cd's to first
+// (`cd ../hub && make`). Only the root is logged, never the command
+const roots = new Map<string, Promise<string | undefined>>()
+function rootOf($: EngineInterface, dir: string) {
+  let root = roots.get(dir)
+  if (!root) {
+    root = $.process
+      .run(['git', '-C', dir, 'rev-parse', '--show-toplevel'], { timeoutMs: 2_000 })
+      .then(r => (r.exitCode === 0 && r.stdout.trim()) || undefined)
+      .catch(() => undefined)
+    roots.set(dir, root)
+  }
+  return root
+}
+
+// `..` and `.` folded away, relative paths taken from base
+function resolvePath(base: string, path: string) {
+  const parts: string[] = []
+  for (const part of (path.startsWith('/') ? path : `${base}/${path}`).split('/')) {
+    if (part === '..') parts.pop()
+    else if (part && part !== '.') parts.push(part)
+  }
+  return `/${parts.join('/')}`
+}
+
+function cdTarget(command: string, cwd: string, home: string) {
+  const m = /^\s*cd\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/.exec(command)
+  const to = m?.[1] ?? m?.[2] ?? m?.[3]
+  if (!to) return undefined
+  return resolvePath(cwd, to === '~' ? home : to.startsWith('~/') ? home + to.slice(1) : to)
+}
+
+async function workRepo($: EngineInterface, where: string | undefined, cwd: string) {
+  if (!where || where === cwd || where.startsWith(`${cwd}/`)) return undefined
+  const [root, home] = await Promise.all([rootOf($, where), rootOf($, cwd)])
+  return root && root !== home ? root : undefined
 }
 
 // A glob as a RegExp: ** any run of folders, * anything within one name,
@@ -848,13 +888,15 @@ export const register: Register = on => {
       const rules = await fileRules($, dir)
       const keep = (path: string | undefined) => (path && allowed(rules, path, cwd, dir) ? path : undefined)
       const file = keep(typeof named === 'string' ? named : undefined)
+      const where = file ? resolvePath(cwd, file).replace(/\/[^/]*$/, '') : e.tool === 'Bash' ? cdTarget(e.command, cwd, dir) : undefined
+      const repo = keep(await workRepo($, where, cwd))
       const entries: [string, Fields][] = [
-        ['tool', { ...ids, file, commandChars: e.tool === 'Bash' ? e.command.length : undefined, outcome, durationMs }],
+        ['tool', { ...ids, file, repo, commandChars: e.tool === 'Bash' ? e.command.length : undefined, outcome, durationMs }],
       ]
       if (outcome === 'ok' && EDIT_TOOLS.has(tool)) {
         if (file) entries.push(['file_changed', { ...ids, path: file, via: 'tool' }])
       } else if (e.tool === 'Bash' && outcome !== 'denied') {
-        const paths = await filesChangedSince($, startedMs).catch(err => {
+        const paths = await filesChangedSince($, startedMs, repo).catch(err => {
           $.ui.log(`${$.plugin.name}: ${String(err)}`)
           return []
         })

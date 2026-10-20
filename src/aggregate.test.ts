@@ -80,6 +80,48 @@ test('a subagent asking does not move the main turn', () => {
   expect(summarize(events, { idleCapMs: 1 * MIN }).totalMs).toBe(5 * MIN)
 })
 
+test('a fork working in another repo gives it the time too, counted once in the total', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    // the main turn waits 10 min on a fork that edits files in hub
+    at('2026-10-19T12:01:00Z', 'tool', { agentId: 'a1', tool: 'Edit', durationMs: 1000, workProject: 'hub' }),
+    at('2026-10-19T12:10:00Z', 'turn_end', { agentId: 'a1', durationMs: 10 * MIN }),
+    at('2026-10-19T12:10:00Z', 'tool', { tool: 'Agent', durationMs: 10 * MIN }),
+    at('2026-10-19T12:10:00Z', 'turn_end', { durationMs: 10 * MIN }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN })
+  expect(s.projects).toEqual([
+    { project: 'terra', ms: 10 * MIN },
+    // from the fork's first call to its end
+    { project: 'hub', ms: 9 * MIN + 1000 },
+  ])
+  expect(s.totalMs).toBe(10 * MIN)
+})
+
+test('the main thread moves to the repo it works in, and back', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    at('2026-10-19T12:02:00Z', 'tool', { tool: 'Edit', durationMs: 1 * MIN, workProject: 'hub' }),
+    // a Bash with no cd runs in the cwd again
+    at('2026-10-19T12:07:00Z', 'tool', { tool: 'Bash', durationMs: 1 * MIN, workProject: 'terra' }),
+    at('2026-10-19T12:10:00Z', 'turn_end', { durationMs: 10 * MIN }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN })
+  expect(Object.fromEntries(s.projects.map(p => [p.project, p.ms]))).toEqual({ terra: 5 * MIN, hub: 5 * MIN })
+  expect(s.totalMs).toBe(10 * MIN)
+})
+
+test('a subagent in the same repo adds nothing', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    at('2026-10-19T12:05:00Z', 'tool', { agentId: 'a1', tool: 'Edit', durationMs: 1000, workProject: 'terra' }),
+    at('2026-10-19T12:30:00Z', 'turn_end', { agentId: 'a1', durationMs: 30 * MIN }),
+    at('2026-10-19T12:01:00Z', 'turn_end', { durationMs: 1 * MIN }),
+  ]
+  const s = summarize(events, { idleCapMs: 1 * MIN })
+  expect(s.projects).toEqual([{ project: 'terra', ms: 1 * MIN + 0 }])
+})
+
 test('short idle gaps are bridged', () => {
   const events = [at('2026-10-19T12:00:00Z', 'tool'), at('2026-10-19T12:04:00Z', 'tool')]
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(4 * MIN)

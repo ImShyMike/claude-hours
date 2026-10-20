@@ -80,7 +80,7 @@ export function encodeSession(events: Event[]): string {
       cwd = e.cwd
       rows.push({ t, event: 'cwd_changed', cwd })
     }
-    const { ts: _ts, sessionId: _s, cwd: _c, project: _p, event, ...rest } = e
+    const { ts: _ts, sessionId: _s, cwd: _c, project: _p, workProject: _w, event, ...rest } = e
     if (event === 'cwd_changed') continue
     const row: Record<string, unknown> = { t, event }
     const usual = DEFAULTS[event] ?? {}

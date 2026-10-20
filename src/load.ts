@@ -7,27 +7,46 @@ import type { Event } from './aggregate'
 import { decodeSession } from './eventlog'
 import { parseTimelines, type Timeline } from './replay'
 
-const projectCache = new Map<string, string>()
+const repoCache = new Map<string, string | null>()
 
-// A cd into a subdir shouldn't split a repo into two projects, so name the
-// nearest git root. ~/.claude gets a friendly name of its own.
-export function projectFor(cwd: string, home = homedir()) {
-  const cached = projectCache.get(cwd)
-  if (cached) return cached
-  let name = basename(cwd) || '/'
-  for (let dir = cwd; ; dir = dirname(dir)) {
-    if (dir === join(home, '.claude')) {
+// the name of the nearest git root at or above dir (~/.claude gets a friendly
+// name of its own), or undefined when there's none
+export function repoFor(dir: string, home = homedir()) {
+  const cached = repoCache.get(dir)
+  if (cached !== undefined) return cached ?? undefined
+  let name: string | null = null
+  for (let at = dir; ; at = dirname(at)) {
+    if (at === join(home, '.claude')) {
       name = '~/.claude'
       break
     }
-    if (existsSync(join(dir, '.git'))) {
-      name = basename(dir)
+    if (existsSync(join(at, '.git'))) {
+      name = basename(at)
       break
     }
-    if (dir === dirname(dir) || dir === home) break
+    if (at === dirname(at) || at === home) break
   }
-  projectCache.set(cwd, name)
-  return name
+  repoCache.set(dir, name)
+  return name ?? undefined
+}
+
+// A cd into a subdir shouldn't split a repo into two projects, so name the
+// nearest git root, else the folder itself
+export function projectFor(cwd: string, home = homedir()) {
+  return repoFor(cwd, home) ?? (basename(cwd) || '/')
+}
+
+// Which project a tool call or changed file was really in: the repo the mod
+// saw it work in (a Bash cd, a file outside the cwd's repo), else a file's own
+// repo. A Bash call with no repo ran in the cwd. Undefined when it says
+// nothing, like a file in no repo at all. The dashboard moves the calling
+// thread's time there (aggregate's projectSpans)
+function workProject(e: Event, remote: boolean) {
+  if (e.event !== 'tool' && e.event !== 'file_changed') return undefined
+  if (typeof e.repo === 'string') return remote ? basename(e.repo) || '/' : repoFor(e.repo)
+  const path = typeof e.file === 'string' ? e.file : typeof e.path === 'string' ? e.path : undefined
+  if (path) return path.startsWith(`${e.cwd}/`) ? e.project : remote ? undefined : repoFor(dirname(path))
+  return e.tool === 'Bash' ? e.project : undefined
 }
 
 // Session ids are uuids; anything else never reaches a path
@@ -63,6 +82,8 @@ export async function loadEvents(dir: string, { remote = false } = {}): Promise<
     for (const text of await sessionParts(join(dir, 'events', `${sessionId}.jsonl`))) {
       for (const e of decodeSession(text, sessionId)) {
         if (e.cwd) e.project = remote ? basename(e.cwd) || '/' : projectFor(e.cwd)
+        const work = workProject(e, remote)
+        if (work) e.workProject = work
         events.push(e)
       }
     }

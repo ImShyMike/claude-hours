@@ -32,6 +32,8 @@ const setup = (on: On) => {
   // what each file holds, so fs.exists / fs.read answer like a disk would
   const files = new Map<string, string>()
   let findOutput = ''
+  // git roots by folder, for `git -C <dir> rev-parse --show-toplevel`
+  const gitRoots: [string, string][] = [['/proj', '/proj'], ['/code/hub', '/code/hub']]
   let sweepOutput = ''
   let cwd = '/proj'
   let now = 1_790_000_000_000
@@ -68,7 +70,13 @@ const setup = (on: On) => {
       stdout = new TextDecoder().decode(all.subarray(from, from + Number(e.argv[6])))
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
-    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    let exitCode = 0
+    if (cmd === 'git') {
+      const dir = e.argv[2]!
+      stdout = gitRoots.find(([root]) => dir === root || dir.startsWith(`${root}/`))?.[1] ?? ''
+      exitCode = stdout ? 0 : 128
+    }
+    return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   // the box as the editor would leave it, and the submit going through
   on('prompt.edit', (_, e) => ({
@@ -610,6 +618,24 @@ test('a turn with no dialog, or only a question, logs no waits', async ($, on) =
   await $.turn.complete({ answer: '', durationMs: 4_000, turnId: 't2', reason: 'answer', isAborted: false })
 
   expect(lines.filter(l => l.event === 'turn_end').map(l => l.waits)).toEqual([undefined, undefined])
+})
+
+test('a call working in another repo logs that repo, never the command', async ($, on) => {
+  const { lines, runs } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+
+  await $.tool.call({ tool: 'Bash', command: 'cd ../code/hub && make deploy' })
+  await $.tool.call({ tool: 'Edit', file_path: '/code/hub/src/a.ts', old_string: 'a', new_string: 'b' })
+  // inside the cwd, in no repo at all, or a Bash with no cd: no repo
+  await $.tool.call({ tool: 'Bash', command: 'cd src && ls' })
+  await $.tool.call({ tool: 'Read', file_path: '/etc/hosts' })
+  await $.tool.call({ tool: 'Bash', command: 'make' })
+
+  const tools = lines.filter(l => l.event === 'tool')
+  expect(tools.map(l => l.repo)).toEqual(['/code/hub', '/code/hub', undefined, undefined, undefined])
+  expect(JSON.stringify(lines)).not.toContain('deploy')
+  // the Bash window looks in the repo it cd'd into too
+  expect(runs.find(r => r[0] === 'find')!.slice(1, 3)).toEqual(['/proj', '/code/hub'])
 })
 
 test("an MCP tool's file_path argument is never logged", async ($, on) => {
