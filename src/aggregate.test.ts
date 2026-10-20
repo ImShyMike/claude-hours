@@ -158,6 +158,34 @@ test('an empty log summarizes to zeros', () => {
   expect(s.sessions).toEqual([])
 })
 
+test('typing a prompt counts as active time, tea breaks do not', () => {
+  const events = [
+    // 10 minutes from first key to Enter, 2 of them actually typing
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', composeMs: 10 * MIN, typingMs: 2 * MIN, typedChars: 300, pastedChars: 0 }),
+    at('2026-10-19T12:15:00Z', 'turn_end', { durationMs: 5 * MIN }),
+  ]
+  const s = summarize(events, { idleCapMs: 1 * MIN })
+  expect(s.totalMs).toBe(7 * MIN)
+  expect(s.writing).toEqual({ typingMs: 2 * MIN, sent: 1, abandoned: 0, abandonedMs: 0, typedChars: 300, pastedChars: 0 })
+})
+
+test('an abandoned draft is placed by its own end, not its late line', () => {
+  // given up at 23:50 in New York, but only logged at 01:00 when the next draft began
+  const events = [
+    at('2026-10-20T05:00:00Z', 'draft_abandoned', {
+      startedAt: '2026-10-20T03:49:00Z',
+      endedAt: '2026-10-20T03:50:00Z',
+      typingMs: 1 * MIN,
+      composeMs: 1 * MIN,
+      typedChars: 40,
+      how: 'clear',
+    }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN })
+  expect(s.days).toEqual([{ day: '2026-10-19', ms: 1 * MIN, prompts: 0 }])
+  expect(s.writing).toMatchObject({ abandoned: 1, abandonedMs: 1 * MIN, typingMs: 1 * MIN, sent: 0 })
+})
+
 test('languageOf', () => {
   expect(languageOf('/a/b/x.TSX')).toBe('TypeScript')
   expect(languageOf('/a/.env')).toBe('Other')

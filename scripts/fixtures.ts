@@ -33,7 +33,33 @@ for (let back = DAYS; back >= 0; back--) {
     const prompts = Math.floor(between(2, 14))
     for (let p = 0; p < prompts; p++) {
       const words = Math.floor(between(3, 80))
-      row('prompt', { words, chars: words * 6, origin: rand() < 0.9 ? 'composer' : 'task-notification' })
+      // now and then a draft typed and thrown away first
+      if (rand() < 0.12) {
+        const typingMs = Math.round(between(5, 90) * 1000)
+        const endedAt = at - between(30, 300) * 1000
+        lines.push(JSON.stringify({
+          ts: new Date(at).toISOString(), sessionId, cwd, event: 'draft_abandoned',
+          startedAt: new Date(endedAt - typingMs * 1.4).toISOString(), endedAt: new Date(endedAt).toISOString(),
+          composeMs: Math.round(typingMs * 1.4), typingMs, edits: Math.floor(typingMs / 900), typedChars: Math.floor(typingMs / 220),
+          pastedChars: 0, deletedChars: 4, how: rand() < 0.6 ? 'clear' : 'deleted',
+        }))
+      }
+      const composer = rand() < 0.9
+      const typingMs = Math.round(words * 6 * between(180, 320))
+      const pasted = rand() < 0.15 ? Math.floor(between(40, 2000)) : 0
+      row('prompt', {
+        words,
+        chars: words * 6 + pasted,
+        origin: composer ? 'composer' : 'task-notification',
+        ...(composer && {
+          composeMs: Math.round(typingMs * between(1, 2.5)),
+          typingMs,
+          edits: Math.floor(typingMs / 700),
+          typedChars: words * 6,
+          pastedChars: pasted,
+          deletedChars: Math.floor(words * between(0, 2)),
+        }),
+      })
       const turnStart = at
       const calls = Math.floor(between(0, 9))
       for (let c = 0; c < calls; c++) {

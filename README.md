@@ -26,6 +26,10 @@ defaults. Add `?theme=dark` or `?theme=light` to the URL to pin the theme.
   tokens still count.
 - Time is computed separately for each session and project, so a `cd` from
   one repo into another doesn't bridge them.
+- Typing a prompt counts too. hook-analytics times each draft from its first
+  keystroke and puts `typingMs` (pauses over 30 s left out) on the `prompt`
+  line. Drafts that never get sent are logged as `draft_abandoned`. Both count
+  as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
 - A project is named after the nearest git root above the event's `cwd`, so
   subdirectories don't split a repo. `~/.claude` shows up as `~/.claude`.
 - All aggregation happens in the browser, so days and hours are local time.

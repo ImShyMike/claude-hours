@@ -30,6 +30,8 @@ export type Summary = {
   languages: { language: string; edits: number }[]
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
   prompts: { count: number; avgWords: number; avgChars: number; typed: number }
+  // time spent typing prompts (from hook-analytics' prompt.edit tracking)
+  writing: { typingMs: number; sent: number; abandoned: number; abandonedMs: number; typedChars: number; pastedChars: number }
   turns: number
   interrupts: number
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -59,10 +61,20 @@ export function languageOf(path: string) {
 // still activity, but they aren't prompts anyone wrote
 const HUMAN_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 
-const time = (e: Event) => Date.parse(e.ts)
+// a draft_abandoned line is written late, so it carries its own end
+const time = (e: Event) => Date.parse(typeof e.endedAt === 'string' ? e.endedAt : e.ts)
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')
 // subagent turns overlap the main thread's, so only main-thread turns make spans
 const isMainTurn = (e: Event) => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId
+
+// How long before its own line an event's activity began: a main-thread
+// turn's whole run, or the typing that went into a prompt (sent or not).
+// Typing uses typingMs, not composeMs, so a tea break mid-draft isn't counted
+function leadMs(e: Event) {
+  if (isMainTurn(e)) return Number(e.durationMs) || 0
+  if (e.event === 'prompt' || e.event === 'draft_abandoned') return Number(e.typingMs) || 0
+  return 0
+}
 
 // YYYY-MM-DD in local time
 export function dayKey(ms: number) {
@@ -86,8 +98,7 @@ function nextHour(ms: number) {
 export function activeIntervals(events: Event[], idleCapMs: number): Interval[] {
   const raw: Interval[] = events.map(e => {
     const end = time(e)
-    const span = isMainTurn(e) && typeof e.durationMs === 'number' ? e.durationMs : 0
-    return [end - span, end]
+    return [end - leadMs(e), end]
   })
   raw.sort((a, b) => a[0] - b[0])
   const merged: Interval[] = []
@@ -138,7 +149,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   // A loop, not Math.min(...xs), which overflows the stack on a big log
   let first = Infinity, last = -Infinity
   for (const e of valid) {
-    first = Math.min(first, time(e) - (isMainTurn(e) ? Number(e.durationMs) || 0 : 0))
+    first = Math.min(first, time(e) - leadMs(e))
     last = Math.max(last, time(e))
   }
   const lo = from ?? first
@@ -180,6 +191,12 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   const sessions = new Map<string, Summary['sessions'][number]>()
   let promptCount = 0, words = 0, chars = 0, typed = 0, turns = 0, interrupts = 0
+  const writing = { typingMs: 0, sent: 0, abandoned: 0, abandonedMs: 0, typedChars: 0, pastedChars: 0 }
+  const countTyping = (e: Event) => {
+    writing.typingMs += Number(e.typingMs) || 0
+    writing.typedChars += Number(e.typedChars) || 0
+    writing.pastedChars += Number(e.pastedChars) || 0
+  }
 
   for (const e of windowed) {
     const at = time(e)
@@ -197,6 +214,15 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         chars += Number(e.chars) || 0
         if (e.origin === 'composer') typed++
         inc(dayPrompts, dayKey(at))
+        if (typeof e.typingMs === 'number') {
+          writing.sent++
+          countTyping(e)
+        }
+        break
+      case 'draft_abandoned':
+        writing.abandoned++
+        writing.abandonedMs += Number(e.typingMs) || 0
+        countTyping(e)
         break
       case 'turn_end':
       case 'interrupt': {
@@ -243,6 +269,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
       avgChars: promptCount ? chars / promptCount : 0,
       typed,
     },
+    writing,
     turns,
     interrupts,
     tokens,

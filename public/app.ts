@@ -172,6 +172,14 @@ function tile(label: string, value: string, sub = '') {
   return `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`
 }
 
+function writingTile(w: Summary['writing']) {
+  if (!w.sent && !w.abandoned) return tile('Writing prompts', '-', 'no typing data yet')
+  // the usual 5 characters a word, over the time actually typing
+  const wpm = w.typingMs ? Math.round(w.typedChars / 5 / (w.typingMs / MIN)) : 0
+  const gaveUp = `${w.abandoned} abandoned`
+  return tile('Writing prompts', duration(w.typingMs), wpm ? `${gaveUp} · ${wpm} wpm` : gaveUp)
+}
+
 function render() {
   if (!events) return
   const w = rangeWindow(range)
@@ -187,6 +195,7 @@ function render() {
     tile('Turns', compact(s.turns), ''),
     tile('Interrupts', compact(s.interrupts), totalTurns ? `${Math.round((s.interrupts / totalTurns) * 100)}% of turns` : ''),
     tile('Output tokens', compact(s.tokens.output), s.tokens.cacheRead ? `${compact(s.tokens.cacheRead)} cache reads` : ''),
+    writingTile(s.writing),
   ].join('')
 
   $('empty').hidden = any
