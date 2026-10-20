@@ -10,7 +10,8 @@ There are two halves: the mod, which records, and this repo, which shows.
 
 ### Quick install (macOS and Linux)
 
-Needs [Bun](https://bun.sh) and Claude Code. From this repo:
+Needs Claude Code and `python3` (on macOS it comes with the Command Line
+Tools, same as `git`). From this repo:
 
 ```sh
 ./install.sh                     # load the mod in every Claude Code session
@@ -22,7 +23,9 @@ The installer only edits `env.CLAUDE_CODE_PLUGIN_DIRS` in
 `~/.claude/settings.json` (keeping a `settings.json.bak`), adding this repo's
 `mod/` folder and dropping any other copy of hook-analytics so nothing gets
 logged twice. Other plugin folders listed there are left alone. Then start
-a new Claude Code session and run `bun run dev` to see the dashboard.
+a new Claude Code session. The mod loads from this repo's `mod/`, so keep
+the clone where it is. The installer doesn't touch the dashboard; that
+stays a repo thing (`bun run dev`, below).
 
 Windows isn't supported yet: the mod writes with `tee`, `mkdir` and `find`.
 Running Claude Code inside WSL works like Linux.
