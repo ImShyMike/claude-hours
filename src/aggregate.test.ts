@@ -166,7 +166,7 @@ test('typing a prompt counts as active time, tea breaks do not', () => {
   ]
   const s = summarize(events, { idleCapMs: 1 * MIN })
   expect(s.totalMs).toBe(7 * MIN)
-  expect(s.writing).toEqual({ typingMs: 2 * MIN, sent: 1, abandoned: 0, abandonedMs: 0, typedChars: 300, pastedChars: 0 })
+  expect(s.writing).toMatchObject({ typingMs: 2 * MIN, sent: 1, abandoned: 0, abandonedMs: 0, typedChars: 300, pastedChars: 0, measured: 0 })
 })
 
 test('an abandoned draft is placed by its own end, not its late line', () => {
@@ -184,6 +184,18 @@ test('an abandoned draft is placed by its own end, not its late line', () => {
   const s = summarize(events, { idleCapMs: 5 * MIN })
   expect(s.days).toEqual([{ day: '2026-10-19', ms: 1 * MIN, prompts: 0 }])
   expect(s.writing).toMatchObject({ abandoned: 1, abandonedMs: 1 * MIN, typingMs: 1 * MIN, sent: 0 })
+})
+
+test('fixes, rewrites and pauses add up over drafts that have them', () => {
+  const fields = { origin: 'composer', typingMs: MIN, fixes: 2, rewrites: 1, rewrittenChars: 12, pauses: 3, breaks: 0, longestPauseMs: 9_000 }
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt', fields),
+    at('2026-10-19T12:05:00Z', 'draft_abandoned', { ...fields, endedAt: '2026-10-19T12:04:00Z', breaks: 1, longestPauseMs: 50_000 }),
+    // from before these fields existed
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', typingMs: MIN }),
+  ]
+  const { writing } = summarize(events, { idleCapMs: 5 * MIN })
+  expect(writing).toMatchObject({ sent: 2, abandoned: 1, measured: 2, fixes: 4, rewrites: 2, rewrittenChars: 24, pauses: 6, breaks: 1, longestPauseMs: 50_000 })
 })
 
 test('languageOf', () => {

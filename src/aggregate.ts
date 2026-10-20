@@ -31,7 +31,22 @@ export type Summary = {
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
   prompts: { count: number; avgWords: number; avgChars: number; typed: number }
   // time spent typing prompts (from hook-analytics' prompt.edit tracking)
-  writing: { typingMs: number; sent: number; abandoned: number; abandonedMs: number; typedChars: number; pastedChars: number }
+  writing: {
+    typingMs: number
+    sent: number
+    abandoned: number
+    abandonedMs: number
+    typedChars: number
+    pastedChars: number
+    // drafts carrying the fields below (older lines don't), for averages
+    measured: number
+    fixes: number
+    rewrites: number
+    rewrittenChars: number
+    pauses: number
+    breaks: number
+    longestPauseMs: number
+  }
   turns: number
   interrupts: number
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -191,11 +206,22 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   const sessions = new Map<string, Summary['sessions'][number]>()
   let promptCount = 0, words = 0, chars = 0, typed = 0, turns = 0, interrupts = 0
-  const writing = { typingMs: 0, sent: 0, abandoned: 0, abandonedMs: 0, typedChars: 0, pastedChars: 0 }
+  const writing: Summary['writing'] = {
+    typingMs: 0, sent: 0, abandoned: 0, abandonedMs: 0, typedChars: 0, pastedChars: 0,
+    measured: 0, fixes: 0, rewrites: 0, rewrittenChars: 0, pauses: 0, breaks: 0, longestPauseMs: 0,
+  }
   const countTyping = (e: Event) => {
     writing.typingMs += Number(e.typingMs) || 0
     writing.typedChars += Number(e.typedChars) || 0
     writing.pastedChars += Number(e.pastedChars) || 0
+    if (typeof e.fixes !== 'number') return
+    writing.measured++
+    writing.fixes += e.fixes
+    writing.rewrites += Number(e.rewrites) || 0
+    writing.rewrittenChars += Number(e.rewrittenChars) || 0
+    writing.pauses += Number(e.pauses) || 0
+    writing.breaks += Number(e.breaks) || 0
+    writing.longestPauseMs = Math.max(writing.longestPauseMs, Number(e.longestPauseMs) || 0)
   }
 
   for (const e of windowed) {

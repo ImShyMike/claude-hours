@@ -180,6 +180,26 @@ function writingTile(w: Summary['writing']) {
   return tile('Writing prompts', duration(w.typingMs), wpm ? `${gaveUp} · ${wpm} wpm` : gaveUp)
 }
 
+function seconds(ms: number) {
+  return ms < 60_000 ? `${Math.round(ms / 1000)}s` : duration(ms)
+}
+
+function writingCard(w: Summary['writing']) {
+  const card = $('writing-card')
+  card.hidden = !w.measured
+  if (!w.measured) return
+  const per = (n: number) => (n / w.measured).toFixed(1)
+  const stat = (label: string, value: string, sub: string) =>
+    `<div><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`
+  $('writing').innerHTML = [
+    stat('Typo fixes', per(w.fixes), `${w.fixes} in all, 3 chars or fewer`),
+    stat('Rewrites', per(w.rewrites), `${w.rewrites} in all, ${compact(w.rewrittenChars)} chars redone`),
+    stat('Thinking pauses', per(w.pauses), '2 to 30 seconds'),
+    stat('Breaks', per(w.breaks), 'pauses over 30 seconds'),
+    stat('Longest pause', seconds(w.longestPauseMs), `over ${w.measured} draft${w.measured === 1 ? '' : 's'}`),
+  ].join('')
+}
+
 function render() {
   if (!events) return
   const w = rangeWindow(range)
@@ -201,6 +221,8 @@ function render() {
   $('empty').hidden = any
   $('content').hidden = !any
   if (!any) return
+
+  writingCard(s.writing)
 
   // one column per day only makes sense past a single day
   const daysCard = $('days-card')

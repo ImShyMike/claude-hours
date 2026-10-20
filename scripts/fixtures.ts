@@ -58,6 +58,12 @@ for (let back = DAYS; back >= 0; back--) {
           typedChars: words * 6,
           pastedChars: pasted,
           deletedChars: Math.floor(words * between(0, 2)),
+          fixes: Math.floor(words * between(0, 0.3)),
+          rewrites: Math.floor(between(0, 3)),
+          rewrittenChars: Math.floor(between(0, 60)),
+          pauses: Math.floor(between(0, 6)),
+          breaks: rand() < 0.15 ? 1 : 0,
+          longestPauseMs: Math.round(between(1, rand() < 0.15 ? 120 : 25) * 1000),
         }),
       })
       const turnStart = at
