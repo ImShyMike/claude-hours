@@ -96,6 +96,15 @@ test('a fork working in another repo gives it the time too, counted once in the 
     { project: 'hub', ms: 9 * MIN + 1000 },
   ])
   expect(s.totalMs).toBe(10 * MIN)
+  // the stacks share the overlap, so they add up to the total
+  const shared = (9 * MIN + 1000) / 2
+  expect(s.days[0]!.projects).toEqual({ terra: 10 * MIN - shared, hub: shared })
+  expect(s.hourProjects[8]).toEqual({ terra: 10 * MIN - shared, hub: shared })
+  expect(s.sessions[0]!.projects).toEqual(s.projects)
+  expect(s.spans).toEqual([
+    { sessionId: 's1', project: 'terra', from: Date.parse('2026-10-19T12:00:00Z'), to: Date.parse('2026-10-19T12:10:00Z') },
+    { sessionId: 's1', project: 'hub', from: Date.parse('2026-10-19T12:00:59Z'), to: Date.parse('2026-10-19T12:10:00Z') },
+  ])
 })
 
 test('the main thread moves to the repo it works in, and back', () => {
@@ -166,8 +175,8 @@ test('time splits at local midnight', () => {
   const events = [at('2026-10-20T04:30:00Z', 'turn_end', { durationMs: 60 * MIN })]
   const s = summarize(events, { idleCapMs: 5 * MIN })
   expect(s.days).toEqual([
-    { day: '2026-10-19', ms: 30 * MIN, prompts: 0 },
-    { day: '2026-10-20', ms: 30 * MIN, prompts: 0 },
+    { day: '2026-10-19', ms: 30 * MIN, prompts: 0, projects: { terra: 30 * MIN } },
+    { day: '2026-10-20', ms: 30 * MIN, prompts: 0, projects: { terra: 30 * MIN } },
   ])
 })
 
@@ -248,7 +257,7 @@ test('counts prompts, interrupts, tokens, tools and languages', () => {
     { language: 'TypeScript', edits: 1 },
     { language: 'Make', edits: 1 },
   ])
-  expect(s.days).toEqual([{ day: '2026-10-19', ms: 3 * MIN, prompts: 2 }])
+  expect(s.days).toEqual([{ day: '2026-10-19', ms: 3 * MIN, prompts: 2, projects: { terra: 3 * MIN } }])
 })
 
 test('an empty log summarizes to zeros', () => {
@@ -282,7 +291,7 @@ test('an abandoned draft is placed by its own end, not its late line', () => {
     }),
   ]
   const s = summarize(events, { idleCapMs: 5 * MIN })
-  expect(s.days).toEqual([{ day: '2026-10-19', ms: 1 * MIN, prompts: 0 }])
+  expect(s.days).toEqual([{ day: '2026-10-19', ms: 1 * MIN, prompts: 0, projects: { terra: 1 * MIN } }])
   expect(s.writing).toMatchObject({ abandoned: 1, abandonedMs: 1 * MIN, typingMs: 1 * MIN, sent: 0 })
 })
 

@@ -23,9 +23,13 @@ export type Interval = [start: number, end: number]
 
 export type Summary = {
   totalMs: number
-  days: { day: string; ms: number; prompts: number }[]
-  // active ms per local hour of day (0-23), summed over the window
+  // projects: the day's ms split by project. A stretch two projects share is
+  // split evenly between them, so a day's projects add up to its ms
+  days: { day: string; ms: number; prompts: number; projects: Record<string, number> }[]
+  // active ms per local hour of day (0-23), summed over the window, and the
+  // same split by project the way days are
   hours: number[]
+  hourProjects: Record<string, number>[]
   projects: { project: string; ms: number }[]
   languages: { language: string; edits: number }[]
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
@@ -53,7 +57,18 @@ export type Summary = {
   // interrupts that stopped a tool call, not just text
   interruptsMidTool: number
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }
-  sessions: { sessionId: string; project: string; start: number; end: number; activeMs: number; prompts: number }[]
+  // projects: each one's time in the session, counted in full like `projects`
+  sessions: {
+    sessionId: string
+    project: string
+    start: number
+    end: number
+    activeMs: number
+    prompts: number
+    projects: { project: string; ms: number }[]
+  }[]
+  // every active stretch in the window, by session and project
+  spans: { sessionId: string; project: string; from: number; to: number }[]
 }
 
 const LANGUAGES: Record<string, string> = {
@@ -282,6 +297,25 @@ function* byHour([start, end]: Interval): Generator<[number, number]> {
   }
 }
 
+// Cuts one session's project intervals where they overlap, each piece with the
+// share it gets: a stretch k projects worked at once gives each of them 1/k
+function* shares(byProject: [string, Interval[]][]): Generator<[string, Interval, number]> {
+  const edges: [number, string, 1 | -1][] = []
+  for (const [project, intervals] of byProject) {
+    for (const [start, end] of intervals) edges.push([start, project, 1], [end, project, -1])
+  }
+  edges.sort((a, b) => a[0] - b[0])
+  const open = new Map<string, number>()
+  let prev = -Infinity
+  for (const [at, project, step] of edges) {
+    if (at > prev && open.size) for (const p of open.keys()) yield [p, [prev, at], 1 / open.size]
+    prev = at
+    const n = (open.get(project) ?? 0) + step
+    if (n) open.set(project, n)
+    else open.delete(project)
+  }
+}
+
 function dayRange(from: number, to: number) {
   const days: string[] = []
   for (let at = from; at < to; at = nextMidnight(at)) days.push(dayKey(at))
@@ -314,18 +348,36 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   }
 
   const dayMs = new Map<string, number>()
+  const dayProjects = new Map<string, Record<string, number>>()
   const hours: number[] = Array(24).fill(0)
+  const hourProjects: Record<string, number>[] = hours.map(() => ({}))
+  const spans: Summary['spans'] = []
+  const sessionProjects = new Map<string, Map<string, number>>()
   const projectMs = new Map<string, number>()
   const sessionMs = new Map<string, number>()
   let totalMs = 0
   const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
   for (const [sessionId, events] of sessionsOf) {
     const byProject = projectSpans(events, idleCapMs)
+    const inside: [string, Interval[]][] = []
+    const mine = new Map<string, number>()
     for (const [project, intervals] of byProject) {
-      for (const interval of intervals) {
-        const k = kept(interval)
-        if (k) inc(projectMs, project, k[1] - k[0])
+      const k = intervals.map(kept).filter((i): i is Interval => !!i)
+      for (const [start, end] of k) {
+        inc(projectMs, project, end - start)
+        inc(mine, project, end - start)
+        spans.push({ sessionId, project, from: start, to: end })
       }
+      if (k.length) inside.push([project, k])
+    }
+    sessionProjects.set(sessionId, mine)
+    for (const [project, interval, share] of shares(inside)) {
+      for (const [day, ms] of byDay(interval)) {
+        const split = dayProjects.get(day) ?? {}
+        split[project] = (split[project] ?? 0) + ms * share
+        dayProjects.set(day, split)
+      }
+      for (const [hour, ms] of byHour(interval)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share
     }
     for (const interval of mergeWithin([...byProject.values()].flat(), 0)) {
       const k = kept(interval)
@@ -364,7 +416,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
 
   for (const e of windowed) {
     const at = time(e)
-    const s = sessions.get(e.sessionId) ?? { sessionId: e.sessionId, project: projectOf(e), start: at, end: at, activeMs: 0, prompts: 0 }
+    const s = sessions.get(e.sessionId) ?? { sessionId: e.sessionId, project: projectOf(e), start: at, end: at, activeMs: 0, prompts: 0, projects: [] }
     s.start = Math.min(s.start, at)
     s.end = Math.max(s.end, at)
     sessions.set(e.sessionId, s)
@@ -417,13 +469,18 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         break
     }
   }
-  for (const s of sessions.values()) s.activeMs = sessionMs.get(s.sessionId) ?? 0
-
   const sorted = <K>(map: Map<K, number>) => [...map].sort((a, b) => b[1] - a[1])
+  for (const s of sessions.values()) {
+    s.activeMs = sessionMs.get(s.sessionId) ?? 0
+    s.projects = sorted(sessionProjects.get(s.sessionId) ?? new Map()).map(([project, ms]) => ({ project, ms }))
+  }
   return {
     totalMs,
-    days: valid.length ? dayRange(lo, hi).map(day => ({ day, ms: dayMs.get(day) ?? 0, prompts: dayPrompts.get(day) ?? 0 })) : [],
+    days: valid.length
+      ? dayRange(lo, hi).map(day => ({ day, ms: dayMs.get(day) ?? 0, prompts: dayPrompts.get(day) ?? 0, projects: dayProjects.get(day) ?? {} }))
+      : [],
     hours,
+    hourProjects,
     projects: sorted(projectMs).map(([project, ms]) => ({ project, ms })),
     languages: sorted(languages).map(([language, edits]) => ({ language, edits })),
     tools: [...tools]
@@ -442,5 +499,6 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
     interruptsMidTool,
     tokens,
     sessions: [...sessions.values()].sort((a, b) => b.start - a.start),
+    spans: spans.sort((a, b) => a.from - b.from),
   }
 }

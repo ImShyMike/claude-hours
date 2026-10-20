@@ -1,4 +1,4 @@
-import { turnPieces, waitsOf, type Event, type Interval } from '../src/aggregate'
+import { projectSpans, summarize, turnPieces, waitsOf, type Event, type Interval } from '../src/aggregate'
 import {
   apply,
   countGroups,
@@ -12,7 +12,7 @@ import {
   type Step,
   type Timeline,
 } from '../src/replay'
-import { $, MIN, api, clockTime, compact, duration, esc, hideTip, load, save, seconds, showTip, withPerson } from './shared'
+import { $, MIN, api, chip, clockTime, compact, duration, esc, hideTip, load, palette, save, seconds, showTip, withPerson, type Palette } from './shared'
 
 const sessionId = new URLSearchParams(location.search).get('id') ?? ''
 
@@ -33,6 +33,11 @@ let zoom = Number(load('zoom', '1'))
 let collapse = load('collapse', '0') === '1'
 // the drawn timeline's axis, so a ctrl + scroll can zoom around the cursor
 let laneAxis: Axis | undefined
+// where the session's time went, by project, for the Projects lane: tracks of
+// stretches that don't overlap, home project first, so a fork working in
+// another repo at the same time drops to a thin track under it
+let colors: Palette | undefined
+let projectTracks: { project: string; span: Interval }[][] = []
 
 // With gaps collapsed, a quiet stretch longer than GAP_MS is squeezed into a
 // break GAP_PX wide (less if there are many), and the busy stretches share
@@ -147,9 +152,11 @@ function drawLanes() {
   laneAxis = axis
   const x = axis.x
   const LANE = 30
-  const lanes = ['You', 'Claude', 'Tools']
+  const SUB = 11
+  const lanes = ['You', 'Claude', 'Tools', 'Projects']
   const laneY = (i: number) => pad.top + i * LANE
-  const height = pad.top + lanes.length * LANE + 4
+  const extra = Math.max(0, projectTracks.length - 1) * (SUB + 3)
+  const height = pad.top + lanes.length * LANE + extra + 4
 
   const tick = TICKS_MS.find(t => t * axis.scale >= 80) ?? TICKS_MS[TICKS_MS.length - 1]!
   // a collapsed gap's length sits on the time axis, so ticks keep clear of it
@@ -174,7 +181,8 @@ function drawLanes() {
     .map((name, i) => `<span style="top:${laneY(i) - pad.top + 4}px;height:${LANE}px;line-height:${LANE}px">${name}</span>`)
     .join('')
   lanes.forEach((_, i) => {
-    svg += `<line class="baseline" x1="${pad.left}" x2="${width - pad.right}" y1="${laneY(i) + LANE - 3}" y2="${laneY(i) + LANE - 3}"/>`
+    const y = laneY(i) + LANE - 3 + (i === 3 ? extra : 0)
+    svg += `<line class="baseline" x1="${pad.left}" x2="${width - pad.right}" y1="${y}" y2="${y}"/>`
   })
 
   const bar = (cls: string, start: number, end: number, lane: number, attrs = '') => {
@@ -248,6 +256,16 @@ function drawLanes() {
     const tip = `<strong>Compaction (${esc(String(c.trigger))}${who})</strong>${seconds(num(c.durationMs))}, ${esc(String(c.outcome))}${sizes}`
     svg += bar(`span-compact${c.agentId || c.trigger === 'precompute' ? ' background' : ''}`, end - num(c.durationMs), end, 1, tipAttr(tip))
   }
+
+  projectTracks.forEach((track, k) => {
+    const y = laneY(3) + 5 + (k ? LANE - 12 + 3 + (k - 1) * (SUB + 3) : 0)
+    const h = k ? SUB : LANE - 12
+    for (const { project, span } of track) {
+      const tip = `<strong>${esc(project)}</strong>${clockTime(span[0])} to ${clockTime(span[1])}, ${duration(span[1] - span[0])}${k ? '<br>alongside the main thread' : ''}`
+      const x0 = x(span[0])
+      svg += `<rect class="span-project" x="${x0}" y="${y}" width="${Math.max(3, x(span[1]) - x0)}" height="${h}" rx="${k ? 2 : 3}" fill="${colors!.color(project)}" ${tipAttr(tip)}/>`
+    }
+  })
 
   el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Session timeline">${PAUSE_PATTERNS}${svg}</svg>`
   el.querySelectorAll<SVGElement>('[data-tip]').forEach(node => {
@@ -538,13 +556,30 @@ async function init() {
   }
   drafts = buildDrafts(timelines)
 
-  const project = events.find(e => e.project)?.project ?? 'session'
+  // named after where most of its time went, with the rest under it
+  const split = summarize(events, { idleCapMs: Number(load('idle', '5')) * MIN }).sessions[0]?.projects ?? []
+  const project = split[0]?.project ?? events.find(e => e.project)?.project ?? 'session'
   const first = time(events[0]!)
   const lastAt = time(events[events.length - 1]!)
   $('title').textContent = String(project)
   document.title = `${project} session`
   const sent = drafts.filter(d => d.outcome === 'sent').length
   $('subtitle').textContent = `${new Date(first).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, ${duration(lastAt - first)} long · ${sent} sent, ${drafts.length - sent} abandoned · ${sessionId.slice(0, 8)}`
+
+  // the same colors as the overview, from everyone's sessions; the chips are
+  // the Projects lane's legend too
+  const idleCapMs = Number(load('idle', '5')) * MIN
+  colors = palette(summarize(all, { idleCapMs }).projects)
+  $('projects').innerHTML = split.map(p => `${chip(colors!, p.project)}<span class="muted">${duration(p.ms)}</span>`).join(' ')
+  const byProject = [...projectSpans(events, idleCapMs)].flatMap(([project, spans]) => spans.map(span => ({ project, span })))
+  byProject.sort((a, b) => Number(b.project === project) - Number(a.project === project) || a.span[0] - b.span[0])
+  projectTracks = []
+  for (const piece of byProject) {
+    const fits = (t: typeof byProject) => !t.some(o => o.span[0] < piece.span[1] && piece.span[0] < o.span[1])
+    const track = projectTracks.find(fits)
+    if (track) track.push(piece)
+    else projectTracks.push([piece])
+  }
 
   legend($('lanes-legend'), [
     ['k-typed', 'writing a prompt'],

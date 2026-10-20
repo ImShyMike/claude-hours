@@ -37,6 +37,20 @@ export async function api<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export type Range = 'today' | '7' | '30' | 'all'
+
+export function rangeWindow(r: Range): { from?: number; to?: number; label: string } {
+  const midnight = new Date()
+  midnight.setHours(0, 0, 0, 0)
+  const now = Date.now() + 1
+  if (r === 'today') return { from: midnight.getTime(), to: now, label: 'today' }
+  if (r === 'all') return { label: 'all time' }
+  const days = Number(r)
+  const from = new Date(midnight)
+  from.setDate(from.getDate() - (days - 1))
+  return { from: from.getTime(), to: now, label: `last ${days} days` }
+}
+
 export type Me = { person?: string; me?: string; admin?: boolean; people?: string[] }
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
@@ -75,3 +89,30 @@ export function showTip(e: MouseEvent, html: string) {
   tooltip.style.top = `${y}px`
 }
 export const hideTip = () => ($('tooltip').hidden = true)
+
+// Each project keeps one color on every chart and page: the 8 with the most
+// time ever get the palette in order, the rest share Other's gray. Ranked over
+// all time, not the range shown, so picking a range never repaints one
+export const SLOTS = 8
+export const OTHER = 'Other'
+export type Palette = { color: (project: string) => string; group: (project: string) => string; order: string[] }
+
+export function palette(ranked: { project: string }[]): Palette {
+  const order = ranked.slice(0, SLOTS).map(p => p.project)
+  const slot = new Map(order.map((project, i) => [project, i + 1]))
+  const group = (project: string) => (slot.has(project) ? project : OTHER)
+  const color = (project: string) => (slot.has(project) ? `var(--p${slot.get(project)})` : 'var(--p-other)')
+  return { color, group, order: [...order, OTHER] }
+}
+
+// a legend for the projects in view, in palette order with Other last
+export function projectLegend(colors: Palette, projects: string[]) {
+  const shown = new Set(projects.map(colors.group))
+  return colors.order
+    .filter(p => shown.has(p))
+    .map(p => `<span class="key"><span class="swatch" style="background:${colors.color(p)}"></span>${esc(p)}</span>`)
+    .join('')
+}
+
+export const chip = (colors: Palette, project: string) =>
+  `<span class="chip"><span class="swatch" style="background:${colors.color(project)}"></span>${esc(project)}</span>`

@@ -115,7 +115,9 @@ Running Claude Code inside WSL works like Linux.
 A session file opens with a header, `{"v":1,"event":"session","start":<epoch
 ms>,"cwd":...}`. After it, every row has `event` and `t`, ms since that start,
 and nothing repeated: the file name is the session, a `cwd_changed` row says
-when the cwd moves, and paths under the cwd are written relative to it. A
+when the cwd moves, and paths under the cwd are written relative to it. The
+header and `cwd_changed` also carry `root`, the repo's folder, when the cwd
+is below it (or in a worktree of it), so the hub can name the project. A
 field at its usual value is left out too (`outcome: "ok"`, `via: "tool"`,
 `origin: "composer"` and friends, plus a typed draft's counters at 0), and
 the decoder puts them back.
@@ -268,14 +270,49 @@ the next session start resend it all (the hub skips what it already has).
   as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
 - A project is named after the nearest git root above the event's `cwd` (or
   above the file or `repo` it worked in), so subdirectories don't split a
-  repo. `~/.claude` shows up as `~/.claude`. On a hub, where the paths are
-  someone else's disk, it's the folder's name, and only the mod's `repo`
-  moves time.
+  repo. A worktree (like a subagent's under `.claude/worktrees`) counts as
+  the repo it was made from. `~/.claude` shows up as `~/.claude`. On a hub,
+  where the paths are someone else's disk, it's the folder of the `root` the
+  mod sent, else the cwd's own folder, and only the mod's `repo` moves time.
+  A folder with no repo to be found (renamed away since, say) under where the
+  session started counts as the session's project.
 - All aggregation happens in the browser, so days and hours are local time.
+- The per-day and time-of-day columns are stacked by project. A stretch two
+  projects worked at once is split evenly between them there, so each column
+  still adds up to its total.
+
+## Project colors
+
+Each project keeps one color on every chart and page. The 8 projects with the
+most time ever get the palette in order, and the rest share a gray as
+"Other". The ranking is over all time, not the range shown, so switching
+ranges never repaints a project.
+
+## Overview
+
+The main page: the total and tiles up top, then active time per day and by
+hour of day (stacked by project) beside the Projects and Languages lists.
+"Every day" is a GitHub-style grid of days over all time, a darker blue for
+more time (under 30m, 1h, 2h, 4h, more). The Sessions table shows every
+project a session worked in, most time first; hover for the split.
+
+## Timeline
+
+`/timeline` has every session on one page, a row per day from midnight to
+midnight. Each active stretch is a bar in its project's color. Sessions
+running at the same time get lanes of their own, and a subagent working in
+another repo while the main thread works shows as a thin bar under its
+session. Hover a bar for its time and session (the session's other bars light
+up), click to open it. Zoom with the + and - buttons or ctrl + scroll. Quiet
+days fold into one line. "Fit to active hours" (on by default) crops the axis
+to the hours anything happened in, so the bars get more room.
+On a day the clocks change (23 or 25 hours) the bars are placed right but the
+hour ticks assume 24 equal hours, so they can sit up to an hour off.
 
 ## Session page
 
-Click a project in the Sessions table to open `/session?id=<sessionId>`:
+Click a session's start time in the Sessions table, or a bar on the
+timeline, to open `/session?id=<sessionId>`:
 
 - **Session timeline:** lanes for you writing prompts (hollow when the draft
   was abandoned), Claude's turns and tool calls, with interrupts marked. Zoom
@@ -313,9 +350,9 @@ Languages come from the extensions of `file_changed` paths. Tools come from
 - `src/aggregate.ts`: pure summarizing, shared by the page and the tests
 - `src/replay.ts`: pure draft replay (apply steps, squash pauses), shared too
 - `src/load.ts`: reads every session file in `events/` and tags each event with its project
-- `src/server.ts`: `Bun.serve` with both pages, `/api/events` and `/api/session/:id`; with `HUB_DIR`, the hub (login, uploads)
+- `src/server.ts`: `Bun.serve` with the pages, `/api/events` and `/api/session/:id`; with `HUB_DIR`, the hub (login, uploads)
 - `src/hub.ts`: the hub's tokens, uploads and who sees what
 - `scripts/hub-token.ts`: mints a person's token
-- `public/`: the pages (`index.html` + `app.ts`, `session.html` + `session.ts`, shared bits in `shared.ts`); Bun bundles them on the fly
+- `public/`: the pages (`index.html` + `app.ts`, `timeline.html` + `timeline.ts`, `session.html` + `session.ts`, shared bits in `shared.ts`); Bun bundles them on the fly
 - `scripts/fixtures.ts`: deterministic fake data for the demo
 - `mod/`: the hook-analytics mod that writes the data (see Setup)

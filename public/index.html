@@ -11,7 +11,7 @@
       <header>
         <div>
           <h1>claude-hours</h1>
-          <p class="muted">time spent with Claude, from <code>hook-analytics</code></p>
+          <nav class="nav"><a href="/" aria-current="page">Overview</a><a href="/timeline">Timeline</a></nav>
         </div>
         <div class="controls">
           <form id="who" class="who muted" method="post" action="/logout" hidden>
@@ -39,31 +39,24 @@
         </div>
       </header>
 
-      <section class="hero">
-        <div class="hero-value" id="total">-</div>
-        <div class="muted" id="total-label"></div>
-      </section>
-
-      <section class="tiles" id="tiles"></section>
+      <div class="top">
+        <section class="hero">
+          <div class="hero-value" id="total">-</div>
+          <div class="muted" id="total-label"></div>
+        </section>
+        <section class="tiles" id="tiles"></section>
+      </div>
 
       <p class="empty muted" id="empty" hidden>nothing logged in this range yet</p>
 
       <div id="content" hidden>
         <section class="card" id="days-card">
           <h2>Active time per day</h2>
+          <div class="legend" id="days-legend"></div>
           <div class="chart" id="days"></div>
-          <details>
-            <summary class="muted">show as table</summary>
-            <table id="days-table"></table>
-          </details>
         </section>
 
-        <section class="card">
-          <h2>Time of day</h2>
-          <div class="chart" id="hours"></div>
-        </section>
-
-        <div class="grid">
+        <div class="pair">
           <section class="card">
             <h2>Projects</h2>
             <div id="projects"></div>
@@ -74,14 +67,29 @@
           </section>
         </div>
 
-        <section class="card" id="writing-card">
-          <h2>How you write <span class="muted">per prompt, sent or not</span></h2>
-          <div class="mini" id="writing"></div>
+        <div class="pair">
+          <section class="card">
+            <h2>Time of day</h2>
+            <div class="legend" id="hours-legend"></div>
+            <div class="chart" id="hours"></div>
+          </section>
+          <section class="card" id="writing-card">
+            <h2>How you write <span class="muted">per prompt, sent or not</span></h2>
+            <div class="mini" id="writing"></div>
+          </section>
+        </div>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Every day <span class="muted">all time, whatever the range</span></h2>
+            <div class="heat-legend muted" id="heat-legend"></div>
+          </div>
+          <div class="chart hscroll" id="heat"></div>
         </section>
 
         <section class="card">
           <h2>Tools</h2>
-          <div id="tools"></div>
+          <div id="tools" class="two"></div>
         </section>
 
         <section class="card">

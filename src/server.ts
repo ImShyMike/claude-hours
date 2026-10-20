@@ -2,6 +2,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import index from '../public/index.html'
 import session from '../public/session.html'
+import timeline from '../public/timeline.html'
 import { COOKIE, people, upload, viewer, whoIs } from './hub'
 import { loadEvents, loadTimelines } from './load'
 
@@ -22,6 +23,7 @@ function local() {
     routes: {
       '/': index,
       '/session': session,
+      '/timeline': timeline,
       // re-read on every request, the log is small and always growing
       '/api/events': async () => Response.json(await loadEvents(dir)),
       '/api/session/:id': async req => Response.json(await loadTimelines(dir, req.params.id)),
@@ -71,6 +73,7 @@ function central(dir: string) {
       // the pages hold no data; their API calls send people to /login
       '/': index,
       '/session': session,
+      '/timeline': timeline,
       '/login.css': () => new Response(LOGIN_CSS, { headers: { 'content-type': 'text/css' } }),
       '/login': {
         GET: () => html(LOGIN()),
