@@ -114,7 +114,8 @@ function drawLanes() {
 
   drafts.forEach((d, i) => {
     const cls = `span-you ${d.outcome}${d === selected ? ' selected' : ''}`
-    const tip = `<strong>${d.outcome === 'sent' ? 'Prompt sent' : 'Draft abandoned'}</strong>${clockTime(d.start)}, ${seconds(d.end - d.start)} writing${d.timeline ? '<br>click to replay' : ''}`
+    const when = d.line.midTurn ? '<br>sent while Claude was working' : ''
+    const tip = `<strong>${d.outcome === 'sent' ? 'Prompt sent' : 'Draft abandoned'}</strong>${clockTime(d.start)}, ${seconds(d.end - d.start)} writing${when}${d.timeline ? '<br>click to replay' : ''}`
     svg += bar(cls, d.start, d.end, 0, `data-draft="${i}" ${tipAttr(tip)}`)
   })
   for (const t of turns) {
@@ -123,8 +124,16 @@ function drawLanes() {
     svg += bar('span-claude', end - num(t.durationMs), end, 1, tipAttr(tip))
     if (t.event === 'interrupt') {
       svg += `<line class="interrupt" x1="${x(end)}" x2="${x(end)}" y1="${laneY(0) + 2}" y2="${laneY(2)}"/>`
-      svg += `<text class="interrupt-mark" x="${x(end) + 3}" y="${laneY(1) + 4}" ${tipAttr('<strong>Interrupt</strong>Esc during a turn')}>✕</text>`
+      const running = Array.isArray(t.toolsRunning) && t.toolsRunning.length ? `<br>stopped ${esc(t.toolsRunning.join(', '))} mid-run` : ''
+      const shown = typeof t.answerChars === 'number' ? `<br>${t.answerChars ? `${compact(t.answerChars)} chars of answer shown` : 'no answer shown yet'}` : ''
+      svg += `<text class="interrupt-mark" x="${x(end) + 3}" y="${laneY(1) + 4}" ${tipAttr(`<strong>Interrupt</strong>Esc during a turn${shown}${running}`)}>✕</text>`
     }
+  }
+  // a prompt sent while Claude worked: a dashed drop from You into the turn
+  for (const e of events) {
+    if (e.event !== 'prompt' || !e.midTurn) continue
+    const at = x(time(e))
+    svg += `<line class="mid-turn" x1="${at}" x2="${at}" y1="${laneY(0) + 4}" y2="${laneY(2) - 4}" ${tipAttr(`<strong>Sent mid-turn</strong>${clockTime(time(e))}, ${num(e.words)} words`)}/>`
   }
   for (const t of tools) {
     const tip = `<strong>${esc(String(t.e.tool))}</strong>${seconds(t.end - t.start)} · ${esc(String(t.e.outcome ?? ''))}`
@@ -444,6 +453,7 @@ async function init() {
     ['k-compact', 'compacting'],
     ['k-before', 'tool call'],
     ['k-critical', 'interrupt'],
+    ['k-midturn', 'sent mid-turn'],
   ])
   legend($('kinds-legend'), [
     ['k-typed', 'typed (above the line)'],

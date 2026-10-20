@@ -70,6 +70,19 @@ test('a /compact between turns counts, a precompute does not', () => {
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(3 * MIN)
 })
 
+test('counts prompts sent mid-turn and interrupts that stopped a tool', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:00:30Z', 'prompt', { origin: 'composer', midTurn: true }),
+    at('2026-10-19T12:01:00Z', 'interrupt', { durationMs: MIN, answerChars: 40, toolsRunning: ['Bash'] }),
+    at('2026-10-19T12:02:00Z', 'interrupt', { durationMs: MIN, answerChars: 12 }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN })
+  expect(s.prompts.midTurn).toBe(1)
+  expect(s.interrupts).toBe(2)
+  expect(s.interruptsMidTool).toBe(1)
+})
+
 test('time splits at local midnight', () => {
   // 23:30 to 00:30 in New York
   const events = [at('2026-10-20T04:30:00Z', 'turn_end', { durationMs: 60 * MIN })]
@@ -144,7 +157,7 @@ test('counts prompts, interrupts, tokens, tools and languages', () => {
     at('2026-10-19T12:03:00Z', 'turn_end', { durationMs: 1000, usage, agentId: 'sub' }),
   ]
   const s = summarize(events, { idleCapMs: 5 * MIN })
-  expect(s.prompts).toEqual({ count: 2, avgWords: 3, avgChars: 15, typed: 1 })
+  expect(s.prompts).toEqual({ count: 2, avgWords: 3, avgChars: 15, typed: 1, midTurn: 0 })
   expect(s.interrupts).toBe(1)
   expect(s.turns).toBe(0)
   // subagent tokens are real spend, so they count

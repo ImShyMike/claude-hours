@@ -146,6 +146,8 @@ for (let back = DAYS; back >= 0; back--) {
         at += durationMs
         const outcome = rand() < 0.06 ? 'error' : rand() < 0.03 ? 'denied' : 'ok'
         row('tool_end', { tool, toolUseId, outcome, durationMs })
+        // sometimes a thought arrives while Claude is busy
+        if (rand() < 0.05) row('prompt', { words: Math.floor(between(3, 30)), chars: 60, origin: 'composer', midTurn: true })
         if (outcome === 'ok' && (tool === 'Edit' || tool === 'Write')) {
           row('file_changed', { tool, toolUseId, path: `${cwd}/${pick(FILES)}`, via: 'tool' })
         }
@@ -164,6 +166,7 @@ for (let back = DAYS; back >= 0; back--) {
         turnId: `turn-${lines.length}`,
         reason: aborted ? 'aborted' : 'answer',
         durationMs: at - turnStart,
+        ...(aborted && { answerChars: Math.floor(between(0, 900)), toolsRunning: rand() < 0.4 ? ['Bash'] : undefined }),
         usage: { input_tokens: 20, output_tokens: output, cache_read_input_tokens: output * 30, cache_creation_input_tokens: output * 2, model: 'claude-opus-5-5' },
       })
       // reading, thinking, sometimes wandering off

@@ -162,8 +162,8 @@ function render() {
   const totalTurns = s.turns + s.interrupts
   $('tiles').innerHTML = [
     tile('Prompts', compact(s.prompts.count), s.prompts.count ? `avg ${Math.round(s.prompts.avgWords)} word${Math.round(s.prompts.avgWords) === 1 ? '' : 's'}` : ''),
-    tile('Turns', compact(s.turns), ''),
-    tile('Interrupts', compact(s.interrupts), totalTurns ? `${Math.round((s.interrupts / totalTurns) * 100)}% of turns` : ''),
+    tile('Turns', compact(s.turns), s.prompts.midTurn ? `${compact(s.prompts.midTurn)} prompt${s.prompts.midTurn === 1 ? '' : 's'} sent mid-turn` : ''),
+    tile('Interrupts', compact(s.interrupts), totalTurns ? `${Math.round((s.interrupts / totalTurns) * 100)}% of turns${s.interruptsMidTool ? `, ${compact(s.interruptsMidTool)} mid-tool` : ''}` : ''),
     tile('Output tokens', compact(s.tokens.output), s.tokens.cacheRead ? `${compact(s.tokens.cacheRead)} cache reads` : ''),
     writingTile(s.writing),
   ].join('')

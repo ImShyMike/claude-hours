@@ -392,6 +392,7 @@ button.primary {
 .k-claude { background: var(--neutral-2); }
 .k-compact { background: var(--ink-2); }
 .k-critical { background: var(--critical); }
+.k-midturn { background: repeating-linear-gradient(to bottom, var(--ink-2) 0 3px, transparent 3px 5px); width: 3px; }
 
 .chart .lane-label {
   fill: var(--ink-2);
@@ -420,6 +421,11 @@ button.primary {
 .chart .interrupt {
   stroke: var(--critical);
   stroke-width: 2;
+}
+.chart .mid-turn {
+  stroke: var(--ink-2);
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
 }
 .chart .interrupt-mark {
   fill: var(--critical);

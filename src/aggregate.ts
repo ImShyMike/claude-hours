@@ -29,7 +29,8 @@ export type Summary = {
   projects: { project: string; ms: number }[]
   languages: { language: string; edits: number }[]
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
-  prompts: { count: number; avgWords: number; avgChars: number; typed: number }
+  // midTurn: sent while Claude was still working
+  prompts: { count: number; avgWords: number; avgChars: number; typed: number; midTurn: number }
   // time spent typing prompts (from hook-analytics' prompt.edit tracking)
   writing: {
     typingMs: number
@@ -49,6 +50,8 @@ export type Summary = {
   }
   turns: number
   interrupts: number
+  // interrupts that stopped a tool call, not just text
+  interruptsMidTool: number
   tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }
   sessions: { sessionId: string; project: string; start: number; end: number; activeMs: number; prompts: number }[]
 }
@@ -209,7 +212,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   const tools = new Map<string, { calls: number; errors: number; denied: number; totalMs: number }>()
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   const sessions = new Map<string, Summary['sessions'][number]>()
-  let promptCount = 0, words = 0, chars = 0, typed = 0, turns = 0, interrupts = 0
+  let promptCount = 0, words = 0, chars = 0, typed = 0, midTurn = 0, turns = 0, interrupts = 0, interruptsMidTool = 0
   const writing: Summary['writing'] = {
     typingMs: 0, sent: 0, abandoned: 0, abandonedMs: 0, typedChars: 0, pastedChars: 0,
     measured: 0, fixes: 0, rewrites: 0, rewrittenChars: 0, pauses: 0, breaks: 0, longestPauseMs: 0,
@@ -243,6 +246,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         words += Number(e.words) || 0
         chars += Number(e.chars) || 0
         if (e.origin === 'composer') typed++
+        if (e.midTurn) midTurn++
         inc(dayPrompts, dayKey(at))
         if (typeof e.typingMs === 'number') {
           writing.sent++
@@ -258,6 +262,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
       case 'interrupt': {
         // one Esc can abort a subagent's turn and the main one, so count the main
         if (!e.agentId) e.event === 'interrupt' ? interrupts++ : turns++
+        if (!e.agentId && Array.isArray(e.toolsRunning) && e.toolsRunning.length) interruptsMidTool++
         const u = e.usage as Record<string, number> | undefined
         if (u) {
           tokens.input += u.input_tokens || 0
@@ -298,10 +303,12 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
       avgWords: promptCount ? words / promptCount : 0,
       avgChars: promptCount ? chars / promptCount : 0,
       typed,
+      midTurn,
     },
     writing,
     turns,
     interrupts,
+    interruptsMidTool,
     tokens,
     sessions: [...sessions.values()].sort((a, b) => b.start - a.start),
   }
