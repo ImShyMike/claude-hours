@@ -2,6 +2,7 @@
 // the dashboard has something to draw while the real log is still tiny.
 // Deterministic: the same seed gives the same file (relative to today).
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { encodeSteps } from '../src/replay'
 
 const DAYS = 45
 const PROJECTS = ['terra', 'vxm', 'hackathon-site', 'scrapbook', 'claude-hackatime']
@@ -123,9 +124,9 @@ for (let back = DAYS; back >= 0; back--) {
       const draftId = `demo-${lines.length}`
       if (typed) {
         drafts.push(JSON.stringify({
-          sessionId, draftId, outcome: 'sent',
+          sessionId, v: 2, draftId, outcome: 'sent',
           startedAt: new Date(at - typed.durationMs).toISOString(), endedAt: new Date(at).toISOString(),
-          initialShape: '', initialCursor: 0, steps: typed.steps, truncated: false,
+          initialShape: '', initialCursor: 0, steps: encodeSteps(typed.steps, 0), truncated: false,
         }))
       }
       row('prompt', {

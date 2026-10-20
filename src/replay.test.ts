@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { countGroups, describe, parseTimelines, pausesOf, squash, stateAt, type Timeline } from './replay'
+import { countGroups, decodeSteps, describe, encodeSteps, parseTimelines, pausesOf, rle, squash, stateAt, unrle, type Timeline } from './replay'
 
 const timeline = (steps: Timeline['steps'], extra: Partial<Timeline> = {}): Timeline => ({
   draftId: 'd1',
@@ -69,4 +69,68 @@ test('pauses, group counts and descriptions', () => {
 test('parseTimelines skips junk', () => {
   const good = JSON.stringify(timeline([]))
   expect(parseTimelines(`${good}\n{"torn\n{"draftId":1}\n`)).toHaveLength(1)
+})
+
+test('rle round trips shapes', () => {
+  expect(rle('aaaaa aaa\n\na')).toBe('5a_3a2na')
+  expect(unrle('5a_3a2na')).toBe('aaaaa aaa\n\na')
+  expect(rle('')).toBe('')
+  expect(unrle('12a')).toBe('a'.repeat(12))
+})
+
+// These strings are the ones hook-analytics' own tests expect it to write,
+// so the two sides can't drift apart unnoticed
+test('decodes what the mod writes', () => {
+  expect(decodeSteps('0t+2a_3a,500n,500b', 0)).toEqual([
+    [0, 't', 0, 0, 'aa aaa'],
+    [500, 't', 6, 0, '\n'],
+    [1000, 'b', 6, 1],
+  ])
+  expect(decodeSteps('0w@19-4,0k@14-5,0m@4,0d,0w-3,0k@0-4,0a,0r@0-1+2a', 23).map(st => st.slice(1))).toEqual([
+    ['w', 19, 4],
+    ['k', 14, 5],
+    ['m', 4, 0],
+    ['d', 4, 1],
+    ['w', 4, 3],
+    ['k', 0, 4],
+    ['t', 0, 0, 'a'],
+    ['r', 0, 1, 'aa'],
+  ])
+  expect(decodeSteps('0t+3a,5000m@1,40000m@3,1000a', 0).map(st => [st[0], st[1], st[2]])).toEqual([
+    [0, 't', 0],
+    [5000, 'm', 1],
+    [45_000, 'm', 3],
+    [46_000, 't', 3],
+  ])
+  expect(decodeSteps('0b,0c@5+3ana:history,0a', 5).map(st => st.slice(1))).toEqual([
+    ['b', 4, 1],
+    ['c', 5, 0, 'aaa\na', 'history'],
+    ['t', 5, 0, 'a'],
+  ])
+})
+
+test('encode and decode round trip, skipping junk tokens', () => {
+  const steps: Timeline['steps'] = [
+    [0, 't', 3, 0, 'a'],
+    [120, 't', 4, 0, ' '],
+    [300, 'p', 5, 0, 'aaaa aa'],
+    [900, 'b', 11, 1],
+    [1000, 'w', 4, 7],
+    [1500, 'm', 0],
+    [1600, 'r', 0, 2, 'a'],
+    [2000, 'c', 2, 0, 'aa\n', 'undo'],
+  ]
+  const code = encodeSteps(steps, 3)
+  expect(code).toBe('0a,120_,180p+4a_2a,600b,100w@4-7,500m@0,100r-2+a,400c@2+2an:undo')
+  // a decoded move carries removed 0, which the original left out
+  expect(decodeSteps(code, 3)).toEqual(steps.map(st => (st[1] === 'm' ? [st[0], 'm', st[2], 0] : st)))
+  expect(decodeSteps(`0a,garbage,,${'5'}a`, 0)).toHaveLength(2)
+})
+
+test('parseTimelines reads both versions the same', () => {
+  const v1 = { draftId: 'a', outcome: 'sent', startedAt: '', endedAt: '', initialShape: 'aa a', initialCursor: 4, steps: [[0, 't', 4, 0, 'a']], truncated: false }
+  const v2 = { ...v1, draftId: 'b', v: 2, initialShape: '2a_a', steps: '0a' }
+  const [one, two] = parseTimelines(`${JSON.stringify(v1)}\n${JSON.stringify(v2)}\n`)
+  expect(two!.initialShape).toBe(one!.initialShape)
+  expect(two!.steps).toEqual(one!.steps)
 })

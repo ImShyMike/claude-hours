@@ -54,6 +54,13 @@ The timelines live in `~/.claude/analytics/drafts/<sessionId>.jsonl`, one
 file per session, served by `/api/session/:id`. Drafts logged before
 timelines existed show their stats but no replay.
 
+Rows are written as `v: 2`: shapes run-length encoded (`a` a letter, `_` a
+blank, `n` a newline, so `5a_3a`), and steps as one string of comma
+separated `<dt><kind>[@pos][-removed][+shape][:who]` tokens that leave out
+whatever follows from the cursor (`120a` is one letter typed 120ms after the
+last step). `src/replay.ts` decodes it, and still reads the first day's v1
+rows with plain shapes and step arrays.
+
 Languages come from the extensions of `file_changed` paths. Tools come from
 `tool_end`, with errors, denials and average duration shown in the tooltip.
 

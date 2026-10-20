@@ -137,13 +137,105 @@ export function describe(step: Step) {
   return `${parts.join(' ')} at ${pos}`
 }
 
+// --- the stored format -------------------------------------------------
+// v 2 (hook-analytics' encodeSteps; keep the two in step): shapes are
+// run-length encoded, a for a letter, _ a blank, n a newline ("5a_3a"), and
+// steps are one string of comma separated "<dt><kind>[@pos][-removed]
+// [+shape][:who]". dt is ms since the previous step; a missing position is
+// the cursor (just before it for b), a missing removed is 1 for b and d and 0
+// otherwise; a lone a, _ or n is that one character typed at the cursor.
+// v 1 (the first day) had plain shapes and arrays of absolute steps.
+
+const SYMBOLS: Record<string, string> = { a: 'a', _: ' ', n: '\n' }
+const SYMBOL_OF: Record<string, string> = { a: 'a', ' ': '_', '\n': 'n' }
+
+export function unrle(code: string) {
+  let out = ''
+  for (const [, count, sym] of code.matchAll(/(\d*)([a_n])/g)) out += SYMBOLS[sym!]!.repeat(count ? Number(count) : 1)
+  return out
+}
+
+export function rle(shape: string) {
+  let out = ''
+  for (let i = 0; i < shape.length; ) {
+    const ch = shape[i]!
+    let n = 1
+    while (shape[i + n] === ch) n++
+    out += `${n > 1 ? n : ''}${SYMBOL_OF[ch] ?? 'a'}`
+    i += n
+  }
+  return out
+}
+
+const TOKEN = /^(\d+)([a-z_])(?:@(\d+))?(?:-(\d+))?(?:\+([0-9a_n]+))?(?::([a-z]+))?$/
+
+export function decodeSteps(code: string, initialCursor: number): Step[] {
+  const steps: Step[] = []
+  let at = 0
+  let cursor = initialCursor
+  for (const token of code.split(',')) {
+    const m = TOKEN.exec(token)
+    if (!m) continue
+    at += Number(m[1])
+    const op = m[2]!
+    let step: Step
+    if (op in SYMBOLS) step = [at, 't', cursor, 0, SYMBOLS[op]!]
+    else {
+      const removed = m[4] !== undefined ? Number(m[4]) : op === 'b' || op === 'd' ? 1 : 0
+      const pos = m[3] !== undefined ? Number(m[3]) : op === 'b' ? cursor - (removed || 1) : cursor
+      step = [at, op, pos, removed]
+      if (m[5]) step[4] = unrle(m[5])
+      if (m[6]) step[5] = m[6]
+    }
+    const [, kind, pos, , shape = ''] = step
+    cursor = kind === 'm' || kind === 'c' ? pos : kind === 't' || kind === 'p' || kind === 'r' ? pos + shape.length : pos
+    steps.push(step)
+  }
+  return steps
+}
+
+export function encodeSteps(steps: Step[], initialCursor: number) {
+  let cursor = initialCursor
+  let prev = 0
+  return steps
+    .map(([at, kind, pos, removed = 0, shape = '', who]) => {
+      const dt = Math.max(0, Math.round(at - prev))
+      prev = at
+      let token: string
+      if (kind === 't' && !removed && shape.length === 1 && pos === cursor) token = `${dt}${rle(shape)}`
+      else {
+        const usualRemoved = kind === 'b' || kind === 'd' ? 1 : 0
+        const usualPos = kind === 'b' ? cursor - (removed || 1) : cursor
+        token = `${dt}${kind}`
+        if (pos !== usualPos) token += `@${pos}`
+        if (removed !== usualRemoved) token += `-${removed}`
+        if (shape) token += `+${rle(shape)}`
+        if (who) token += `:${who.replace(/[^a-z]/g, '')}`
+      }
+      cursor = kind === 'm' || kind === 'c' ? pos : kind === 't' || kind === 'p' || kind === 'r' ? pos + shape.length : pos
+      return token
+    })
+    .join(',')
+}
+
+// a stored row of either version, as the replay wants it
+function normalize(row: Record<string, unknown>): Timeline | undefined {
+  if (typeof row.draftId !== 'string') return undefined
+  const cursor = Number(row.initialCursor) || 0
+  if (row.v === 2 && typeof row.steps === 'string') {
+    return { ...(row as unknown as Timeline), initialShape: unrle(String(row.initialShape ?? '')), steps: decodeSteps(row.steps, cursor) }
+  }
+  if (Array.isArray(row.steps)) return row as unknown as Timeline
+  return undefined
+}
+
 export function parseTimelines(text: string): Timeline[] {
   const rows: Timeline[] = []
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     try {
-      const row = JSON.parse(line)
-      if (row && typeof row.draftId === 'string' && Array.isArray(row.steps)) rows.push(row)
+      const row = normalize(JSON.parse(line))
+      if (row) rows.push(row)
     } catch {}
   }
   return rows
