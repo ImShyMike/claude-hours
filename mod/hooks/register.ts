@@ -358,11 +358,12 @@ async function serverOf($: EngineInterface, dir: string): Promise<Server | undef
 // itself: POST the bytes past what the server holds, and it answers its new
 // length. Every send can be repeated safely, and the server is the one that
 // counts (in bytes, never a JS string's length). sent/<session>.json keeps the
-// last length it answered, plus the .gz sizes once a finished session is in.
+// last length it answered, plus the .gz sizes once a finished session is in,
+// for one server: pointing the config at another starts over from nothing.
 //
 // This runs on its own chain, never awaited by a hook: a slow server must not
 // hold up the log or the person.
-type Sent = { events?: number; drafts?: number; gz?: [number, number] }
+type Sent = { url?: string; events?: number; drafts?: number; gz?: [number, number] }
 
 let syncing: Promise<void> = Promise.resolve()
 let warned = false
@@ -371,13 +372,15 @@ function sentPath(dir: string, sessionId: string) {
   return `${dir}/${SENT_DIR}/${sessionId}.json`
 }
 
-async function readSent($: EngineInterface, dir: string, sessionId: string): Promise<Sent> {
+async function readSent($: EngineInterface, server: Server, dir: string, sessionId: string): Promise<Sent> {
   const path = sentPath(dir, sessionId)
-  if (!(await $.fs.exists(path).catch(() => false))) return {}
+  const fresh = { url: server.url }
+  if (!(await $.fs.exists(path).catch(() => false))) return fresh
   try {
-    return JSON.parse(String(await $.fs.read(path))) ?? {}
+    const sent = JSON.parse(String(await $.fs.read(path)))
+    return sent?.url === server.url ? sent : fresh
   } catch {
-    return {}
+    return fresh
   }
 }
 
@@ -446,7 +449,7 @@ function syncSession($: EngineInterface) {
       const [sessionId, dir] = await Promise.all([$.session.id(), homeDir($)])
       const server = await serverOf($, dir)
       if (!server) return
-      await pushSession($, server, dir, sessionId, await readSent($, dir, sessionId))
+      await pushSession($, server, dir, sessionId, await readSent($, server, dir, sessionId))
       warned = false
     })
     .catch(err => warnOnce($, err))
@@ -471,7 +474,7 @@ function sweep($: EngineInterface) {
         const [sessionId, e, d] = line.trim().split(/\s+/)
         if (!sessionId || !/^[\w-]{1,128}$/.test(sessionId)) continue
         const gz: [number, number] = [Number(e), Number(d)]
-        const sent = await readSent($, dir, sessionId)
+        const sent = await readSent($, server, dir, sessionId)
         if (sent.gz?.[0] === gz[0] && sent.gz[1] === gz[1]) continue
         if (await pushSession($, server, dir, sessionId, sent)) {
           sent.gz = gz

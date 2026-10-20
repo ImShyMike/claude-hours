@@ -212,7 +212,10 @@ Authorization: Bearer <token>
 The hub appends what it doesn't have yet and answers `{"length": <bytes>}`;
 an offset past its end gets `409` with its length, and the mod resends from
 there. So a repeated, interrupted or duplicate send never doubles or tears a
-row. The mod keeps the hub's last answer in `sent/<sessionId>.json`.
+row. The mod keeps the hub's last answer in `sent/<sessionId>.json`, for
+that hub's url: point the config at a new hub and everything goes up again.
+If a hub loses data at the same url, `rm -r ~/.claude/analytics/sent` makes
+the next session start resend it all (the hub skips what it already has).
 
 - The mod sends after each turn, without waiting for it (a slow or missing
   hub never holds anything up). The rows written at exit, and anything sent

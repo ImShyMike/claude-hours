@@ -91,7 +91,7 @@ function central(dir: string) {
       },
       '/api/events': async req => {
         const view = await viewer(dir, req)
-        return view ? Response.json(await loadEvents(view.dir)) : unauthorized()
+        return view ? Response.json(await loadEvents(view.dir, { remote: true })) : unauthorized()
       },
       '/api/session/:id': async req => {
         const view = await viewer(dir, req)

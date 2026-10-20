@@ -771,7 +771,7 @@ test('the sweep sends finished sessions once, and skips ones already in', async 
   files.set(CONFIG, JSON.stringify(SERVER))
   const old = '/home/test/.claude/analytics/events/old-1.jsonl'
   files.set(`${old}.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
-  files.set('/home/test/.claude/analytics/sent/done-1.json', JSON.stringify({ events: 10, drafts: 0, gz: [40, 0] }))
+  files.set('/home/test/.claude/analytics/sent/done-1.json', JSON.stringify({ url: 'https://hub.test', events: 10, drafts: 0, gz: [40, 0] }))
   setSweep('old-1 70 0\ndone-1 40 0\n')
 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
@@ -779,4 +779,21 @@ test('the sweep sends finished sessions once, and skips ones already in', async 
   expect(posts.map(p => new URL(p.url).pathname)).toEqual(['/v1/sessions/old-1/events'])
   expect(text(stored, '/v1/sessions/old-1/events')).toBe(files.get(`${old}.gz`))
   expect(JSON.parse(files.get('/home/test/.claude/analytics/sent/old-1.json')!).gz).toEqual([70, 0])
+})
+
+test('a session sent to another hub is sent again to this one', async ($, on) => {
+  const { files, setSweep } = setup(on)
+  const { stored } = hub(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  const old = '/home/test/.claude/analytics/events/old-1.jsonl'
+  files.set(`${old}.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
+  // all in, but at the scratch hub
+  files.set('/home/test/.claude/analytics/sent/old-1.json', JSON.stringify({ url: 'http://127.0.0.1:4749', events: 70, gz: [70, 0] }))
+  setSweep('old-1 70 0\n')
+
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  await settle()
+  expect(text(stored, '/v1/sessions/old-1/events')).toBe(files.get(`${old}.gz`))
+  expect(JSON.parse(files.get('/home/test/.claude/analytics/sent/old-1.json')!)).toMatchObject({ url: 'https://hub.test', gz: [70, 0] })
 })

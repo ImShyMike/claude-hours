@@ -53,15 +53,16 @@ async function sessionParts(path: string): Promise<string[]> {
 
 const sessionOf = (name: string) => /^(.+)\.jsonl(\.gz)?$/.exec(name)?.[1]
 
-// every session file in events/, flattened and tagged with its project
-export async function loadEvents(dir: string): Promise<Event[]> {
+// every session file in events/, flattened and tagged with its project. On
+// the hub the cwds are someone else's disk, so a project is its last folder
+export async function loadEvents(dir: string, { remote = false } = {}): Promise<Event[]> {
   const names = await readdir(join(dir, 'events')).catch(() => [])
   const ids = [...new Set(names.map(sessionOf))].filter((id): id is string => !!id && SESSION_ID.test(id)).sort()
   const events: Event[] = []
   for (const sessionId of ids) {
     for (const text of await sessionParts(join(dir, 'events', `${sessionId}.jsonl`))) {
       for (const e of decodeSession(text, sessionId)) {
-        if (e.cwd) e.project = projectFor(e.cwd)
+        if (e.cwd) e.project = remote ? basename(e.cwd) || '/' : projectFor(e.cwd)
         events.push(e)
       }
     }
