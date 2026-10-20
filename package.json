@@ -6,6 +6,6 @@
     "dev": "bun --hot src/server.ts",
     "start": "NODE_ENV=production bun src/server.ts",
     "demo": "bun scripts/fixtures.ts && ANALYTICS_DIR=fixtures bun --hot src/server.ts",
-    "test": "TZ=America/New_York bun test"
+    "test": "TZ=America/New_York bun test src"
   }
 }

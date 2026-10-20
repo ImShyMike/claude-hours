@@ -9,35 +9,38 @@ It reads the JSONL log that the `hook-analytics` mod writes to
 There are two halves: the mod, which records, and this repo, which shows.
 
 1. **Get the mod.** `hook-analytics` is a Claude Code plugin made of a
-   function-hooks module. It lives outside this repo, at
-   `~/.claude/mods/hook-analytics/`:
+   function-hooks module, in this repo's `mod/` folder:
 
    ```
-   hook-analytics/
+   mod/
      .claude-plugin/plugin.json   # name, version, description
+     hooks/hooks.json             # points Claude Code at register.ts
      hooks/register.ts            # every hook; the whole mod
      hooks/register.test.ts       # tests (claude plugin test)
+     types/index.d.ts             # the mod's own state type
      TODO.md                      # what it logs, field by field, and open todos
    ```
 
-2. **Load it in every session.** Point Claude Code at the folder in
-   `~/.claude/settings.json`:
+2. **Load it in every session.** Point Claude Code at the folder (an
+   absolute path, `~` allowed) in `~/.claude/settings.json`:
 
    ```json
-   { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/hook-analytics" } }
+   { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/path/to/claude-hackatime/mod" } }
    ```
 
-   For a one-off try, `claude --plugin-dir ~/.claude/mods/hook-analytics`
+   For a one-off try, `claude --plugin-dir ~/path/to/claude-hackatime/mod`
    works too. Start a new session; a `session_start` line in
    `~/.claude/analytics/events.jsonl` means it's recording. Editing
-   `register.ts` hot-reloads it in running sessions.
+   `register.ts` hot-reloads it in running sessions, and Claude Code writes
+   the API's type declarations into `mod/.claude-plugin/types/` (ignored by
+   git) so `tsc -p mod` works.
 
 3. **Check the mod** (optional, after editing it):
 
    ```sh
-   cd ~/.claude/mods/hook-analytics
+   cd mod
    claude plugin test        # its tests
-   claude plugin validate .  # the manifest
+   claude plugin validate .  # the manifest and what it hooks
    ```
 
 4. **Run the dashboard.** Install [Bun](https://bun.sh), then in this repo:
@@ -168,3 +171,4 @@ Languages come from the extensions of `file_changed` paths. Tools come from
 - `src/server.ts`: `Bun.serve` with both pages, `/api/events` and `/api/session/:id`
 - `public/`: the pages (`index.html` + `app.ts`, `session.html` + `session.ts`, shared bits in `shared.ts`); Bun bundles them on the fly
 - `scripts/fixtures.ts`: deterministic fake data for the demo
+- `mod/`: the hook-analytics mod that writes the data (see Setup)

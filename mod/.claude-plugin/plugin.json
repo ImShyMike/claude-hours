@@ -1,0 +1,6 @@
+{
+  "name": "hook-analytics",
+  "version": "0.1.0",
+  "description": "Logs prompts, turns, interrupts, tool calls, file changes and session start/end to ~/.claude/analytics/events.jsonl",
+  "types": "./types/index.d.ts"
+}
