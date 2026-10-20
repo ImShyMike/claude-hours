@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>claude-hackatime</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>claude-hackatime</h1>
+          <p class="muted">time spent with Claude, from <code>hook-analytics</code></p>
+        </div>
+        <div class="controls">
+          <div class="segmented" role="group" aria-label="Range">
+            <button data-range="today">Today</button>
+            <button data-range="7">7 days</button>
+            <button data-range="30">30 days</button>
+            <button data-range="all">All</button>
+          </div>
+          <label class="muted">
+            idle cap
+            <select id="idle">
+              <option value="2">2 min</option>
+              <option value="5">5 min</option>
+              <option value="10">10 min</option>
+              <option value="15">15 min</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="hero-value" id="total">-</div>
+        <div class="muted" id="total-label"></div>
+      </section>
+
+      <section class="tiles" id="tiles"></section>
+
+      <p class="empty muted" id="empty" hidden>nothing logged in this range yet</p>
+
+      <div id="content" hidden>
+        <section class="card" id="days-card">
+          <h2>Active time per day</h2>
+          <div class="chart" id="days"></div>
+          <details>
+            <summary class="muted">show as table</summary>
+            <table id="days-table"></table>
+          </details>
+        </section>
+
+        <section class="card">
+          <h2>Time of day</h2>
+          <div class="chart" id="hours"></div>
+        </section>
+
+        <div class="grid">
+          <section class="card">
+            <h2>Projects</h2>
+            <div id="projects"></div>
+          </section>
+          <section class="card">
+            <h2>Languages <span class="muted">by files changed</span></h2>
+            <div id="languages"></div>
+          </section>
+        </div>
+
+        <section class="card">
+          <h2>Tools</h2>
+          <div id="tools"></div>
+        </section>
+
+        <section class="card">
+          <h2>Sessions</h2>
+          <div class="scroll"><table id="sessions"></table></div>
+        </section>
+      </div>
+    </main>
+    <div class="tooltip" id="tooltip" hidden></div>
+    <script type="module" src="./app.ts"></script>
+  </body>
+</html>

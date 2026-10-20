@@ -1,0 +1,43 @@
+import { existsSync } from 'node:fs'
+import { readdir } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { parseLines, type Event } from './aggregate'
+
+// events.jsonl now, events-YYYY-MM.jsonl if the mod starts rotating
+const LOG_NAME = /^events.*\.jsonl$/
+
+const projectCache = new Map<string, string>()
+
+// A cd into a subdir shouldn't split a repo into two projects, so name the
+// nearest git root. ~/.claude gets a friendly name of its own.
+export function projectFor(cwd: string, home = homedir()) {
+  const cached = projectCache.get(cwd)
+  if (cached) return cached
+  let name = basename(cwd) || '/'
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    if (dir === join(home, '.claude')) {
+      name = '~/.claude'
+      break
+    }
+    if (existsSync(join(dir, '.git'))) {
+      name = basename(dir)
+      break
+    }
+    if (dir === dirname(dir) || dir === home) break
+  }
+  projectCache.set(cwd, name)
+  return name
+}
+
+export async function loadEvents(dir: string): Promise<Event[]> {
+  const names = (await readdir(dir).catch(() => [])).filter(name => LOG_NAME.test(name)).sort()
+  const events: Event[] = []
+  for (const name of names) {
+    for (const e of parseLines(await Bun.file(join(dir, name)).text())) {
+      if (typeof e.cwd === 'string') e.project = projectFor(e.cwd)
+      events.push(e)
+    }
+  }
+  return events
+}
