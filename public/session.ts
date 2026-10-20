@@ -73,15 +73,8 @@ function drawLanes() {
   const el = $('lanes')
   const turns = events.filter(e => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId)
   const compacts = events.filter(e => e.event === 'compact')
-  const starts = new Map<string, Event>()
-  const tools: { start: number; end: number; e: Event }[] = []
-  for (const e of events) {
-    if (e.event === 'tool_start' && typeof e.toolUseId === 'string') starts.set(e.toolUseId, e)
-    if (e.event === 'tool_end' && typeof e.toolUseId === 'string') {
-      const s = starts.get(e.toolUseId)
-      tools.push({ start: s ? time(s) : time(e) - num(e.durationMs), end: time(e), e })
-    }
-  }
+  // a tool row is written when the call ends, so it starts durationMs earlier
+  const tools = events.filter(e => e.event === 'tool').map(e => ({ start: time(e) - num(e.durationMs), end: time(e), e }))
 
   const all = [
     ...events.map(time),

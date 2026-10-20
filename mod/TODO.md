@@ -1,13 +1,13 @@
 # hook-analytics: handoff
 
 A function-hooks mod (Claude Code plugin) that appends one JSON line per event
-to `~/.claude/analytics/events.jsonl`. It's loaded in every session through
+to `~/.claude/analytics/events/<sessionId>.jsonl`. It's loaded in every session through
 `env.CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. Commits so far:
 `2fcda39` (add), `ac7b07e` (cwd on every line + `cwd_changed`).
 
 ## What it logs
 
-Every line has `ts`, `sessionId`, `cwd` and `event`.
+Each session file opens with a header, `{"v":1,"event":"session","start":<epoch ms>,"cwd":...}`. Every later row has `event` and `t` (ms since `start`; `at`, epoch ms, instead if a reload couldn't read the header back). No row repeats the session id (it's the file name) or the cwd: `cwd_changed` moves it, and `file` / `path` under it are relative.
 
 | event | hook | extra fields |
 |---|---|---|
@@ -18,9 +18,9 @@ Every line has `ts`, `sessionId`, `cwd` and `event`.
 | `draft_abandoned` | `prompt.edit` / `prompt.change` / `session.end` | the same draft fields, plus `how` (`clear`, `undo`, `deleted`, `exit`), `startedAt`, `endedAt`. Written late (at the next submit or at exit, never from a keystroke), so use `endedAt`, not `ts` |
 | `turn_end` / `interrupt` | `turn.complete` (`reason: 'aborted'` → `interrupt`) | `turnId`, `agentId`, `reason`, `durationMs`, `usage`; a main-loop `interrupt` also has `answerChars` (answer shown so far, a count only) and `toolsRunning` (tool names still in flight, if any) |
 | `compact` | `session.compact`, once it finishes | `trigger` (manual/auto/plugin/precompute), `agentId`, `messages` (count going in), `outcome` (compacted/skipped/threw), `tokensBefore`, `tokensAfter`, `usage`, `durationMs` |
-| `tool_start` / `tool_end` | `tool.call` | `tool`, `toolUseId`, `agentId`, `file` / `commandChars`, then `outcome` + `durationMs` |
+| `tool` | `tool.call`, once it ends (a call that never ends leaves no row) | `tool`, `agentId`, `file` (built-in file tools only) / `commandChars`, `outcome`, `durationMs` |
 | `file_changed` | `tool.call` | `path`, `via: tool` (Edit/Write/NotebookEdit) or `via: bash-window` |
-| `cwd_changed` | inside `log()` whenever cwd differs from the last line's | `from` |
+| `cwd_changed` | inside `logAll()` whenever the cwd differs from the last row's, and once after a reload | `cwd` (the new one) |
 
 Prompt text and file contents are never written.
 
@@ -34,8 +34,7 @@ Prompt text and file contents are never written.
 - [x] **See a real interrupt.** Seen live on 2026-10-20: Esc 1.4 s into a turn logged one `interrupt` (no `agentId`), and the prompt went back into the box.
 - [ ] **Check Bash latency in a big repo.** Every Bash result waits for a `find` over the cwd (3 s timeout, prunes `.git`, `node_modules`, `target`, `.venv`, `venv`, `__pycache__`, `dist`, `build`). If it's noticeable, narrow the scan or skip it above some size.
 - [ ] **Check the session_start dedupe live.** Edit the mod during an interactive session (hot reload) and confirm there's no second `session_start`.
-- [ ] **Log growth.** The file is never rotated. Maybe roll it per month (`events-2026-10.jsonl`) or cap its size.
-- [x] **Something to read it with.** `~/Documents/GitHub/claude-hackatime`: local Bun dashboard (`bun run dev`, http://127.0.0.1:4747). It reads `events*.jsonl` as a glob, so monthly rotation will just work.
+- [x] **Something to read it with.** `~/Documents/GitHub/claude-hackatime`: local Bun dashboard (`bun run dev`, http://127.0.0.1:4747). It reads every file in `events/`.
 
 ## Known limits (by design, for now)
 
@@ -48,7 +47,7 @@ Prompt text and file contents are never written.
 - `bash-window` file changes = files under the cwd with an mtime after the Bash call started. It can't tell miggy's own edits from Claude's, misses writes outside the cwd, and catches at most 50 paths per call. `~/.claude/{projects,state,analytics,plugins}` are filtered out as noise.
 - The org plugin `cc-plugin-sec-default` sits above mods and skips their `classic.SessionStart` hooks, so there's no `startup`/`resume`/`clear` source on `session_start`. Other `classic.*` events may get skipped too, so prefer engine events.
 - `/clear` gives `session_end` with `reason: clear`, then lines under a new `sessionId` with no `session_start`.
-- `$.session.cwd()` follows a Bash `cd`, but the `cd` call's own `tool_end` still shows the old dir. A hot reload forgets the last cwd, so there's no `cwd_changed` right after a reload.
+- `$.session.cwd()` follows a Bash `cd`, but the `cd` call's own `tool` row still lands under the old dir. A hot reload forgets the last cwd, so it writes a `cwd_changed` before its first row even if nothing moved.
 - This build has no MultiEdit tool. If a later one does, add it to `EDIT_TOOLS`.
 
 ## Dev loop

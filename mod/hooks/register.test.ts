@@ -5,9 +5,13 @@ import { expect, test, type Engine } from 'claude-code/testing'
 // `tee -a` runs are where the log lines land.
 const setup = (on: On) => {
   const lines: Record<string, unknown>[] = []
+  // each session file's header row, kept apart from the rows after it
+  const headers: Record<string, unknown>[] = []
   // the per-session draft timelines, by file
   const timelines: Record<string, unknown>[] = []
   const timelineFiles = new Set<string>()
+  // what each file holds, so fs.exists / fs.read answer like a disk would
+  const files = new Map<string, string>()
   let findOutput = ''
   let cwd = '/proj'
   let now = 1_790_000_000_000
@@ -19,9 +23,14 @@ const setup = (on: On) => {
     const [cmd] = e.argv
     if (cmd === 'tee') {
       const path = e.argv[2] ?? ''
+      const stdin = e.init?.stdin ?? ''
+      files.set(path, (files.get(path) ?? '') + stdin)
       const drafts = path.includes('/analytics/drafts/')
       if (drafts) timelineFiles.add(path)
-      for (const row of (e.init?.stdin ?? '').split('\n').filter(Boolean)) (drafts ? timelines : lines).push(JSON.parse(row))
+      for (const text of stdin.split('\n').filter(Boolean)) {
+        const row = JSON.parse(text)
+        ;(drafts ? timelines : row.event === 'session' ? headers : lines).push(row)
+      }
     }
     const stdout = cmd === 'find' ? findOutput : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -32,9 +41,13 @@ const setup = (on: On) => {
     cursor: e.start + e.inputText.length,
   }))
   on('prompt.change', (_, e) => ({ text: e.text }))
+  on('fs.exists', (_, e) => ({ value: files.has(e.path) }))
+  on('fs.read', (_, e) => ({ value: files.get(e.path) ?? '' }))
   on('prompt.submit', (_, e) => ({ text: e.text }))
   return {
     lines,
+    headers,
+    files,
     timelines,
     timelineFiles,
     setFind: (out: string) => (findOutput = out),
@@ -49,7 +62,7 @@ test('a prompt logs its word and char counts, never its text', async ($, on) => 
   await $.prompt.submit({ text: '  hello  wörld\nhow are you ', wait: false, origin: { kind: 'composer' } })
 
   expect(lines).toHaveLength(1)
-  expect(lines[0]).toMatchObject({ event: 'prompt', sessionId: 'sess-1', words: 5, chars: 27 })
+  expect(lines[0]).toMatchObject({ event: 'prompt', words: 5, chars: 27 })
   expect(JSON.stringify(lines[0])).not.toContain('hello')
 })
 
@@ -65,15 +78,17 @@ test('an aborted turn is an interrupt, an answered one a turn_end', async ($, on
   expect(lines[0]).toMatchObject({ durationMs: 1200, turnId: 't1' })
 })
 
-test('a tool call logs start, end and the file it edited', async ($, on) => {
-  const { lines } = setup(on)
-  on('tool.call', () => ({ result: {} }))
+test('a tool call logs one row when it ends, then the file it edited', async ($, on) => {
+  const { lines, tick } = setup(on)
+  on('tool.call', () => (tick(250), { result: {} }))
 
   await $.tool.call({ tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
 
-  expect(lines.map(l => l.event)).toEqual(['tool_start', 'tool_end', 'file_changed'])
-  expect(lines[1]).toMatchObject({ tool: 'Write', outcome: 'ok' })
-  expect(lines[2]).toMatchObject({ path: '/proj/a.txt', via: 'tool' })
+  expect(lines.map(l => l.event)).toEqual(['tool', 'file_changed'])
+  // paths under the cwd are written relative to it
+  expect(lines[0]).toMatchObject({ tool: 'Write', outcome: 'ok', durationMs: 250, file: 'a.txt' })
+  expect(lines[1]).toMatchObject({ path: 'a.txt', via: 'tool' })
+  expect(lines[0]!.toolUseId).toBeUndefined()
 })
 
 test('files a Bash call touched show up through the find window', async ($, on) => {
@@ -84,9 +99,9 @@ test('files a Bash call touched show up through the find window', async ($, on) 
   await $.tool.call({ tool: 'Bash', command: 'python3 gen.py' })
 
   const changed = lines.filter(l => l.event === 'file_changed')
-  expect(changed.map(l => l.path)).toEqual(['/proj/out.json', '/proj/data/x.csv'])
+  expect(changed.map(l => l.path)).toEqual(['out.json', 'data/x.csv'])
   expect(changed[0]).toMatchObject({ via: 'bash-window', tool: 'Bash' })
-  expect(lines.find(l => l.event === 'tool_start')).toMatchObject({ commandChars: 14 })
+  expect(lines.find(l => l.event === 'tool')).toMatchObject({ commandChars: 14 })
 })
 
 test('session start logs once across reloads, session end logs its reason', async ($, on) => {
@@ -99,29 +114,33 @@ test('session start logs once across reloads, session end logs its reason', asyn
   await $.session.start(start)
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: { command: 'claude --resume sess-1' } as never })
 
-  expect(lines.map(l => [l.event, l.reason ?? l.cwd])).toEqual([
-    ['session_start', '/proj'],
+  expect(lines.map(l => [l.event, l.reason ?? l.surface])).toEqual([
+    ['session_start', 'terminal'],
     ['session_end', 'prompt_input_exit'],
   ])
 })
 
-test('every line carries its cwd, and a switch gets a cwd_changed line', async ($, on) => {
-  const { lines, cd } = setup(on)
+test('a session file opens with a header, rows carry ms since it, and a cd gets a cwd_changed', async ($, on) => {
+  const { lines, headers, files, cd, tick } = setup(on)
   on('turn.complete', () => ({ text: '' }))
 
   const turn = { answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false } as const
   await $.turn.complete(turn)
+  tick(1_500)
   await $.turn.complete(turn)
   cd('/other')
   await $.turn.complete(turn)
 
-  expect(lines.map(l => [l.event, l.cwd])).toEqual([
-    ['turn_end', '/proj'],
-    ['turn_end', '/proj'],
-    ['cwd_changed', '/other'],
-    ['turn_end', '/other'],
+  expect(headers).toEqual([{ v: 1, event: 'session', start: 1_790_000_000_000, cwd: '/proj' }])
+  expect(lines.map(l => [l.event, l.t, l.cwd])).toEqual([
+    ['turn_end', 0, undefined],
+    ['turn_end', 1_500, undefined],
+    ['cwd_changed', 1_500, '/other'],
+    ['turn_end', 1_500, undefined],
   ])
-  expect(lines[2]).toMatchObject({ from: '/proj' })
+  // no sessionId or ts on any row: the file name and the header carry them
+  expect(lines.some(l => 'sessionId' in l || 'ts' in l)).toBe(false)
+  expect([...files.keys()]).toEqual(['/home/test/.claude/analytics/events/sess-1.jsonl'])
 })
 
 // The person typing into the box: `type` adds at the cursor, `paste` adds
@@ -510,8 +529,24 @@ test("an MCP tool's file_path argument is never logged", async ($, on) => {
   on('tool.call', () => ({ result: {} }))
 
   await $.tool.call({ tool: 'mcp__drive__upload', file_path: '/home/me/secret-plans.pdf' } as never)
-  await $.tool.call({ tool: 'Read', file_path: '/proj/a.txt' })
+  await $.tool.call({ tool: 'Read', file_path: '/elsewhere/a.txt' })
 
   expect(JSON.stringify(lines)).not.toContain('secret-plans')
-  expect(lines.find(l => l.event === 'tool_start' && l.tool === 'Read')).toMatchObject({ file: '/proj/a.txt' })
+  // outside the cwd, a path stays absolute
+  expect(lines.find(l => l.event === 'tool' && l.tool === 'Read')).toMatchObject({ file: '/elsewhere/a.txt' })
+})
+
+test('after a reload the start is read back from the header, and the cwd is written again', async ($, on) => {
+  const { lines, headers, files } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  const start = 1_790_000_000_000 - 60_000
+  files.set('/home/test/.claude/analytics/events/sess-1.jsonl', `${JSON.stringify({ v: 1, event: 'session', start, cwd: '/proj' })}\n{"t":5,"event":"turn_end"}\n`)
+
+  await $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false })
+
+  expect(headers).toEqual([])
+  expect(lines.map(l => [l.event, l.t, l.cwd])).toEqual([
+    ['cwd_changed', 60_000, '/proj'],
+    ['turn_end', 60_000, undefined],
+  ])
 })

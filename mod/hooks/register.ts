@@ -2,13 +2,20 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptEditInput, Register } from 'claude-code'
 import type { StartedSessions } from '../types'
 
-// One JSON object per line, under $HOME. Prompt text and file contents are
-// never written: only sizes, tool names and paths. Each draft's edit timeline
-// goes to a file per session (one writer, so a long line can't tear), as
-// shapes only: 'a' for any character, ' ' for blanks, '\n' for newlines.
+// One JSON object per line, one file per session, under $HOME. Prompt text
+// and file contents are never written: only sizes, tool names and paths.
+//
+// A session file opens with a header, {"v":1,"event":"session","start":<epoch
+// ms>,"cwd":...}. Every later row carries `t`, ms since that start (or `at`,
+// epoch ms, if the header couldn't be read back), and no cwd: a cwd_changed
+// row says when it moves, and paths under it are written relative to it.
+//
+// Each draft's edit timeline goes to drafts/<session>.jsonl, as shapes only:
+// 'a' for any character, ' ' for blanks, '\n' for newlines.
 const LOG_DIR = '.claude/analytics'
-const LOG_FILE = 'events.jsonl'
+const EVENTS_DIR = `${LOG_DIR}/events`
 const DRAFTS_DIR = `${LOG_DIR}/drafts`
+const FORMAT = 1
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
 // built-in tools whose path we log; an MCP tool's file_path argument is its
@@ -147,13 +154,15 @@ const runningTools = new Map<string, string>()
 
 let home: Promise<string> | undefined
 let queue: Promise<void> = Promise.resolve()
-// the cwd of the last line written; a reload starts it over without a cwd_changed
-let lastCwd: string | undefined
+// the session file being written: its start, and the cwd its rows are under.
+// A reload (or a resumed session) reads the start back from the header and
+// writes a cwd_changed before its first row, since it can't know the last cwd
+let head: { sessionId: string; start?: number; cwd?: string } | undefined
 
 function homeDir($: EngineInterface) {
   return (home ??= $.env.get('HOME').then(async dir => {
     if (!dir) throw new Error('HOME is not set')
-    await $.process.run(['mkdir', '-p', `${dir}/${LOG_DIR}`, `${dir}/${DRAFTS_DIR}`])
+    await $.process.run(['mkdir', '-p', `${dir}/${EVENTS_DIR}`, `${dir}/${DRAFTS_DIR}`])
     return dir
   }))
 }
@@ -164,9 +173,31 @@ async function append($: EngineInterface, path: string, rows: Fields[]) {
   if (exitCode !== 0) throw new Error(`append failed: ${stderr.trim()}`)
 }
 
+// a path under the cwd, written relative to it
+const relative = (path: unknown, cwd: string) =>
+  typeof path === 'string' && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path
+
+// The session file's header: written when the file is new, read back after a
+// reload. A file too big to read back gets absolute times instead
+async function headFor($: EngineInterface, path: string, sessionId: string, now: number, cwd: string, rows: Fields[]) {
+  if (head?.sessionId === sessionId) return head
+  if (await $.fs.exists(path)) {
+    const text = await $.fs.read(path).catch(() => '')
+    let start: number | undefined
+    try {
+      const first = JSON.parse(String(text).slice(0, String(text).indexOf('\n')))
+      if (first.event === 'session' && typeof first.start === 'number') start = first.start
+    } catch {}
+    head = { sessionId, start }
+  } else {
+    rows.push({ v: FORMAT, event: 'session', start: now, cwd })
+    head = { sessionId, start: now, cwd }
+  }
+  return head
+}
+
 // Appends go through one queue so parallel tool calls never interleave lines.
-// `ts`, `sessionId` and `cwd` are read when the event happens, not when it is
-// written. A cwd different from the last line's gets a cwd_changed line first.
+// The time and cwd are read when the event happens, not when it is written.
 // Several entries go out in one append, and draft timelines in one more
 function logAll($: EngineInterface, entries: [event: string, fields: Fields][], timelines: Fields[] = []) {
   const at = $.clock.now()
@@ -174,14 +205,18 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields][], 
   const where = $.session.cwd()
   queue = queue
     .then(async () => {
-      const [ts, sessionId, cwd, dir] = await Promise.all([at, session, where, homeDir($)])
-      const stamp = { ts: new Date(ts).toISOString(), sessionId, cwd }
+      const [now, sessionId, cwd, dir] = await Promise.all([at, session, where, homeDir($)])
+      const path = `${dir}/${EVENTS_DIR}/${sessionId}.jsonl`
       const rows: Fields[] = []
-      if (lastCwd !== undefined && cwd !== lastCwd) rows.push({ ...stamp, event: 'cwd_changed', from: lastCwd })
-      lastCwd = cwd
-      for (const [event, fields] of entries) rows.push({ ...stamp, event, ...fields })
+      const h = await headFor($, path, sessionId, now, cwd, rows)
+      const stamp = h.start === undefined ? { at: now } : { t: now - h.start }
+      if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd })
+      h.cwd = cwd
+      for (const [event, fields] of entries) {
+        rows.push({ ...stamp, event, ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) })
+      }
       if (timelines.length) await append($, `${dir}/${DRAFTS_DIR}/${sessionId}.jsonl`, timelines)
-      await append($, `${dir}/${LOG_DIR}/${LOG_FILE}`, rows)
+      await append($, path, rows)
     })
     .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
   return queue
@@ -373,7 +408,7 @@ export const register: Register = on => {
     const sessionId = await $.session.id()
     if (!(await read($, startedSessions)).includes(sessionId)) {
       await update($, startedSessions, ids => [...ids, sessionId])
-      await log($, 'session_start', { cwd: e.cwd, surface: e.surface, isInteractive: e.isInteractive })
+      await log($, 'session_start', { surface: e.surface, isInteractive: e.isInteractive })
     }
     return started
   })
@@ -385,7 +420,7 @@ export const register: Register = on => {
     if (draft) noteEmptied(await $.clock.now(), 'exit')
     settleEmptied()
     const { entries, timelines } = takeAbandoned()
-    await logAll($, [...entries, ['session_end', { sessionId: e.sessionId, reason: e.reason }]], timelines)
+    await logAll($, [...entries, ['session_end', { reason: e.reason }]], timelines)
     return next(e)
   })
 
@@ -502,17 +537,14 @@ export const register: Register = on => {
     }
   }).catch(($, e, next) => next(e))
 
+  // one `tool` row when the call ends (its time is the end; durationMs gives
+  // the start), then the files it changed. A call that never ends, as when
+  // Claude Code is killed mid-Bash, leaves no row
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
-    const ids = { tool, toolUseId: e.tool_use_id, agentId: e.agentId }
+    const ids = { tool, agentId: e.agentId }
     const file = !FILE_TOOLS.has(tool) ? undefined : 'file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : undefined
     const startedMs = await $.clock.now()
-    await log($, 'tool_start', {
-      ...ids,
-      file,
-      commandChars: e.tool === 'Bash' ? e.command.length : undefined,
-    })
-
     if (e.agentId === undefined) runningTools.set(e.tool_use_id, tool)
 
     let outcome = 'threw'
@@ -523,17 +555,19 @@ export const register: Register = on => {
     } finally {
       runningTools.delete(e.tool_use_id)
       const durationMs = (await $.clock.now()) - startedMs
-      await log($, 'tool_end', { ...ids, outcome, durationMs })
-
+      const entries: [string, Fields][] = [
+        ['tool', { ...ids, file, commandChars: e.tool === 'Bash' ? e.command.length : undefined, outcome, durationMs }],
+      ]
       if (outcome === 'ok' && EDIT_TOOLS.has(tool)) {
-        await log($, 'file_changed', { ...ids, path: file, via: 'tool' })
+        entries.push(['file_changed', { ...ids, path: file, via: 'tool' }])
       } else if (e.tool === 'Bash' && outcome !== 'denied') {
         const paths = await filesChangedSince($, startedMs).catch(err => {
           $.ui.log(`${$.plugin.name}: ${String(err)}`)
           return []
         })
-        for (const path of paths) await log($, 'file_changed', { ...ids, path, via: 'bash-window' })
+        for (const path of paths) entries.push(['file_changed', { ...ids, path, via: 'bash-window' }])
       }
+      await logAll($, entries)
     }
   }).catch(($, e, next) => next(e))
 }

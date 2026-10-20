@@ -20,14 +20,20 @@ test('projectFor gives ~/.claude a friendly name', () => {
   expect(projectFor(join(home, '.claude/mods/x'), home)).toBe('~/.claude')
 })
 
-test('loadEvents reads every events*.jsonl and skips other files', async () => {
+test('loadEvents reads every session file in events/ and skips other files', async () => {
   const dir = scratch()
-  const line = (event: string) => `${JSON.stringify({ ts: '2026-10-19T12:00:00Z', sessionId: 's', cwd: '/nowhere/proj', event })}\n`
-  writeFileSync(join(dir, 'events.jsonl'), line('a'))
-  writeFileSync(join(dir, 'events-2026-09.jsonl'), line('b') + '{"torn')
-  writeFileSync(join(dir, 'notes.txt'), line('c'))
+  mkdirSync(join(dir, 'events'))
+  const session = (event: string) =>
+    `${JSON.stringify({ v: 1, event: 'session', start: Date.parse('2026-10-19T12:00:00Z'), cwd: '/nowhere/proj' })}\n${JSON.stringify({ t: 0, event })}\n`
+  writeFileSync(join(dir, 'events', 'abc-1.jsonl'), session('a'))
+  writeFileSync(join(dir, 'events', 'abc-2.jsonl'), session('b') + '{"torn')
+  writeFileSync(join(dir, 'events', 'notes.txt'), session('c'))
+  writeFileSync(join(dir, 'events.jsonl'), session('d'))
   const events = await loadEvents(dir)
-  expect(events.map(e => e.event).sort()).toEqual(['a', 'b'])
+  expect(events.map(e => [e.event, e.sessionId])).toEqual([
+    ['a', 'abc-1'],
+    ['b', 'abc-2'],
+  ])
   expect(events[0]!.project).toBe('proj')
 })
 

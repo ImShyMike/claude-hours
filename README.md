@@ -1,8 +1,8 @@
 # claude-hackatime
 
 A local, Hackatime-style dashboard for the time spent coding with Claude Code.
-It reads the JSONL log that the `hook-analytics` mod writes to
-`~/.claude/analytics/events*.jsonl`.
+It reads the JSONL logs that the `hook-analytics` mod writes to
+`~/.claude/analytics/events/`, one file per session.
 
 ## Setup
 
@@ -54,7 +54,7 @@ Running Claude Code inside WSL works like Linux.
 
    For a one-off try, `claude --plugin-dir ~/path/to/claude-hackatime/mod`
    works too. Start a new session; a `session_start` line in
-   `~/.claude/analytics/events.jsonl` means it's recording. Editing
+   `~/.claude/analytics/events/` means it's recording. Editing
    `register.ts` hot-reloads it in running sessions, and Claude Code writes
    the API's type declarations into `mod/.claude-plugin/types/` (ignored by
    git) so `tsc -p mod` works.
@@ -84,28 +84,39 @@ Running Claude Code inside WSL works like Linux.
 
 ```
 ~/.claude/analytics/
-  events.jsonl                 # one JSON line per event, every session
-  drafts/<sessionId>.jsonl     # draft edit timelines for the replay, one file per session
+  events/<sessionId>.jsonl     # one JSON line per event, one file per session
+  drafts/<sessionId>.jsonl     # draft edit timelines for the replay, same split
 ```
 
 - **Nothing here holds prompt text.** Prompts are logged as counts (words,
   chars, typing time, edits). Draft timelines keep shapes only: where letters,
   blanks and newlines were, never which letters. An interrupt records how many
   characters of the answer had shown, not the answer.
-- **It does hold local paths:** every line's `cwd`, plus the files tools
+- **It does hold local paths:** the session's `cwd`, plus the files tools
   touched (`file_changed`). That's why the server stays on localhost.
 - **Nothing leaves the machine.** The mod appends with `tee -a`; the dashboard
   reads the files on every request and does all the math in the browser.
-- **Nothing is rotated yet.** The log grows forever (it's small, roughly a
-  few hundred bytes per tool call). The reader already globs `events*.jsonl`,
-  so renaming an old file to `events-2026-10.jsonl` keeps it counted.
+- **It splits itself.** Each session gets its own small file, so there's no
+  one log to rotate. Delete old session files to forget them.
 - Deleting the files is safe: the next event recreates them. Keep the
   folders, though; the mod only creates them once per session.
 
 ### What gets logged
 
-Every line has `ts`, `sessionId`, `cwd` and `event`. The full field list is
-in the mod's `TODO.md`; the short version:
+A session file opens with a header, `{"v":1,"event":"session","start":<epoch
+ms>,"cwd":...}`. After it, every row has `event` and `t`, ms since that start,
+and nothing repeated: the file name is the session, a `cwd_changed` row says
+when the cwd moves, and paths under the cwd are written relative to it.
+
+```json
+{"v":1,"event":"session","start":1792472272642,"cwd":"/home/me/code/terra"}
+{"t":0,"event":"session_start","surface":"terminal","isInteractive":true}
+{"t":48211,"event":"tool","tool":"Edit","file":"src/db.ts","outcome":"ok","durationMs":31}
+{"t":48212,"event":"file_changed","tool":"Edit","path":"src/db.ts","via":"tool"}
+```
+
+`src/eventlog.ts` decodes it back to flat events and skips files in any other
+format. The full field list is in the mod's `TODO.md`; the short version:
 
 | event | when |
 | --- | --- |
@@ -114,7 +125,7 @@ in the mod's `TODO.md`; the short version:
 | `draft_abandoned` | a typed draft was cleared, undone, deleted or left at exit without being sent |
 | `turn_end` / `interrupt` | a turn finished, or was stopped with Esc (`answerChars` and `toolsRunning` say what got cut off) |
 | `compact` | a compaction finished: trigger, tokens before and after, how long it took |
-| `tool_start` / `tool_end` | each tool call, with outcome and duration |
+| `tool` | a tool call finished, with outcome and duration (its row is written at the end, so it began `durationMs` earlier) |
 | `file_changed` | a file edited by a tool, or changed during a Bash call |
 | `cwd_changed` | the session's working directory moved |
 
@@ -185,13 +196,14 @@ whatever follows from the cursor (`120a` is one letter typed 120ms after the
 last step). `src/replay.ts` decodes it and skips rows of any other version.
 
 Languages come from the extensions of `file_changed` paths. Tools come from
-`tool_end`, with errors, denials and average duration shown in the tooltip.
+`tool` rows, with errors, denials and average duration shown in the tooltip.
 
 ## Layout
 
-- `src/aggregate.ts`: pure parsing and summarizing, shared by the page and the tests
+- `src/eventlog.ts`: the session file format, decode and encode
+- `src/aggregate.ts`: pure summarizing, shared by the page and the tests
 - `src/replay.ts`: pure draft replay (apply steps, squash pauses), shared too
-- `src/load.ts`: reads every `events*.jsonl` and tags each event with its project
+- `src/load.ts`: reads every session file in `events/` and tags each event with its project
 - `src/server.ts`: `Bun.serve` with both pages, `/api/events` and `/api/session/:id`
 - `public/`: the pages (`index.html` + `app.ts`, `session.html` + `session.ts`, shared bits in `shared.ts`); Bun bundles them on the fly
 - `scripts/fixtures.ts`: deterministic fake data for the demo

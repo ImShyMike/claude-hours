@@ -272,7 +272,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         }
         break
       }
-      case 'tool_end': {
+      case 'tool': {
         const t = tools.get(String(e.tool)) ?? { calls: 0, errors: 0, denied: 0, totalMs: 0 }
         t.calls++
         if (e.outcome === 'error' || e.outcome === 'threw') t.errors++
@@ -312,18 +312,4 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
     tokens,
     sessions: [...sessions.values()].sort((a, b) => b.start - a.start),
   }
-}
-
-// Parses JSONL defensively: concurrent sessions append to the same file, so a
-// torn or half-written line is skipped instead of failing the whole read.
-export function parseLines(text: string): Event[] {
-  const events: Event[] = []
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    try {
-      const row = JSON.parse(line)
-      if (row && typeof row === 'object' && typeof row.ts === 'string') events.push(row)
-    } catch {}
-  }
-  return events
 }

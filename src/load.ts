@@ -2,11 +2,9 @@ import { existsSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { parseLines, type Event } from './aggregate'
+import type { Event } from './aggregate'
+import { decodeSession } from './eventlog'
 import { parseTimelines, type Timeline } from './replay'
-
-// events.jsonl now, events-YYYY-MM.jsonl if the mod starts rotating
-const LOG_NAME = /^events.*\.jsonl$/
 
 const projectCache = new Map<string, string>()
 
@@ -31,20 +29,23 @@ export function projectFor(cwd: string, home = homedir()) {
   return name
 }
 
+// Session ids are uuids; anything else never reaches a path
+export const SESSION_ID = /^[\w-]{1,128}$/
+
+// every session file in events/, flattened and tagged with its project
 export async function loadEvents(dir: string): Promise<Event[]> {
-  const names = (await readdir(dir).catch(() => [])).filter(name => LOG_NAME.test(name)).sort()
+  const names = await readdir(join(dir, 'events')).catch(() => [])
   const events: Event[] = []
-  for (const name of names) {
-    for (const e of parseLines(await Bun.file(join(dir, name)).text())) {
-      if (typeof e.cwd === 'string') e.project = projectFor(e.cwd)
+  for (const name of names.sort()) {
+    const sessionId = name.replace(/\.jsonl$/, '')
+    if (sessionId === name || !SESSION_ID.test(sessionId)) continue
+    for (const e of decodeSession(await Bun.file(join(dir, 'events', name)).text(), sessionId)) {
+      if (e.cwd) e.project = projectFor(e.cwd)
       events.push(e)
     }
   }
   return events
 }
-
-// Session ids are uuids; anything else never reaches a path
-export const SESSION_ID = /^[\w-]{1,128}$/
 
 // A session's draft timelines, from drafts/<sessionId>.jsonl
 export async function loadTimelines(dir: string, sessionId: string): Promise<Timeline[]> {

@@ -1,7 +1,9 @@
 // Writes fake but plausible hook-analytics events to fixtures/events.jsonl, so
 // the dashboard has something to draw while the real log is still tiny.
 // Deterministic: the same seed gives the same file (relative to today).
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import type { Event } from '../src/aggregate'
+import { encodeSession } from '../src/eventlog'
 import { encodeSteps } from '../src/replay'
 
 const DAYS = 45
@@ -140,16 +142,14 @@ for (let back = DAYS; back >= 0; back--) {
       for (let c = 0; c < calls; c++) {
         at += between(2, 25) * 1000
         const tool = pick(TOOLS)
-        const toolUseId = `t${lines.length}`
-        row('tool_start', { tool, toolUseId })
         const durationMs = Math.round(tool === 'Bash' || tool === 'Agent' ? between(200, 90_000) : between(5, 400))
         at += durationMs
         const outcome = rand() < 0.06 ? 'error' : rand() < 0.03 ? 'denied' : 'ok'
-        row('tool_end', { tool, toolUseId, outcome, durationMs })
+        row('tool', { tool, outcome, durationMs })
         // sometimes a thought arrives while Claude is busy
         if (rand() < 0.05) row('prompt', { words: Math.floor(between(3, 30)), chars: 60, origin: 'composer', midTurn: true })
         if (outcome === 'ok' && (tool === 'Edit' || tool === 'Write')) {
-          row('file_changed', { tool, toolUseId, path: `${cwd}/${pick(FILES)}`, via: 'tool' })
+          row('file_changed', { tool, path: `${cwd}/${pick(FILES)}`, via: 'tool' })
         }
       }
       // now and then the context fills up mid-turn
@@ -176,8 +176,18 @@ for (let back = DAYS; back >= 0; back--) {
   }
 }
 
-mkdirSync('fixtures', { recursive: true })
-writeFileSync('fixtures/events.jsonl', `${lines.join('\n')}\n`)
+rmSync('fixtures', { recursive: true, force: true })
+mkdirSync('fixtures/events', { recursive: true })
+// one file per session, in the mod's own format
+const events = new Map<string, Event[]>()
+for (const line of lines) {
+  const e = JSON.parse(line) as Event
+  events.set(e.sessionId, [...(events.get(e.sessionId) ?? []), e])
+}
+for (const [id, list] of events) {
+  list.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
+  writeFileSync(`fixtures/events/${id}.jsonl`, encodeSession(list))
+}
 mkdirSync('fixtures/drafts', { recursive: true })
 const bySession = new Map<string, string[]>()
 for (const row of drafts) {
@@ -185,4 +195,4 @@ for (const row of drafts) {
   bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), JSON.stringify(rest)])
 }
 for (const [id, rows] of bySession) writeFileSync(`fixtures/drafts/${id}.jsonl`, `${rows.join('\n')}\n`)
-console.log(`wrote ${lines.length} fake events to fixtures/events.jsonl`)
+console.log(`wrote ${lines.length} fake events to fixtures/events/ (${events.size} sessions)`)

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { activeIntervals, dayKey, languageOf, parseLines, summarize, type Event } from './aggregate'
+import { activeIntervals, dayKey, languageOf, summarize, type Event } from './aggregate'
 
 const MIN = 60_000
 const at = (iso: string, event: string, extra: Partial<Event> = {}): Event => ({
@@ -14,18 +14,6 @@ const at = (iso: string, event: string, extra: Partial<Event> = {}): Event => ({
 test('runs in New York time', () => {
   // the package's test script sets TZ; day buckets depend on it
   expect(dayKey(Date.parse('2026-10-20T02:34:00Z'))).toBe('2026-10-19')
-})
-
-test('skips torn and junk lines', () => {
-  const text = [
-    JSON.stringify(at('2026-10-19T12:00:00Z', 'prompt')),
-    '{"ts":"2026-10-19T12:0',
-    'not json',
-    '42',
-    '',
-    JSON.stringify(at('2026-10-19T12:01:00Z', 'turn_end')),
-  ].join('\n')
-  expect(parseLines(text).map(e => e.event)).toEqual(['prompt', 'turn_end'])
 })
 
 test('a long turn counts in full, idle gaps past the cap do not', () => {
@@ -45,7 +33,7 @@ test('a long turn counts in full, idle gaps past the cap do not', () => {
 })
 
 test('short idle gaps are bridged', () => {
-  const events = [at('2026-10-19T12:00:00Z', 'tool_end'), at('2026-10-19T12:04:00Z', 'tool_end')]
+  const events = [at('2026-10-19T12:00:00Z', 'tool'), at('2026-10-19T12:04:00Z', 'tool')]
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(4 * MIN)
   expect(summarize(events, { idleCapMs: 3 * MIN }).totalMs).toBe(0)
 })
@@ -119,10 +107,10 @@ test('the window clips time and counts', () => {
 
 test('projects are timed separately, even in one session', () => {
   const events = [
-    at('2026-10-19T12:00:00Z', 'tool_end'),
-    at('2026-10-19T12:02:00Z', 'tool_end'),
-    at('2026-10-19T12:03:00Z', 'tool_end', { cwd: '/code/vxm', project: 'vxm' }),
-    at('2026-10-19T12:06:00Z', 'tool_end', { cwd: '/code/vxm', project: 'vxm' }),
+    at('2026-10-19T12:00:00Z', 'tool'),
+    at('2026-10-19T12:02:00Z', 'tool'),
+    at('2026-10-19T12:03:00Z', 'tool', { cwd: '/code/vxm', project: 'vxm' }),
+    at('2026-10-19T12:06:00Z', 'tool', { cwd: '/code/vxm', project: 'vxm' }),
   ]
   const s = summarize(events, { idleCapMs: 5 * MIN })
   expect(s.projects).toEqual([
@@ -132,9 +120,9 @@ test('projects are timed separately, even in one session', () => {
 })
 
 test('file order across sessions does not matter', () => {
-  const a = at('2026-10-19T12:00:00Z', 'tool_end')
-  const b = at('2026-10-19T12:01:00Z', 'tool_end', { sessionId: 's2' })
-  const c = at('2026-10-19T12:02:00Z', 'tool_end')
+  const a = at('2026-10-19T12:00:00Z', 'tool')
+  const b = at('2026-10-19T12:01:00Z', 'tool', { sessionId: 's2' })
+  const c = at('2026-10-19T12:02:00Z', 'tool')
   expect(summarize([c, b, a], { idleCapMs: 5 * MIN }).totalMs).toBe(2 * MIN)
 })
 
@@ -146,9 +134,9 @@ test('counts prompts, interrupts, tokens, tools and languages', () => {
     // not written by a person, so not counted as prompts
     at('2026-10-19T12:00:40Z', 'prompt', { words: 50, chars: 300, origin: 'task-notification' }),
     at('2026-10-19T12:00:45Z', 'prompt', { words: 50, chars: 300, origin: 'composer', isMeta: true }),
-    at('2026-10-19T12:01:00Z', 'tool_end', { tool: 'Bash', outcome: 'ok', durationMs: 100 }),
-    at('2026-10-19T12:01:10Z', 'tool_end', { tool: 'Bash', outcome: 'error', durationMs: 300 }),
-    at('2026-10-19T12:01:20Z', 'tool_end', { tool: 'Edit', outcome: 'denied', durationMs: 5 }),
+    at('2026-10-19T12:01:00Z', 'tool', { tool: 'Bash', outcome: 'ok', durationMs: 100 }),
+    at('2026-10-19T12:01:10Z', 'tool', { tool: 'Bash', outcome: 'error', durationMs: 300 }),
+    at('2026-10-19T12:01:20Z', 'tool', { tool: 'Edit', outcome: 'denied', durationMs: 5 }),
     at('2026-10-19T12:01:30Z', 'file_changed', { path: '/code/terra/a.ts', via: 'tool' }),
     at('2026-10-19T12:01:31Z', 'file_changed', { path: '/code/terra/Makefile', via: 'bash-window' }),
     at('2026-10-19T12:02:00Z', 'interrupt', { durationMs: 1000, usage }),
