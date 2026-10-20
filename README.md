@@ -266,7 +266,9 @@ Click a project in the Sessions table to open `/session?id=<sessionId>`:
 
 - **Session timeline:** lanes for you writing prompts (hollow when the draft
   was abandoned), Claude's turns and tool calls, with interrupts marked. Zoom
-  with the + and - buttons.
+  with the + and - buttons, or ctrl + scroll (or pinch) to zoom around the
+  cursor. "Collapse gaps" squeezes every quiet stretch over 5 minutes into a
+  narrow band labelled with how long it was.
 - **Drafts:** every typed draft with its writing time, edits, fixes, rewrites,
   word deletes and longest pause. Click one to replay it.
 - **Replay:** the prompt box rebuilt from hook-analytics' edit timeline, drawn

@@ -1,4 +1,4 @@
-import { turnPieces, waitsOf, type Event } from '../src/aggregate'
+import { turnPieces, waitsOf, type Event, type Interval } from '../src/aggregate'
 import {
   apply,
   countGroups,
@@ -30,6 +30,54 @@ let events: Event[] = []
 let drafts: Draft[] = []
 let selected: Draft | undefined
 let zoom = Number(load('zoom', '1'))
+let collapse = load('collapse', '0') === '1'
+// the drawn timeline's axis, so a ctrl + scroll can zoom around the cursor
+let laneAxis: Axis | undefined
+
+// With gaps collapsed, a quiet stretch longer than GAP_MS is squeezed into a
+// break GAP_PX wide (less if there are many), and the busy stretches share
+// the rest of the width to scale
+const GAP_MS = 5 * MIN
+const GAP_PX = 48
+type Axis = { x: (ms: number) => number; at: (x: number) => number; segments: Interval[]; gaps: Interval[]; scale: number }
+
+function axisOf(spans: Interval[], left: number, plotW: number): Axis {
+  const sorted = [...spans].sort((a, b) => a[0] - b[0])
+  const segments: Interval[] = []
+  for (const [start, end] of sorted) {
+    const last = segments[segments.length - 1]
+    if (last && (!collapse || start - last[1] <= GAP_MS)) last[1] = Math.max(last[1], end)
+    else segments.push([start, end])
+  }
+  const gaps = segments.slice(1).map((s, i): Interval => [segments[i]![1], s[0]])
+  const gapPx = gaps.length ? Math.min(GAP_PX, (plotW * 0.3) / gaps.length) : 0
+  const busy = Math.max(segments.reduce((ms, [s, e]) => ms + e - s, 0), 10_000)
+  const scale = (plotW - gaps.length * gapPx) / busy
+  // each segment's left edge, in px from the plot's start
+  const offs: number[] = []
+  for (let i = 0; i < segments.length; i++) offs.push(i ? offs[i - 1]! + (segments[i - 1]![1] - segments[i - 1]![0]) * scale + gapPx : 0)
+  const x = (ms: number) => {
+    for (let i = 0; i < segments.length; i++) {
+      const [s, e] = segments[i]!
+      if (ms > e && i < segments.length - 1) continue
+      // inside a gap: spread across its break
+      if (ms < s && i > 0) return left + offs[i]! - gapPx + ((ms - segments[i - 1]![1]) / (s - segments[i - 1]![1])) * gapPx
+      return left + offs[i]! + (ms - s) * scale
+    }
+    return left
+  }
+  const at = (px: number) => {
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const [s] = segments[i]!
+      const from = left + offs[i]!
+      if (px >= from || i === 0) return s + (px - from) / scale
+      // inside the break before this segment
+      if (px >= from - gapPx) return segments[i - 1]![1] + ((px - from + gapPx) / gapPx) * (s - segments[i - 1]![1])
+    }
+    return segments[0]![0]
+  }
+  return { x, at, segments, gaps, scale }
+}
 
 // the mod's own thresholds: a gap this long is a pause, and one this long a
 // break that stops counting as typing time
@@ -76,32 +124,44 @@ function drawLanes() {
   // a tool row is written when the call ends, so it starts durationMs earlier
   const tools = events.filter(e => e.event === 'tool').map(e => ({ start: time(e) - num(e.durationMs), end: time(e), e }))
 
-  const all = [
-    ...events.map(time),
-    ...drafts.map(d => d.start),
-    ...turns.map(t => time(t) - num(t.durationMs)),
-    ...compacts.map(c => time(c) - num(c.durationMs)),
+  // a question or plan waiting on the person is their time: it goes on the
+  // You lane, and the turn around it is drawn in pieces on either side
+  const waits = waitsOf(events)
+  const piecesOf = new Map(turns.map(t => [t, turnPieces(time(t), num(t.durationMs), waits)]))
+  // everything drawn, so collapsed gaps are only ever empty ones
+  const spans: Interval[] = [
+    ...events.map((e): Interval => [time(e), time(e)]),
+    ...drafts.map((d): Interval => [d.start, d.end]),
+    ...[...piecesOf.values()].flat(),
+    ...compacts.map((c): Interval => [time(c) - num(c.durationMs), time(c)]),
+    ...tools.map((t): Interval => [t.start, t.end]),
+    ...waits.map((w): Interval => [w.from, w.to]),
   ]
-  const t0 = Math.min(...all)
-  const t1 = Math.max(...events.map(time), ...drafts.map(d => d.end))
-  const span = Math.max(t1 - t0, 10_000)
+  const t1 = Math.max(...spans.map(s => s[1]))
 
   const fit = Math.max(el.parentElement!.clientWidth, 280)
   const pad = { left: 64, right: 12, top: 22 }
   const width = Math.max(fit, Math.round((fit - pad.left - pad.right) * zoom) + pad.left + pad.right)
   const plotW = width - pad.left - pad.right
-  const x = (ms: number) => pad.left + ((ms - t0) / span) * plotW
+  const axis = axisOf(spans, pad.left, plotW)
+  laneAxis = axis
+  const x = axis.x
   const LANE = 30
   const lanes = ['You', 'Claude', 'Tools']
   const laneY = (i: number) => pad.top + i * LANE
   const height = pad.top + lanes.length * LANE + 4
 
-  const tick = TICKS_MS.find(t => (t / span) * plotW >= 80) ?? TICKS_MS[TICKS_MS.length - 1]!
+  const tick = TICKS_MS.find(t => t * axis.scale >= 80) ?? TICKS_MS[TICKS_MS.length - 1]!
+  // a collapsed gap's length sits on the time axis, so ticks keep clear of it
+  const gapLabels = axis.gaps.map(([from, to]) => (x(from) + x(to)) / 2)
   let svg = ''
-  for (let t = Math.ceil(t0 / tick) * tick; t <= t1; t += tick) {
-    svg += `<line class="gridline" x1="${x(t)}" x2="${x(t)}" y1="${pad.top - 4}" y2="${height}"/>`
-    const label = new Date(t).toLocaleTimeString(undefined, tick < MIN ? { hour: 'numeric', minute: '2-digit', second: '2-digit' } : { hour: 'numeric', minute: '2-digit' })
-    svg += `<text x="${x(t)}" y="12" text-anchor="middle">${label}</text>`
+  for (const [from, to] of axis.segments) {
+    for (let t = Math.ceil(from / tick) * tick; t <= Math.min(to, t1); t += tick) {
+      if (gapLabels.some(g => Math.abs(g - x(t)) < 56)) continue
+      svg += `<line class="gridline" x1="${x(t)}" x2="${x(t)}" y1="${pad.top - 4}" y2="${height}"/>`
+      const label = new Date(t).toLocaleTimeString(undefined, tick < MIN ? { hour: 'numeric', minute: '2-digit', second: '2-digit' } : { hour: 'numeric', minute: '2-digit' })
+      svg += `<text x="${x(t)}" y="12" text-anchor="middle">${label}</text>`
+    }
   }
   // the names sit in a column over the chart, outside the scroller, so they
   // stay put when a zoomed timeline scrolls sideways
@@ -125,6 +185,15 @@ function drawLanes() {
   const tips: string[] = []
   const tipAttr = (html: string) => `data-tip="${tips.push(html) - 1}"`
 
+  // each collapsed gap: a hatched break through the lanes, its length on top
+  for (const [from, to] of axis.gaps) {
+    const x0 = x(from)
+    const w = x(to) - x0
+    const tip = `<strong>Nothing for ${duration(to - from)}</strong>${clockTime(from)} to ${clockTime(to)}, collapsed`
+    svg += `<rect class="gap-break" x="${x0}" y="${pad.top - 4}" width="${w}" height="${height - pad.top + 4}" ${tipAttr(tip)}/>`
+    if (w >= 30) svg += `<text class="gap-label" x="${x0 + w / 2}" y="12" text-anchor="middle">${duration(to - from)}</text>`
+  }
+
   drafts.forEach((d, i) => {
     const cls = `span-you ${d.outcome}${d === selected ? ' selected' : ''}`
     const when = d.line.midTurn ? '<br>sent while Claude was working' : ''
@@ -141,9 +210,6 @@ function drawLanes() {
       svg += `<rect class="pause-mark ${kind}" x="${x(start)}" y="${laneY(0) + 5}" width="${Math.max(2, x(origin + p.to) - x(start))}" height="${LANE - 12}" data-draft="${i}" ${tipAttr(pauseTip)}/>`
     }
   })
-  // a question or plan waiting on the person is their time: it goes on the
-  // You lane, and the turn around it is drawn in pieces on either side
-  const waits = waitsOf(events)
   for (const w of waits) {
     const what = w.kind === 'question' ? `Answering ${esc(w.tool)}` : `Permission for ${esc(w.tool) || 'a tool'}`
     const tip = `<strong>${what}</strong>${seconds(w.to - w.from)}, until ${clockTime(w.to)}<br>not counted as Claude working`
@@ -151,7 +217,7 @@ function drawLanes() {
   }
   for (const t of turns) {
     const end = time(t)
-    const pieces = turnPieces(end, num(t.durationMs), waits)
+    const pieces = piecesOf.get(t)!
     const waited = end - pieces[0]![0] - num(t.durationMs)
     const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}${waited ? ` working, ${seconds(waited)} waiting on you` : ''}, ended ${clockTime(end)}`
     for (const [s, e] of pieces) svg += bar('span-claude', s, e, 1, tipAttr(tip))
@@ -514,13 +580,49 @@ $<HTMLInputElement>('scrub').addEventListener('input', e => {
   seek((Number((e.target as HTMLInputElement).value) / 1000) * clock.length)
 })
 $('squash').addEventListener('change', setClock)
+const MAX_ZOOM = 256
 for (const [id, by] of [['zoom-in', 2], ['zoom-out', 0.5]] as const) {
   $(id).addEventListener('click', () => {
-    zoom = Math.max(1, Math.min(64, zoom * by))
+    zoom = Math.max(1, Math.min(MAX_ZOOM, zoom * by))
     save('zoom', String(zoom))
     drawLanes()
   })
 }
+$<HTMLInputElement>('collapse').checked = collapse
+$('collapse').addEventListener('change', e => {
+  collapse = (e.target as HTMLInputElement).checked
+  save('collapse', collapse ? '1' : '0')
+  drawLanes()
+})
+
+// ctrl + scroll (a trackpad pinch sends the same) zooms around the cursor:
+// the moment under it stays under it. Plain scrolling still scrolls the page.
+// One redraw per frame, however many wheel events arrive in it
+let wheel: { by: number; clientX: number } | undefined
+$('lanes-scroll').addEventListener(
+  'wheel',
+  e => {
+    if (!e.ctrlKey && !e.metaKey) return
+    e.preventDefault()
+    const pending = !!wheel
+    wheel = { by: (wheel?.by ?? 1) * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.002)), clientX: e.clientX }
+    if (pending) return
+    requestAnimationFrame(() => {
+      const { by, clientX } = wheel!
+      wheel = undefined
+      const scroller = $('lanes-scroll')
+      const offset = clientX - scroller.getBoundingClientRect().left
+      const ms = laneAxis?.at(scroller.scrollLeft + offset)
+      const next = Math.max(1, Math.min(MAX_ZOOM, zoom * by))
+      if (next === zoom || ms === undefined) return
+      zoom = next
+      save('zoom', String(zoom))
+      drawLanes()
+      scroller.scrollLeft = laneAxis!.x(ms) - offset
+    })
+  },
+  { passive: false },
+)
 addEventListener('keydown', e => {
   if (!tl || (e.target as HTMLElement).matches('input, select, textarea')) return
   if (e.key === ' ') {

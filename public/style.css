@@ -225,6 +225,12 @@ select {
   stroke: var(--grid);
   stroke-width: 1;
 }
+/* a collapsed stretch of nothing: a soft band, its length on the time axis */
+.chart .gap-break {
+  fill: var(--grid);
+  fill-opacity: 0.6;
+}
+.chart .gap-label { font-weight: 600; }
 .chart .baseline {
   stroke: var(--axis);
   stroke-width: 1;
@@ -364,7 +370,12 @@ a {
 }
 .zoom {
   display: flex;
+  align-items: center;
   gap: 4px;
+}
+.zoom label {
+  margin-right: 8px;
+  font-size: 13px;
 }
 button {
   font: inherit;

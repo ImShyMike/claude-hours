@@ -23,8 +23,9 @@
           <div class="card-head">
             <h2>Session timeline</h2>
             <div class="zoom" role="group" aria-label="Zoom">
-              <button id="zoom-out" aria-label="Zoom out">&minus;</button>
-              <button id="zoom-in" aria-label="Zoom in">+</button>
+              <label class="muted"><input type="checkbox" id="collapse" /> collapse gaps</label>
+              <button id="zoom-out" aria-label="Zoom out" title="Zoom out (or ctrl + scroll)">&minus;</button>
+              <button id="zoom-in" aria-label="Zoom in" title="Zoom in (or ctrl + scroll)">+</button>
             </div>
           </div>
           <div class="legend" id="lanes-legend"></div>
