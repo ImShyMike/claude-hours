@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { loadEvents, loadTimelines, projectFor } from './load'
 
 const scratch = () => mkdtempSync(join(tmpdir(), 'hackatime-test-'))
@@ -44,11 +45,31 @@ test('loadEvents on a missing dir is empty', async () => {
 test('loadTimelines reads one session and refuses odd ids', async () => {
   const dir = scratch()
   mkdirSync(join(dir, 'drafts'))
-  const row = { v: 1, draftId: 'd1', outcome: 'sent', startedAt: '', endedAt: '', initialShape: '', initialCursor: 0, steps: '', truncated: false }
+  const row = { v: 1, draftId: 'd1', outcome: 'sent', startedAt: 1_790_000_000_000, durationMs: 0, steps: '' }
   writeFileSync(join(dir, 'drafts', 'abc-123.jsonl'), `${JSON.stringify(row)}\n`)
   writeFileSync(join(dir, 'secret.jsonl'), `${JSON.stringify(row)}\n`)
   expect(await loadTimelines(dir, 'abc-123')).toHaveLength(1)
   expect(await loadTimelines(dir, 'nope')).toEqual([])
   expect(await loadTimelines(dir, '../secret')).toEqual([])
   expect(await loadTimelines(dir, '../drafts/abc-123')).toEqual([])
+})
+
+test('a session in both .jsonl.gz and .jsonl reads both, every gzip member too', async () => {
+  const dir = scratch()
+  mkdirSync(join(dir, 'events'))
+  mkdirSync(join(dir, 'drafts'))
+  const part = (sec: number, event: string) =>
+    `${JSON.stringify({ v: 1, event: 'session', start: Date.parse('2026-10-19T12:00:00Z') + sec * 1000, cwd: '/nowhere/proj' })}\n${JSON.stringify({ t: 0, event })}\n`
+  // two packs appended to one .gz, then a resume that hasn't been packed yet
+  writeFileSync(join(dir, 'events', 'abc.jsonl.gz'), Buffer.concat([gzipSync(part(0, 'prompt')), gzipSync(part(60, 'turn_end'))]))
+  writeFileSync(join(dir, 'events', 'abc.jsonl'), part(120, 'prompt'))
+  expect((await loadEvents(dir)).map(e => [e.sessionId, e.event, e.ts])).toEqual([
+    ['abc', 'prompt', '2026-10-19T12:00:00.000Z'],
+    ['abc', 'turn_end', '2026-10-19T12:01:00.000Z'],
+    ['abc', 'prompt', '2026-10-19T12:02:00.000Z'],
+  ])
+  const row = (draftId: string) => `${JSON.stringify({ v: 1, draftId, outcome: 'sent', startedAt: 1_790_000_000_000, durationMs: 0, steps: '' })}\n`
+  writeFileSync(join(dir, 'drafts', 'abc.jsonl.gz'), gzipSync(row('old')))
+  writeFileSync(join(dir, 'drafts', 'abc.jsonl'), row('new'))
+  expect((await loadTimelines(dir, 'abc')).map(t => t.draftId)).toEqual(['old', 'new'])
 })

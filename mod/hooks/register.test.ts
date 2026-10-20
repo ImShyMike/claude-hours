@@ -1,10 +1,29 @@
 import type { On, PromptChangeInput, PromptEditInput, PromptEditResult } from 'claude-code'
 import { expect, test, type Engine } from 'claude-code/testing'
 
+// What the mod leaves out at its usual value, put back the way the dashboard
+// does (src/eventlog.ts), so tests read rows whole
+const DEFAULTS: Record<string, Record<string, unknown>> = {
+  tool: { outcome: 'ok' },
+  turn_end: { reason: 'answer' },
+  file_changed: { via: 'tool' },
+  prompt: { origin: 'composer', isMeta: false },
+  session_start: { isInteractive: true },
+  compact: { outcome: 'compacted' },
+}
+const DRAFT_COUNTERS = ['pastedChars', 'deletedChars', 'fixes', 'rewrites', 'rewrittenChars', 'pauses', 'breaks', 'longestPauseMs', 'wordDeletes', 'lineKills']
+const restore = (row: Record<string, unknown>) => {
+  const zeros = typeof row.typingMs === 'number' ? Object.fromEntries(DRAFT_COUNTERS.map(k => [k, 0])) : {}
+  return { ...DEFAULTS[String(row.event)], ...zeros, ...row }
+}
+
 // Nothing sits beneath the plugin: these hooks stand for the engine, and the
 // `tee -a` runs are where the log lines land.
 const setup = (on: On) => {
+  // rows as the dashboard reads them, and exactly as written
   const lines: Record<string, unknown>[] = []
+  const raw: Record<string, unknown>[] = []
+  const runs: string[][] = []
   // each session file's header row, kept apart from the rows after it
   const headers: Record<string, unknown>[] = []
   // the per-session draft timelines, by file
@@ -21,6 +40,7 @@ const setup = (on: On) => {
   on('env.get', () => ({ value: '/home/test' }))
   on('process.run', (_, e) => {
     const [cmd] = e.argv
+    runs.push([...e.argv])
     if (cmd === 'tee') {
       const path = e.argv[2] ?? ''
       const stdin = e.init?.stdin ?? ''
@@ -29,7 +49,12 @@ const setup = (on: On) => {
       if (drafts) timelineFiles.add(path)
       for (const text of stdin.split('\n').filter(Boolean)) {
         const row = JSON.parse(text)
-        ;(drafts ? timelines : row.event === 'session' ? headers : lines).push(row)
+        if (drafts) timelines.push(row)
+        else if (row.event === 'session') headers.push(row)
+        else {
+          raw.push(row)
+          lines.push(restore(row))
+        }
       }
     }
     const stdout = cmd === 'find' ? findOutput : ''
@@ -45,7 +70,9 @@ const setup = (on: On) => {
   on('fs.read', (_, e) => ({ value: files.get(e.path) ?? '' }))
   on('prompt.submit', (_, e) => ({ text: e.text }))
   return {
+    runs,
     lines,
+    raw,
     headers,
     files,
     timelines,
@@ -267,7 +294,8 @@ test('a cleared draft is logged as abandoned at the next submit', async ($, on) 
 
   expect(lines.map(l => l.event)).toEqual(['draft_abandoned', 'prompt'])
   expect(lines[0]).toMatchObject({ how: 'clear', composeMs: 5_000, typingMs: 5_000, typedChars: 11, edits: 2 })
-  expect(lines[0]!.endedAt).toBe(new Date(1_790_000_005_000).toISOString())
+  // epoch ms; it began composeMs before
+  expect(lines[0]!.endedAt).toBe(1_790_000_005_000)
   expect(lines[1]).toMatchObject({ typedChars: 2, composeMs: 0 })
   expect(JSON.stringify(lines)).not.toContain('never')
 })
@@ -361,12 +389,14 @@ test('each draft gets a replay timeline in its session file, shapes only', async
     draftId: lines[0]!.draftId,
     outcome: 'sent',
     v: 1,
-    initialShape: '',
-    initialCursor: 0,
-    truncated: false,
-    // all six letters in one edit, a newline 500ms later, then a backspace
-    steps: '0t+2a_3a,500n,500b',
+    startedAt: 1_790_000_000_000,
+    durationMs: 1_000,
+    // all six letters in one edit, a newline 500ms (50 ticks) later, then a backspace
+    steps: '0t+2a_3a,50n,50b',
   })
+  // an empty box to start from, no truncation: left out
+  expect(Object.keys(timelines[0]!)).not.toContain('initialShape')
+  expect(Object.keys(timelines[0]!)).not.toContain('truncated')
   expect(JSON.stringify(timelines)).not.toContain('hi')
   expect(JSON.stringify(timelines)).not.toContain('you')
 })
@@ -404,7 +434,7 @@ test('cursor moves go in the replay but leave the stats alone', async ($, on) =>
   await submit($, box.text)
 
   expect(lines[0]).toMatchObject({ edits: 2, pauses: 0, breaks: 1, longestPauseMs: 46_000, typingMs: 0 })
-  expect(timelines[0]!.steps).toBe('0t+3a,5000m@1,40000m@3,1000a')
+  expect(timelines[0]!.steps).toBe('0t+3a,500m@1,4000m@3,100a')
 })
 
 test('a move alone never starts a draft', async ($, on) => {
@@ -549,4 +579,58 @@ test('after a reload the start is read back from the header, and the cwd is writ
     ['cwd_changed', 60_000, '/proj'],
     ['turn_end', 60_000, undefined],
   ])
+})
+
+test('rows leave out fields at their usual value', async ($, on) => {
+  const { raw } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.tool.call({ tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
+  await $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false })
+
+  expect(raw.map(r => Object.keys(r).sort())).toEqual([
+    ['durationMs', 'event', 'file', 't', 'tool'],
+    ['event', 'path', 't', 'tool'],
+    ['durationMs', 'event', 't', 'turnId'],
+  ])
+})
+
+test('the config file keeps excluded paths out, and limits to included ones', async ($, on) => {
+  const { lines, files, setFind } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+  const config = (rules: unknown) => files.set('/home/test/.claude/analytics/config.json', JSON.stringify({ files: rules }))
+  const logged = () => lines.filter(l => l.event === 'file_changed').map(l => l.path)
+
+  config({ exclude: ['fixtures', '*.log', 'src/gen/**', '~/secret'] })
+  setFind('/proj/fixtures/a.json\n/proj/app.log\n/proj/src/gen/x.ts\n/proj/src/main.ts\n/proj/notes/fixtures.md\n')
+  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await $.tool.call({ tool: 'Write', file_path: '/home/test/secret/plan.md', content: 'x' })
+  // a folder name matches the folder, never a file that only starts the same
+  expect(logged()).toEqual(['src/main.ts', 'notes/fixtures.md'])
+  expect(lines.find(l => l.event === 'tool' && l.tool === 'Write')!.file).toBeUndefined()
+
+  lines.length = 0
+  config({ include: ['src/**/*.ts'], exclude: ['src/gen'] })
+  await $.tool.call({ tool: 'Bash', command: 'make' })
+  expect(logged()).toEqual(['src/main.ts'])
+
+  // a broken config logs everything rather than nothing
+  lines.length = 0
+  files.set('/home/test/.claude/analytics/config.json', '{nope')
+  await $.tool.call({ tool: 'Bash', command: 'make' })
+  expect(logged()).toHaveLength(5)
+})
+
+test('a session ending gzips its files behind the last row', async ($, on) => {
+  const { lines, runs } = setup(on)
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: { command: 'claude --resume sess-1' } as never })
+
+  expect(lines.map(l => l.event)).toEqual(['session_end'])
+  const pack = runs.find(argv => argv[0] === 'sh')!
+  expect(pack.slice(4)).toEqual(['/home/test/.claude/analytics/events/sess-1.jsonl', '/home/test/.claude/analytics/drafts/sess-1.jsonl'])
+  // after every tee, never before
+  expect(runs.findIndex(argv => argv[0] === 'sh')).toBeGreaterThan(runs.findLastIndex(argv => argv[0] === 'tee'))
 })

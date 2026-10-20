@@ -2,7 +2,9 @@
 // The first row is a header, {"v":1,"event":"session","start":<epoch ms>,
 // "cwd":...}. Later rows carry `t`, ms since that start (or `at`, epoch ms,
 // when the mod couldn't read the header back), and no cwd: a cwd_changed row
-// moves it, and `file` / `path` under it are relative to it.
+// moves it, and `file` / `path` under it are relative to it. A field at its
+// usual value (DEFAULTS) is left out, and so is a typed draft's 0 counter.
+// draft_abandoned says when it ended, as epoch ms; it began composeMs before.
 //
 // decodeSession turns a file back into the flat events the dashboard works
 // on; encodeSession goes the other way, for the demo fixtures and the tests.
@@ -12,6 +14,17 @@ import type { Event } from './aggregate'
 export const FORMAT = 1
 
 const PATH_FIELDS = ['file', 'path'] as const
+
+// kept in step with the mod's own copy
+export const DEFAULTS: Record<string, Record<string, unknown>> = {
+  tool: { outcome: 'ok' },
+  turn_end: { reason: 'answer' },
+  file_changed: { via: 'tool' },
+  prompt: { origin: 'composer', isMeta: false },
+  session_start: { isInteractive: true },
+  compact: { outcome: 'compacted' },
+}
+const DRAFT_COUNTERS = ['pastedChars', 'deletedChars', 'fixes', 'rewrites', 'rewrittenChars', 'pauses', 'breaks', 'longestPauseMs', 'wordDeletes', 'lineKills']
 
 const absolute = (path: unknown, cwd: string) =>
   typeof path === 'string' && path && !path.startsWith('/') ? `${cwd}/${path}` : path
@@ -40,7 +53,12 @@ export function decodeSession(text: string, sessionId: string): Event[] {
     if (at === undefined || typeof row.event !== 'string') continue
     if (typeof row.cwd === 'string') cwd = row.cwd
     const { t: _t, at: _at, ...rest } = row
-    const e: Event = { ...rest, ts: new Date(at).toISOString(), sessionId, cwd, event: row.event }
+    const zeros = typeof row.typingMs === 'number' ? Object.fromEntries(DRAFT_COUNTERS.map(key => [key, 0])) : {}
+    const e: Event = { ...DEFAULTS[row.event], ...zeros, ...rest, ts: new Date(at).toISOString(), sessionId, cwd, event: row.event }
+    if (row.event === 'draft_abandoned' && typeof row.endedAt === 'number') {
+      e.endedAt = new Date(row.endedAt).toISOString()
+      e.startedAt = new Date(row.endedAt - (Number(row.composeMs) || 0)).toISOString()
+    }
     for (const key of PATH_FIELDS) if (key in e) e[key] = absolute(e[key], cwd)
     events.push(e)
   }
@@ -64,7 +82,18 @@ export function encodeSession(events: Event[]): string {
     }
     const { ts: _ts, sessionId: _s, cwd: _c, project: _p, event, ...rest } = e
     if (event === 'cwd_changed') continue
-    const row: Record<string, unknown> = { t, event, ...rest }
+    const row: Record<string, unknown> = { t, event }
+    const usual = DEFAULTS[event] ?? {}
+    const draft = typeof rest.typingMs === 'number'
+    for (const [key, value] of Object.entries(rest)) {
+      if (value === undefined || usual[key] === value) continue
+      if (draft && value === 0 && DRAFT_COUNTERS.includes(key)) continue
+      row[key] = value
+    }
+    if (event === 'draft_abandoned' && typeof row.endedAt === 'string') {
+      row.endedAt = Date.parse(row.endedAt)
+      delete row.startedAt
+    }
     for (const key of PATH_FIELDS) if (key in row) row[key] = relative(row[key], cwd)
     rows.push(row)
   }

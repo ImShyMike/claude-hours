@@ -67,7 +67,7 @@ test('pauses, group counts and descriptions', () => {
 })
 
 test('parseTimelines skips junk', () => {
-  const good = JSON.stringify({ ...timeline([]), v: 1, initialShape: '', steps: '' })
+  const good = JSON.stringify({ v: 1, draftId: 'd', outcome: 'sent', startedAt: 1_790_000_000_000, durationMs: 0, steps: '' })
   expect(parseTimelines(`${good}\n{"torn\n{"v":1,"draftId":1}\n`)).toHaveLength(1)
 })
 
@@ -81,7 +81,8 @@ test('rle round trips shapes', () => {
 // These strings are the ones hook-analytics' own tests expect it to write,
 // so the two sides can't drift apart unnoticed
 test('decodes what the mod writes', () => {
-  expect(decodeSteps('0t+2a_3a,500n,500b', 0)).toEqual([
+  // gaps are in 10ms ticks
+  expect(decodeSteps('0t+2a_3a,50n,50b', 0)).toEqual([
     [0, 't', 0, 0, 'aa aaa'],
     [500, 't', 6, 0, '\n'],
     [1000, 'b', 6, 1],
@@ -96,7 +97,7 @@ test('decodes what the mod writes', () => {
     ['t', 0, 0, 'a'],
     ['r', 0, 1, 'aa'],
   ])
-  expect(decodeSteps('0t+3a,5000m@1,40000m@3,1000a', 0).map(st => [st[0], st[1], st[2]])).toEqual([
+  expect(decodeSteps('0t+3a,500m@1,4000m@3,100a', 0).map(st => [st[0], st[1], st[2]])).toEqual([
     [0, 't', 0],
     [5000, 'm', 1],
     [45_000, 'm', 3],
@@ -112,7 +113,8 @@ test('decodes what the mod writes', () => {
 test('encode and decode round trip, skipping junk tokens', () => {
   const steps: Timeline['steps'] = [
     [0, 't', 3, 0, 'a'],
-    [120, 't', 4, 0, ' '],
+    // 124ms lands on the nearest tick
+    [124, 't', 4, 0, ' '],
     [300, 'p', 5, 0, 'aaaa aa'],
     [900, 'b', 11, 1],
     [1000, 'w', 4, 7],
@@ -121,16 +123,28 @@ test('encode and decode round trip, skipping junk tokens', () => {
     [2000, 'c', 2, 0, 'aa\n', 'undo'],
   ]
   const code = encodeSteps(steps, 3)
-  expect(code).toBe('0a,120_,180p+4a_2a,600b,100w@4-7,500m@0,100r-2+a,400c@2+2an:undo')
+  expect(code).toBe('0a,12_,18p+4a_2a,60b,10w@4-7,50m@0,10r-2+a,40c@2+2an:undo')
   // a decoded move carries removed 0, which the original left out
-  expect(decodeSteps(code, 3)).toEqual(steps.map(st => (st[1] === 'm' ? [st[0], 'm', st[2], 0] : st)))
+  expect(decodeSteps(code, 3)).toEqual(
+    steps.map(st => (st[1] === 'm' ? [st[0], 'm', st[2], 0] : st[0] === 124 ? [120, ...st.slice(1)] : st)),
+  )
   expect(decodeSteps(`0a,garbage,,${'5'}a`, 0)).toHaveLength(2)
 })
 
 test('parseTimelines decodes v1 rows and skips anything else', () => {
-  const row = { v: 1, draftId: 'b', outcome: 'sent', startedAt: '', endedAt: '', initialShape: '2a_a', initialCursor: 4, steps: '0a', truncated: false }
+  const row = { v: 1, draftId: 'b', outcome: 'sent', startedAt: 1_790_000_000_000, durationMs: 1500, initialShape: '2a_a', initialCursor: 4, steps: '0a' }
   const old = { ...row, draftId: 'a', v: undefined, initialShape: 'aa a', steps: [[0, 't', 4, 0, 'a']] }
-  const rows = parseTimelines(`${JSON.stringify(old)}\n${JSON.stringify(row)}\n`)
+  const iso = { ...row, draftId: 'c', startedAt: '2026-10-20T04:00:00.000Z' }
+  const rows = parseTimelines(`${JSON.stringify(old)}\n${JSON.stringify(row)}\n${JSON.stringify(iso)}\n`)
   expect(rows).toHaveLength(1)
-  expect(rows[0]).toMatchObject({ draftId: 'b', initialShape: 'aa a', steps: [[0, 't', 4, 0, 'a']] })
+  expect(rows[0]).toEqual({
+    draftId: 'b',
+    outcome: 'sent',
+    startedAt: new Date(1_790_000_000_000).toISOString(),
+    endedAt: new Date(1_790_000_001_500).toISOString(),
+    initialShape: 'aa a',
+    initialCursor: 4,
+    steps: [[0, 't', 4, 0, 'a']],
+    truncated: false,
+  })
 })

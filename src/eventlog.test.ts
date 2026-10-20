@@ -42,14 +42,34 @@ test('encodeSession round trips through decodeSession', () => {
     ...extra,
   })
   const events = [
-    at(0, 'session_start', { surface: 'terminal' }),
+    at(0, 'session_start', { surface: 'terminal', isInteractive: true }),
     at(3, 'tool', { tool: 'Write', file: '/code/terra/a.ts', outcome: 'ok', durationMs: 40 }),
     at(9, 'file_changed', { cwd: '/code/vxm', path: '/code/vxm/x.py', via: 'tool' }),
   ]
   const text = encodeSession(events)
   expect(text).not.toContain('2026-10-19')
+  // usual values stay out of the file and come back on the way in
+  expect(text).not.toContain('"outcome":"ok"')
+  expect(text).not.toContain('"via"')
   expect(text).not.toContain('s1')
   expect(text).toContain('"file":"a.ts"')
   const back = decodeSession(text, 's1')
   expect(back.filter(e => e.event !== 'cwd_changed')).toEqual(events)
+})
+
+test('restores left-out defaults, draft zeros and an abandoned draft\'s times', () => {
+  const text = file(
+    { v: 1, event: 'session', start, cwd: '/p' },
+    { t: 0, event: 'tool', tool: 'Read', durationMs: 3 },
+    { t: 1, event: 'prompt', typingMs: 900, typedChars: 12 },
+    { t: 2, event: 'prompt', origin: 'paste' },
+    { t: 9000, event: 'draft_abandoned', typingMs: 400, composeMs: 2000, endedAt: start + 5000, how: 'clear' },
+  )
+  const [tool, typed, plain, gone] = decodeSession(text, 's')
+  expect(tool).toMatchObject({ outcome: 'ok' })
+  expect(typed).toMatchObject({ origin: 'composer', isMeta: false, pastedChars: 0, pauses: 0, longestPauseMs: 0 })
+  // counters only come back on rows that had a typed draft
+  expect(plain).toMatchObject({ origin: 'paste', isMeta: false })
+  expect(plain).not.toHaveProperty('pauses')
+  expect(gone).toMatchObject({ endedAt: '2026-10-19T12:00:05.000Z', startedAt: '2026-10-19T12:00:03.000Z' })
 })

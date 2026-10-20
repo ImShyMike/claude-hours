@@ -85,7 +85,10 @@ Running Claude Code inside WSL works like Linux.
 ```
 ~/.claude/analytics/
   events/<sessionId>.jsonl     # one JSON line per event, one file per session
+  events/<sessionId>.jsonl.gz  # the same, once the session has ended
   drafts/<sessionId>.jsonl     # draft edit timelines for the replay, same split
+  drafts/<sessionId>.jsonl.gz
+  config.json                  # optional: which files get logged
 ```
 
 - **Nothing here holds prompt text.** Prompts are logged as counts (words,
@@ -98,6 +101,10 @@ Running Claude Code inside WSL works like Linux.
   reads the files on every request and does all the math in the browser.
 - **It splits itself.** Each session gets its own small file, so there's no
   one log to rotate. Delete old session files to forget them.
+- **Ended sessions are gzipped.** When a session exits, the mod appends its
+  files to `<id>.jsonl.gz` and removes the plain ones. A resumed session
+  starts a fresh `.jsonl` next to the `.gz`, and the next exit appends another
+  gzip member, so `zcat` shows the whole thing. The dashboard reads both.
 - Deleting the files is safe: the next event recreates them. Keep the
   folders, though; the mod only creates them once per session.
 
@@ -106,13 +113,16 @@ Running Claude Code inside WSL works like Linux.
 A session file opens with a header, `{"v":1,"event":"session","start":<epoch
 ms>,"cwd":...}`. After it, every row has `event` and `t`, ms since that start,
 and nothing repeated: the file name is the session, a `cwd_changed` row says
-when the cwd moves, and paths under the cwd are written relative to it.
+when the cwd moves, and paths under the cwd are written relative to it. A
+field at its usual value is left out too (`outcome: "ok"`, `via: "tool"`,
+`origin: "composer"` and friends, plus a typed draft's counters at 0), and
+the decoder puts them back.
 
 ```json
 {"v":1,"event":"session","start":1792472272642,"cwd":"/home/me/code/terra"}
 {"t":0,"event":"session_start","surface":"terminal","isInteractive":true}
-{"t":48211,"event":"tool","tool":"Edit","file":"src/db.ts","outcome":"ok","durationMs":31}
-{"t":48212,"event":"file_changed","tool":"Edit","path":"src/db.ts","via":"tool"}
+{"t":48211,"event":"tool","tool":"Edit","file":"src/db.ts","durationMs":31}
+{"t":48212,"event":"file_changed","tool":"Edit","path":"src/db.ts"}
 ```
 
 `src/eventlog.ts` decodes it back to flat events and skips files in any other
@@ -128,6 +138,26 @@ format. The full field list is in the mod's `TODO.md`; the short version:
 | `tool` | a tool call finished, with outcome and duration (its row is written at the end, so it began `durationMs` earlier) |
 | `file_changed` | a file edited by a tool, or changed during a Bash call |
 | `cwd_changed` | the session's working directory moved |
+
+### Choosing which files get logged
+
+By default every file a built-in tool touches is logged. To keep some out,
+or to only log some, write `~/.claude/analytics/config.json`:
+
+```json
+{ "files": { "exclude": ["fixtures", "*.log", "~/secrets"], "include": ["src/**"] } }
+```
+
+- A glob with no `/` matches any folder or file name along the path, so
+  `fixtures` drops everything under any `fixtures/` folder.
+- A glob with a `/` matches from the session's cwd, or from the root when it
+  starts with `/` or `~/`. Naming a folder covers everything inside it.
+- `*` stays inside one folder, `**` crosses folders, `?` is one character.
+- `exclude` always wins. A non-empty `include` means only those paths.
+
+A left-out file still logs its tool call, just without the path, so time and
+tool counts stay right. Changes apply from the next tool call. A broken
+config logs everything, with a warning in the mod's log.
 
 ### How the mod hears things
 
@@ -192,8 +222,11 @@ timelines existed show their stats but no replay.
 Rows are written as `v: 1`: shapes run-length encoded (`a` a letter, `_` a
 blank, `n` a newline, so `5a_3a`), and steps as one string of comma
 separated `<dt><kind>[@pos][-removed][+shape][:who]` tokens that leave out
-whatever follows from the cursor (`120a` is one letter typed 120ms after the
-last step). `src/replay.ts` decodes it and skips rows of any other version.
+whatever follows from the cursor (`12a` is one letter typed 120ms after the
+last step: gaps are in 10ms ticks, rounded on the draft's own clock so the
+error never adds up). `startedAt` is epoch ms and `durationMs` how long the
+draft lasted; an empty starting box and `truncated: false` are left out.
+`src/replay.ts` decodes it and skips rows of any other version.
 
 Languages come from the extensions of `file_changed` paths. Tools come from
 `tool` rows, with errors, denials and average duration shown in the tooltip.

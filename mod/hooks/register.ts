@@ -12,10 +12,40 @@ import type { StartedSessions } from '../types'
 //
 // Each draft's edit timeline goes to drafts/<session>.jsonl, as shapes only:
 // 'a' for any character, ' ' for blanks, '\n' for newlines.
+//
+// Fields at their usual value are left out (DEFAULTS), and when a session
+// ends its files are gzipped onto <file>.gz (a resumed one appends another
+// gzip member, which readers see as one stream).
 const LOG_DIR = '.claude/analytics'
 const EVENTS_DIR = `${LOG_DIR}/events`
 const DRAFTS_DIR = `${LOG_DIR}/drafts`
 const FORMAT = 1
+// which files get logged, globs in {"files":{"include":[...],"exclude":[...]}}
+const CONFIG_FILE = `${LOG_DIR}/config.json`
+
+// a field at this value is left out of its row; readers put it back
+const DEFAULTS: Record<string, Fields> = {
+  tool: { outcome: 'ok' },
+  turn_end: { reason: 'answer' },
+  file_changed: { via: 'tool' },
+  prompt: { origin: 'composer', isMeta: false },
+  session_start: { isInteractive: true },
+  compact: { outcome: 'compacted' },
+}
+// a typed draft's counters, left out at 0 (only on rows with typingMs)
+const DRAFT_COUNTERS = ['pastedChars', 'deletedChars', 'fixes', 'rewrites', 'rewrittenChars', 'pauses', 'breaks', 'longestPauseMs', 'wordDeletes', 'lineKills']
+
+function compactRow(event: string, fields: Fields) {
+  const usual = DEFAULTS[event] ?? {}
+  const draft = typeof fields.typingMs === 'number'
+  const out: Fields = {}
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || usual[key] === value) continue
+    if (draft && value === 0 && DRAFT_COUNTERS.includes(key)) continue
+    out[key] = value
+  }
+  return out
+}
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
 // built-in tools whose path we log; an MCP tool's file_path argument is its
@@ -76,18 +106,20 @@ function rle(shape: string) {
 }
 
 // Steps as one compact string, leaving out whatever the replay can work out.
-// Each is "<ms since the last step><kind>[@pos][-removed][+shape][:who]",
-// comma separated. The position is left out when it's where the cursor
+// Each is "<10ms ticks since the last step><kind>[@pos][-removed][+shape][:who]",
+// comma separated (ticks are rounded from the draft's start, so they never
+// drift). The position is left out when it's where the cursor
 // already is (before it, for a backspace), removed when it's the usual (1 for
 // b and d, else 0). A one-character insert at the cursor is just its symbol:
-// "137a" a letter, "95_" a blank, "80n" a newline
+// "14a" a letter 140ms after the last step, "9_" a blank, "8n" a newline
 function encodeSteps(steps: Step[], initialCursor: number) {
   let cursor = initialCursor
   let prev = 0
   return steps
     .map(([at, kind, pos, removed = 0, shape = '', who]) => {
-      const dt = Math.max(0, Math.round(at - prev))
-      prev = at
+      const tick = Math.round(at / 10)
+      const dt = Math.max(0, tick - prev)
+      prev = Math.max(prev, tick)
       let token: string
       if (kind === 't' && !removed && shape.length === 1 && pos === cursor) token = `${dt}${rle(shape)}`
       else {
@@ -173,6 +205,23 @@ async function append($: EngineInterface, path: string, rows: Fields[]) {
   if (exitCode !== 0) throw new Error(`append failed: ${stderr.trim()}`)
 }
 
+// A finished session's files, gzipped onto <file>.gz. A resumed session
+// appends one more gzip member there, and readers take them as one stream.
+// Runs behind the queue, so every row is in before the file goes
+function packSession($: EngineInterface) {
+  queue = queue
+    .then(async () => {
+      const [sessionId, dir] = await Promise.all([$.session.id(), homeDir($)])
+      const files = [`${dir}/${EVENTS_DIR}/${sessionId}.jsonl`, `${dir}/${DRAFTS_DIR}/${sessionId}.jsonl`]
+      const script = 'for f; do [ -f "$f" ] || continue; gzip -c "$f" >> "$f.gz" && rm -f "$f"; done'
+      const { exitCode, stderr } = await $.process.run(['sh', '-c', script, 'sh', ...files], { timeoutMs: 1_000 })
+      if (exitCode !== 0) throw new Error(`gzip failed: ${stderr.trim()}`)
+      if (head?.sessionId === sessionId) head = undefined
+    })
+    .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
+  return queue
+}
+
 // a path under the cwd, written relative to it
 const relative = (path: unknown, cwd: string) =>
   typeof path === 'string' && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path
@@ -213,7 +262,7 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields][], 
       if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd })
       h.cwd = cwd
       for (const [event, fields] of entries) {
-        rows.push({ ...stamp, event, ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) })
+        rows.push({ ...stamp, event, ...compactRow(event, { ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) }) })
       }
       if (timelines.length) await append($, `${dir}/${DRAFTS_DIR}/${sessionId}.jsonl`, timelines)
       await append($, path, rows)
@@ -239,6 +288,56 @@ async function filesChangedSince($: EngineInterface, startedMs: number) {
     .slice(0, MAX_PATHS_PER_CALL)
 }
 
+// A glob as a RegExp: ** any run of folders, * anything within one name,
+// ? one character
+function globToRegExp(glob: string) {
+  let re = ''
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!
+    if (c === '*' && glob[i + 1] === '*') {
+      re += glob[i + 2] === '/' ? '(?:.*/)?' : '.*'
+      i += glob[i + 2] === '/' ? 2 : 1
+    } else if (c === '*') re += '[^/]*'
+    else if (c === '?') re += '[^/]'
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+  }
+  return new RegExp(`^${re}$`)
+}
+
+// Whether a glob names this path. One without a slash matches any file or
+// folder name in it (`fixtures`, `*.log`); one with a slash matches from the
+// cwd, or from / or ~/ when it starts there. Naming a folder names what's in it
+function globMatches(glob: string, path: string, cwd: string, home: string) {
+  const re = globToRegExp(glob.replace(/^~\//, `${home}/`).replace(/\/$/, ''))
+  if (!glob.includes('/')) return path.split('/').some(name => re.test(name))
+  const target = glob.startsWith('/') || glob.startsWith('~/') ? path : path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : undefined
+  if (target === undefined) return false
+  const parts = target.split('/')
+  return parts.some((_, i) => re.test(parts.slice(0, i + 1).join('/')))
+}
+
+type FileRules = { include: string[]; exclude: string[] }
+
+// The config's file rules, read fresh for each tool call (it's tiny). A
+// missing file means log everything; a broken one says so and logs everything
+async function fileRules($: EngineInterface, dir: string): Promise<FileRules> {
+  const path = `${dir}/${CONFIG_FILE}`
+  if (!(await $.fs.exists(path).catch(() => false))) return { include: [], exclude: [] }
+  try {
+    const files = JSON.parse(String(await $.fs.read(path))).files ?? {}
+    const list = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : [])
+    return { include: list(files.include), exclude: list(files.exclude) }
+  } catch (err) {
+    $.ui.log(`${$.plugin.name}: ignoring ${path}: ${String(err)}`)
+    return { include: [], exclude: [] }
+  }
+}
+
+// excluded always loses; with any includes, only those are logged
+const allowed = (rules: FileRules, path: string, cwd: string, home: string) =>
+  !rules.exclude.some(g => globMatches(g, path, cwd, home)) &&
+  (!rules.include.length || rules.include.some(g => globMatches(g, path, cwd, home)))
+
 // the pause before Enter (or before giving up) is part of writing it too
 function draftFields(d: Draft, endMs: number) {
   const last = endMs - d.lastAt
@@ -261,18 +360,19 @@ function draftFields(d: Draft, endMs: number) {
   }
 }
 
-// the draft's sidecar row: everything the replay needs, and no text
-// (v 1: shapes and steps encoded as above)
+// the draft's sidecar row: everything the replay needs, and no text (v 1:
+// shapes and steps encoded as above, startedAt in epoch ms; an empty
+// initialShape, a 0 initialCursor and truncated false are left out)
 const timelineOf = (d: Draft, outcome: string, endMs: number): Fields => ({
-  v: 1,
+  v: FORMAT,
   draftId: d.id,
   outcome,
-  startedAt: new Date(d.startedAt).toISOString(),
-  endedAt: new Date(endMs).toISOString(),
-  initialShape: rle(d.initialShape),
-  initialCursor: d.initialCursor,
+  startedAt: d.startedAt,
+  durationMs: endMs - d.startedAt,
+  initialShape: rle(d.initialShape) || undefined,
+  initialCursor: d.initialCursor || undefined,
   steps: encodeSteps(d.steps, d.initialCursor),
-  truncated: d.truncated,
+  truncated: d.truncated || undefined,
 })
 
 function addStep(d: Draft, at: number, step: [string, number, number?, string?, string?]) {
@@ -349,8 +449,8 @@ function takeAbandoned() {
       {
         ...draftFields(g.draft, g.at),
         how: g.how,
-        startedAt: new Date(g.draft.startedAt).toISOString(),
-        endedAt: new Date(g.at).toISOString(),
+        // written late, so it says when it ended; it began composeMs before
+        endedAt: g.at,
       },
     ]),
     timelines: gone.map(g => timelineOf(g.draft, 'abandoned', g.at)),
@@ -421,6 +521,7 @@ export const register: Register = on => {
     settleEmptied()
     const { entries, timelines } = takeAbandoned()
     await logAll($, [...entries, ['session_end', { reason: e.reason }]], timelines)
+    await packSession($)
     return next(e)
   })
 
@@ -543,7 +644,7 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
     const ids = { tool, agentId: e.agentId }
-    const file = !FILE_TOOLS.has(tool) ? undefined : 'file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : undefined
+    const named = !FILE_TOOLS.has(tool) ? undefined : 'file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : undefined
     const startedMs = await $.clock.now()
     if (e.agentId === undefined) runningTools.set(e.tool_use_id, tool)
 
@@ -555,17 +656,21 @@ export const register: Register = on => {
     } finally {
       runningTools.delete(e.tool_use_id)
       const durationMs = (await $.clock.now()) - startedMs
+      const [cwd, dir] = await Promise.all([$.session.cwd(), homeDir($)])
+      const rules = await fileRules($, dir)
+      const keep = (path: string | undefined) => (path && allowed(rules, path, cwd, dir) ? path : undefined)
+      const file = keep(typeof named === 'string' ? named : undefined)
       const entries: [string, Fields][] = [
         ['tool', { ...ids, file, commandChars: e.tool === 'Bash' ? e.command.length : undefined, outcome, durationMs }],
       ]
       if (outcome === 'ok' && EDIT_TOOLS.has(tool)) {
-        entries.push(['file_changed', { ...ids, path: file, via: 'tool' }])
+        if (file) entries.push(['file_changed', { ...ids, path: file, via: 'tool' }])
       } else if (e.tool === 'Bash' && outcome !== 'denied') {
         const paths = await filesChangedSince($, startedMs).catch(err => {
           $.ui.log(`${$.plugin.name}: ${String(err)}`)
           return []
         })
-        for (const path of paths) entries.push(['file_changed', { ...ids, path, via: 'bash-window' }])
+        for (const path of paths) if (keep(path)) entries.push(['file_changed', { ...ids, path, via: 'bash-window' }])
       }
       await logAll($, entries)
     }

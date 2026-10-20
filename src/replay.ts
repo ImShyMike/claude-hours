@@ -175,7 +175,8 @@ export function decodeSteps(code: string, initialCursor: number): Step[] {
   for (const token of code.split(',')) {
     const m = TOKEN.exec(token)
     if (!m) continue
-    at += Number(m[1])
+    // gaps are in 10ms ticks
+    at += Number(m[1]) * 10
     const op = m[2]!
     let step: Step
     if (op in SYMBOLS) step = [at, 't', cursor, 0, SYMBOLS[op]!]
@@ -198,8 +199,10 @@ export function encodeSteps(steps: Step[], initialCursor: number) {
   let prev = 0
   return steps
     .map(([at, kind, pos, removed = 0, shape = '', who]) => {
-      const dt = Math.max(0, Math.round(at - prev))
-      prev = at
+      // rounded on the absolute clock, so the error never adds up
+      const tick = Math.round(at / 10)
+      const dt = Math.max(0, tick - prev)
+      prev = Math.max(prev, tick)
       let token: string
       if (kind === 't' && !removed && shape.length === 1 && pos === cursor) token = `${dt}${rle(shape)}`
       else {
@@ -217,11 +220,23 @@ export function encodeSteps(steps: Step[], initialCursor: number) {
     .join(',')
 }
 
-// a stored row as the replay wants it, or undefined if it isn't v1
+// a stored row as the replay wants it, or undefined if it isn't v1. Stored
+// rows carry startedAt (epoch ms) and durationMs, and leave out an empty
+// initial box and truncated: false.
 function decodeRow(row: Record<string, unknown>): Timeline | undefined {
   if (row.v !== 1 || typeof row.draftId !== 'string' || typeof row.steps !== 'string') return undefined
+  if (typeof row.startedAt !== 'number') return undefined
   const cursor = Number(row.initialCursor) || 0
-  return { ...(row as unknown as Timeline), initialShape: unrle(String(row.initialShape ?? '')), steps: decodeSteps(row.steps, cursor) }
+  return {
+    draftId: row.draftId,
+    outcome: row.outcome === 'abandoned' ? 'abandoned' : 'sent',
+    startedAt: new Date(row.startedAt).toISOString(),
+    endedAt: new Date(row.startedAt + (Number(row.durationMs) || 0)).toISOString(),
+    initialShape: unrle(String(row.initialShape ?? '')),
+    initialCursor: cursor,
+    steps: decodeSteps(row.steps, cursor),
+    truncated: row.truncated === true,
+  }
 }
 
 export function parseTimelines(text: string): Timeline[] {

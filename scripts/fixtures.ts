@@ -127,8 +127,7 @@ for (let back = DAYS; back >= 0; back--) {
       if (typed) {
         drafts.push(JSON.stringify({
           sessionId, v: 1, draftId, outcome: 'sent',
-          startedAt: new Date(at - typed.durationMs).toISOString(), endedAt: new Date(at).toISOString(),
-          initialShape: '', initialCursor: 0, steps: encodeSteps(typed.steps, 0), truncated: false,
+          startedAt: at - typed.durationMs, durationMs: typed.durationMs, steps: encodeSteps(typed.steps, 0),
         }))
       }
       row('prompt', {
