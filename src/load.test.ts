@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { loadEvents, loadTimelines, projectFor } from './load'
 
-const scratch = () => mkdtempSync(join(tmpdir(), 'hackatime-test-'))
+const scratch = () => mkdtempSync(join(tmpdir(), 'claude-hours-test-'))
 
 test('projectFor names the git root, not the subdir', () => {
   const home = scratch()

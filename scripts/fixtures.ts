@@ -7,7 +7,7 @@ import { encodeSession } from '../src/eventlog'
 import { encodeSteps } from '../src/replay'
 
 const DAYS = 45
-const PROJECTS = ['terra', 'vxm', 'hackathon-site', 'scrapbook', 'claude-hackatime']
+const PROJECTS = ['terra', 'vxm', 'hackathon-site', 'scrapbook', 'claude-hours']
 const TOOLS = ['Read', 'Bash', 'Edit', 'Grep', 'Write', 'Glob', 'Agent']
 const FILES = ['src/index.ts', 'src/app.tsx', 'README.md', 'main.py', 'style.css', 'schema.sql', 'Makefile', 'config.toml']
 

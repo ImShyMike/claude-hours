@@ -1,4 +1,4 @@
-# claude-hackatime
+# claude-hours
 
 A local, Hackatime-style dashboard for the time spent coding with Claude Code.
 It reads the JSONL logs that the `hook-analytics` mod writes to
@@ -49,10 +49,10 @@ Running Claude Code inside WSL works like Linux.
    absolute path, `~` allowed) in `~/.claude/settings.json`:
 
    ```json
-   { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/path/to/claude-hackatime/mod" } }
+   { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/path/to/claude-hours/mod" } }
    ```
 
-   For a one-off try, `claude --plugin-dir ~/path/to/claude-hackatime/mod`
+   For a one-off try, `claude --plugin-dir ~/path/to/claude-hours/mod`
    works too. Start a new session; a `session_start` line in
    `~/.claude/analytics/events/` means it's recording. Editing
    `register.ts` hot-reloads it in running sessions, and Claude Code writes
@@ -184,12 +184,12 @@ The same server can run as a hub that everyone's mod uploads to, where each
 person logs in and sees their own dashboard (an admin sees anyone's).
 
 ```sh
-# on the server: keep data in /srv/hackatime, listen behind your TLS proxy
-HUB_DIR=/srv/hackatime HOST=127.0.0.1 PORT=4747 NODE_ENV=production bun src/server.ts
+# on the server: keep data in /srv/claude-hours, listen behind your TLS proxy
+HUB_DIR=/srv/claude-hours HOST=127.0.0.1 PORT=4747 NODE_ENV=production bun src/server.ts
 
 # a token per person (only its hash is kept; prints their config.json bit)
-HUB_DIR=/srv/hackatime bun scripts/hub-token.ts ada --url https://hub.example
-HUB_DIR=/srv/hackatime bun scripts/hub-token.ts miggy --admin --url https://hub.example
+HUB_DIR=/srv/claude-hours bun scripts/hub-token.ts ada --url https://hub.example
+HUB_DIR=/srv/claude-hours bun scripts/hub-token.ts miggy --admin --url https://hub.example
 ```
 
 Each person puts the printed bit in `~/.claude/analytics/config.json`

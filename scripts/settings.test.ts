@@ -7,7 +7,7 @@ import { join } from 'node:path'
 const SCRIPT = join(import.meta.dir, 'settings.py')
 
 function setup(settings?: unknown) {
-  const home = mkdtempSync(join(tmpdir(), 'hackatime-install-'))
+  const home = mkdtempSync(join(tmpdir(), 'claude-hours-install-'))
   mkdirSync(join(home, '.claude'))
   if (settings !== undefined) writeFileSync(join(home, '.claude/settings.json'), JSON.stringify(settings))
   const run = (action: string, dir: string) => {

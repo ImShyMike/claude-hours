@@ -54,7 +54,7 @@ export async function whoIs(hub: string, token: string | undefined): Promise<Per
 
 export const bearer = (req: Request) => /^Bearer (\S+)$/.exec(req.headers.get('authorization') ?? '')?.[1]
 
-export const COOKIE = 'hackatime'
+export const COOKIE = 'claude-hours'
 export const cookieToken = (req: Request) =>
   (req.headers.get('cookie') ?? '')
     .split(';')

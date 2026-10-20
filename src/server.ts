@@ -28,13 +28,13 @@ function local() {
       '/api/me': () => Response.json({}),
     },
   })
-  console.log(`claude-hackatime on ${server.url} reading ${dir}`)
+  console.log(`claude-hours on ${server.url} reading ${dir}`)
 }
 
 const LOGIN = (error = '') => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>claude-hackatime</title><link rel="stylesheet" href="/login.css" /></head>
-<body><main class="login"><h1>claude-hackatime</h1>
+<title>claude-hours</title><link rel="stylesheet" href="/login.css" /></head>
+<body><main class="login"><h1>claude-hours</h1>
 <form method="post" action="/login">
 <label for="token">your token</label>
 <input id="token" name="token" type="password" autocomplete="current-password" required autofocus />
@@ -100,7 +100,7 @@ function central(dir: string) {
       '/v1/sessions/:id/:kind': { POST: req => upload(dir, req, req.params.id, req.params.kind) },
     },
   })
-  console.log(`claude-hackatime hub on ${server.url}, keeping uploads in ${dir}`)
+  console.log(`claude-hours hub on ${server.url}, keeping uploads in ${dir}`)
 }
 
 if (hub) central(hub)

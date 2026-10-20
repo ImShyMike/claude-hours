@@ -34,7 +34,7 @@ Prompt text and file contents are never written.
 - [x] **See a real interrupt.** Seen live on 2026-10-20: Esc 1.4 s into a turn logged one `interrupt` (no `agentId`), and the prompt went back into the box.
 - [ ] **Check Bash latency in a big repo.** Every Bash result waits for a `find` over the cwd (3 s timeout, prunes `.git`, `node_modules`, `target`, `.venv`, `venv`, `__pycache__`, `dist`, `build`). If it's noticeable, narrow the scan or skip it above some size.
 - [ ] **Check the session_start dedupe live.** Edit the mod during an interactive session (hot reload) and confirm there's no second `session_start`.
-- [x] **Something to read it with.** `~/Documents/GitHub/claude-hackatime`: local Bun dashboard (`bun run dev`, http://127.0.0.1:4747). It reads every file in `events/`.
+- [x] **Something to read it with.** `~/Documents/GitHub/claude-hours`: local Bun dashboard (`bun run dev`, http://127.0.0.1:4747). It reads every file in `events/`.
 
 ## Known limits (by design, for now)
 

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { ingest, mintToken, upload, viewer, whoIs } from './hub'
 import { loadEvents } from './load'
 
-const scratch = () => mkdtempSync(join(tmpdir(), 'hackatime-hub-'))
+const scratch = () => mkdtempSync(join(tmpdir(), 'claude-hours-hub-'))
 const bytes = (s: string) => new TextEncoder().encode(s)
 
 test('ingest appends only what it lacks, and repeats are harmless', async () => {
@@ -74,7 +74,7 @@ test('uploads refuse strangers, odd names and torn lines', async () => {
   expect(await status(post(token, 's', 'events', 'abc', 'x\n'), 's', 'events')).toBe(400)
   expect(await status(post(token, 's', 'events', 0, '{"half'), 's', 'events')).toBe(400)
   // a browser's cookie is no upload token
-  const cookie = new Request('http://hub/v1/sessions/s/events?offset=0', { method: 'POST', headers: { cookie: `hackatime=${token}` }, body: 'x\n' })
+  const cookie = new Request('http://hub/v1/sessions/s/events?offset=0', { method: 'POST', headers: { cookie: `claude-hours=${token}` }, body: 'x\n' })
   expect(await status(cookie, 's', 'events')).toBe(401)
 })
 
@@ -83,7 +83,7 @@ test('people see their own data, and an admin anyone\'s', async () => {
   const ada = await mintToken(hub, 'ada')
   const boss = await mintToken(hub, 'miggy', true)
   const view = (token: string, person?: string) =>
-    viewer(hub, new Request(`http://hub/api/events${person ? `?person=${person}` : ''}`, { headers: { cookie: `hackatime=${token}` } }))
+    viewer(hub, new Request(`http://hub/api/events${person ? `?person=${person}` : ''}`, { headers: { cookie: `claude-hours=${token}` } }))
   expect((await view(ada))?.person).toBe('ada')
   expect((await view(ada, 'miggy'))?.person).toBe('ada')
   expect((await view(boss, 'ada'))?.person).toBe('ada')

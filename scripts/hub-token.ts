@@ -1,7 +1,7 @@
 // Mints a token for one person on the hub, and prints the config.json bit
 // they paste in. Only its hash is kept, so a lost token means a new one.
 //
-//   HUB_DIR=/srv/hackatime bun scripts/hub-token.ts <person> [--admin] [--url https://hub.example]
+//   HUB_DIR=/srv/claude-hours bun scripts/hub-token.ts <person> [--admin] [--url https://hub.example]
 
 import { mintToken } from '../src/hub'
 

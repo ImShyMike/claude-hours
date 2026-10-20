@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Installs (or removes) claude-hackatime on macOS and Linux.
+# Installs (or removes) claude-hours on macOS and Linux.
 #
 #   ./install.sh               load the mod in every Claude Code session
 #   ./install.sh uninstall     stop loading it (your data stays)
@@ -24,7 +24,7 @@ fi
 
 case "${1:-install}" in
   install)
-    echo "installing claude-hackatime"
+    echo "installing claude-hours"
     mkdir -p "$HOME/.claude"
     python3 "$repo/scripts/settings.py" add "$mod"
     command -v claude >/dev/null 2>&1 || echo "  (Claude Code isn't on your PATH yet, the mod loads once it is)"
@@ -33,7 +33,7 @@ case "${1:-install}" in
     echo "keep this folder where it is: Claude Code loads the mod from $mod"
     ;;
   uninstall)
-    echo "uninstalling claude-hackatime"
+    echo "uninstalling claude-hours"
     python3 "$repo/scripts/settings.py" remove "$mod"
     if [ "${2:-}" = "--purge" ]; then
       rm -rf "$data"
