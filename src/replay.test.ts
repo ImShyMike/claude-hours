@@ -67,8 +67,8 @@ test('pauses, group counts and descriptions', () => {
 })
 
 test('parseTimelines skips junk', () => {
-  const good = JSON.stringify(timeline([]))
-  expect(parseTimelines(`${good}\n{"torn\n{"draftId":1}\n`)).toHaveLength(1)
+  const good = JSON.stringify({ ...timeline([]), v: 1, initialShape: '', steps: '' })
+  expect(parseTimelines(`${good}\n{"torn\n{"v":1,"draftId":1}\n`)).toHaveLength(1)
 })
 
 test('rle round trips shapes', () => {
@@ -127,10 +127,10 @@ test('encode and decode round trip, skipping junk tokens', () => {
   expect(decodeSteps(`0a,garbage,,${'5'}a`, 0)).toHaveLength(2)
 })
 
-test('parseTimelines reads both versions the same', () => {
-  const v1 = { draftId: 'a', outcome: 'sent', startedAt: '', endedAt: '', initialShape: 'aa a', initialCursor: 4, steps: [[0, 't', 4, 0, 'a']], truncated: false }
-  const v2 = { ...v1, draftId: 'b', v: 2, initialShape: '2a_a', steps: '0a' }
-  const [one, two] = parseTimelines(`${JSON.stringify(v1)}\n${JSON.stringify(v2)}\n`)
-  expect(two!.initialShape).toBe(one!.initialShape)
-  expect(two!.steps).toEqual(one!.steps)
+test('parseTimelines decodes v1 rows and skips anything else', () => {
+  const row = { v: 1, draftId: 'b', outcome: 'sent', startedAt: '', endedAt: '', initialShape: '2a_a', initialCursor: 4, steps: '0a', truncated: false }
+  const old = { ...row, draftId: 'a', v: undefined, initialShape: 'aa a', steps: [[0, 't', 4, 0, 'a']] }
+  const rows = parseTimelines(`${JSON.stringify(old)}\n${JSON.stringify(row)}\n`)
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ draftId: 'b', initialShape: 'aa a', steps: [[0, 't', 4, 0, 'a']] })
 })

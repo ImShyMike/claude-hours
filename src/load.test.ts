@@ -38,7 +38,7 @@ test('loadEvents on a missing dir is empty', async () => {
 test('loadTimelines reads one session and refuses odd ids', async () => {
   const dir = scratch()
   mkdirSync(join(dir, 'drafts'))
-  const row = { draftId: 'd1', outcome: 'sent', startedAt: '', endedAt: '', initialShape: '', initialCursor: 0, steps: [], truncated: false }
+  const row = { v: 1, draftId: 'd1', outcome: 'sent', startedAt: '', endedAt: '', initialShape: '', initialCursor: 0, steps: '', truncated: false }
   writeFileSync(join(dir, 'drafts', 'abc-123.jsonl'), `${JSON.stringify(row)}\n`)
   writeFileSync(join(dir, 'secret.jsonl'), `${JSON.stringify(row)}\n`)
   expect(await loadTimelines(dir, 'abc-123')).toHaveLength(1)

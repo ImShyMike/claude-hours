@@ -138,13 +138,12 @@ export function describe(step: Step) {
 }
 
 // --- the stored format -------------------------------------------------
-// v 2 (hook-analytics' encodeSteps; keep the two in step): shapes are
+// v 1 (hook-analytics' encodeSteps; keep the two in step): shapes are
 // run-length encoded, a for a letter, _ a blank, n a newline ("5a_3a"), and
 // steps are one string of comma separated "<dt><kind>[@pos][-removed]
 // [+shape][:who]". dt is ms since the previous step; a missing position is
 // the cursor (just before it for b), a missing removed is 1 for b and d and 0
 // otherwise; a lone a, _ or n is that one character typed at the cursor.
-// v 1 (the first day) had plain shapes and arrays of absolute steps.
 
 const SYMBOLS: Record<string, string> = { a: 'a', _: ' ', n: '\n' }
 const SYMBOL_OF: Record<string, string> = { a: 'a', ' ': '_', '\n': 'n' }
@@ -218,15 +217,11 @@ export function encodeSteps(steps: Step[], initialCursor: number) {
     .join(',')
 }
 
-// a stored row of either version, as the replay wants it
-function normalize(row: Record<string, unknown>): Timeline | undefined {
-  if (typeof row.draftId !== 'string') return undefined
+// a stored row as the replay wants it, or undefined if it isn't v1
+function decodeRow(row: Record<string, unknown>): Timeline | undefined {
+  if (row.v !== 1 || typeof row.draftId !== 'string' || typeof row.steps !== 'string') return undefined
   const cursor = Number(row.initialCursor) || 0
-  if (row.v === 2 && typeof row.steps === 'string') {
-    return { ...(row as unknown as Timeline), initialShape: unrle(String(row.initialShape ?? '')), steps: decodeSteps(row.steps, cursor) }
-  }
-  if (Array.isArray(row.steps)) return row as unknown as Timeline
-  return undefined
+  return { ...(row as unknown as Timeline), initialShape: unrle(String(row.initialShape ?? '')), steps: decodeSteps(row.steps, cursor) }
 }
 
 export function parseTimelines(text: string): Timeline[] {
@@ -234,7 +229,7 @@ export function parseTimelines(text: string): Timeline[] {
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     try {
-      const row = normalize(JSON.parse(line))
+      const row = decodeRow(JSON.parse(line))
       if (row) rows.push(row)
     } catch {}
   }
