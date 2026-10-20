@@ -14,6 +14,80 @@ const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)]!
 const between = (lo: number, hi: number) => lo + rand() * (hi - lo)
 
 const lines: string[] = []
+// draft timelines, one file per session like the real thing
+const drafts: string[] = []
+
+type Step = [number, string, number, number?, string?]
+
+// Types out `words` words of shapes: letters at a human pace, the odd typo
+// fixed with backspace, now and then a word deleted and redone, thinking
+// pauses between sentences and sometimes a paste
+function simulate(words: number) {
+  const steps: Step[] = []
+  let t = 0
+  let len = 0
+  let last = 0
+  const stats = {
+    typingMs: 0, edits: 0, typedChars: 0, pastedChars: 0, deletedChars: 0, fixes: 0, rewrites: 0,
+    rewrittenChars: 0, pauses: 0, breaks: 0, longestPauseMs: 0, wordDeletes: 0, lineKills: 0,
+  }
+  const step = (gap: number, st: [string, number, number?, string?]) => {
+    t += gap
+    if (gap > 30_000) stats.breaks++
+    else if (gap >= 2_000) stats.pauses++
+    stats.longestPauseMs = Math.max(stats.longestPauseMs, t - last)
+    if (t - last <= 30_000) stats.typingMs += t - last
+    last = t
+    stats.edits++
+    steps.push([Math.round(t), ...st])
+  }
+  const typeWord = (n: number) => {
+    for (let i = 0; i < n; i++) {
+      step(between(70, 260), ['t', len, 0, 'a'])
+      len++
+      stats.typedChars++
+    }
+  }
+  for (let w = 0; w < words; w++) {
+    const n = Math.floor(between(2, 9))
+    if (w && rand() < 0.12) step(between(2_000, 9_000), ['m', len]) // a think, then the cursor nudged
+    typeWord(n)
+    if (rand() < 0.1) {
+      // a typo: two wrong letters, backspaced, retyped
+      typeWord(2)
+      for (let i = 0; i < 2; i++) {
+        step(between(90, 200), ['b', len - 1, 1])
+        len--
+        stats.deletedChars++
+      }
+      stats.fixes++
+      typeWord(2)
+    }
+    if (rand() < 0.05) {
+      // rethink the whole word
+      step(between(400, 1500), ['w', len - n, n])
+      len -= n
+      stats.deletedChars += n
+      stats.wordDeletes++
+      stats.rewrites++
+      stats.rewrittenChars += n
+      typeWord(n)
+    }
+    if (rand() < 0.02) {
+      const size = Math.floor(between(40, 400))
+      step(between(500, 3000), ['p', len, 0, ' ' + 'a'.repeat(size)])
+      len += size + 1
+      stats.pastedChars += size + 1
+    }
+    if (w < words - 1) {
+      step(between(60, 200), ['t', len, 0, rand() < 0.04 ? '\n' : ' '])
+      len++
+      stats.typedChars++
+    }
+  }
+  const durationMs = Math.round(t + between(300, 2500))
+  return { steps, stats, durationMs }
+}
 const midnight = new Date()
 midnight.setHours(0, 0, 0, 0)
 
@@ -45,26 +119,20 @@ for (let back = DAYS; back >= 0; back--) {
         }))
       }
       const composer = rand() < 0.9
-      const typingMs = Math.round(words * 6 * between(180, 320))
-      const pasted = rand() < 0.15 ? Math.floor(between(40, 2000)) : 0
+      const typed = composer ? simulate(words) : undefined
+      const draftId = `demo-${lines.length}`
+      if (typed) {
+        drafts.push(JSON.stringify({
+          sessionId, draftId, outcome: 'sent',
+          startedAt: new Date(at - typed.durationMs).toISOString(), endedAt: new Date(at).toISOString(),
+          initialShape: '', initialCursor: 0, steps: typed.steps, truncated: false,
+        }))
+      }
       row('prompt', {
         words,
-        chars: words * 6 + pasted,
+        chars: words * 6,
         origin: composer ? 'composer' : 'task-notification',
-        ...(composer && {
-          composeMs: Math.round(typingMs * between(1, 2.5)),
-          typingMs,
-          edits: Math.floor(typingMs / 700),
-          typedChars: words * 6,
-          pastedChars: pasted,
-          deletedChars: Math.floor(words * between(0, 2)),
-          fixes: Math.floor(words * between(0, 0.3)),
-          rewrites: Math.floor(between(0, 3)),
-          rewrittenChars: Math.floor(between(0, 60)),
-          pauses: Math.floor(between(0, 6)),
-          breaks: rand() < 0.15 ? 1 : 0,
-          longestPauseMs: Math.round(between(1, rand() < 0.15 ? 120 : 25) * 1000),
-        }),
+        ...(typed && { ...typed.stats, composeMs: typed.durationMs, draftId }),
       })
       const turnStart = at
       const calls = Math.floor(between(0, 9))
@@ -99,4 +167,11 @@ for (let back = DAYS; back >= 0; back--) {
 
 mkdirSync('fixtures', { recursive: true })
 writeFileSync('fixtures/events.jsonl', `${lines.join('\n')}\n`)
+mkdirSync('fixtures/drafts', { recursive: true })
+const bySession = new Map<string, string[]>()
+for (const row of drafts) {
+  const { sessionId, ...rest } = JSON.parse(row)
+  bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), JSON.stringify(rest)])
+}
+for (const [id, rows] of bySession) writeFileSync(`fixtures/drafts/${id}.jsonl`, `${rows.join('\n')}\n`)
 console.log(`wrote ${lines.length} fake events to fixtures/events.jsonl`)

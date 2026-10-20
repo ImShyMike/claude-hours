@@ -1,7 +1,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import index from '../public/index.html'
-import { loadEvents } from './load'
+import session from '../public/session.html'
+import { loadEvents, loadTimelines } from './load'
 
 const dir = process.env.ANALYTICS_DIR ?? join(homedir(), '.claude/analytics')
 const port = Number(process.env.PORT ?? 4747)
@@ -13,8 +14,10 @@ const server = Bun.serve({
   development: process.env.NODE_ENV !== 'production',
   routes: {
     '/': index,
+    '/session': session,
     // re-read on every request, the log is small and always growing
     '/api/events': async () => Response.json(await loadEvents(dir)),
+    '/api/session/:id': async req => Response.json(await loadTimelines(dir, req.params.id)),
   },
 })
 

@@ -1,47 +1,14 @@
 import { dayKey, summarize, type Event, type Summary } from '../src/aggregate'
+import { $, MIN, compact, duration, esc, hideTip, load, save, seconds, showTip } from './shared'
 
-const MIN = 60_000
 const REFRESH_MS = 30_000
 
 type Range = 'today' | '7' | '30' | 'all'
-
-const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
-const tooltip = $('tooltip')
-
-const load = <T>(key: string, fallback: T): T => {
-  try {
-    return (localStorage.getItem(key) as T | null) ?? fallback
-  } catch {
-    return fallback
-  }
-}
-const save = (key: string, value: string) => {
-  try {
-    localStorage.setItem(key, value)
-  } catch {}
-}
-
-// ?theme=dark|light pins the theme, handy for screenshots
-const theme = new URLSearchParams(location.search).get('theme')
-if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme
 
 let range = load<Range>('range', '7')
 let idleMin = Number(load('idle', '5'))
 // undefined until the first fetch, so nothing claims the log is empty early
 let events: Event[] | undefined
-
-const esc = (s: string) => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
-
-function duration(ms: number) {
-  const mins = Math.round(ms / MIN)
-  if (ms > 0 && mins < 1) return '<1m'
-  const h = Math.floor(mins / 60)
-  const m = mins % 60
-  return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
-}
-
-const compact = (n: number) =>
-  new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 
 function rangeWindow(r: Range): { from?: number; to?: number; label: string } {
   const midnight = new Date()
@@ -54,19 +21,6 @@ function rangeWindow(r: Range): { from?: number; to?: number; label: string } {
   from.setDate(from.getDate() - (days - 1))
   return { from: from.getTime(), to: now, label: `last ${days} days` }
 }
-
-// --- tooltip -------------------------------------------------------------
-
-function showTip(e: MouseEvent, html: string) {
-  tooltip.innerHTML = html
-  tooltip.hidden = false
-  const { width, height } = tooltip.getBoundingClientRect()
-  const x = Math.min(e.clientX + 12, innerWidth - width - 8)
-  const y = e.clientY - height - 12 < 8 ? e.clientY + 16 : e.clientY - height - 12
-  tooltip.style.left = `${x}px`
-  tooltip.style.top = `${y}px`
-}
-const hideTip = () => (tooltip.hidden = true)
 
 // --- charts --------------------------------------------------------------
 
@@ -180,10 +134,6 @@ function writingTile(w: Summary['writing']) {
   return tile('Writing prompts', duration(w.typingMs), wpm ? `${gaveUp} · ${wpm} wpm` : gaveUp)
 }
 
-function seconds(ms: number) {
-  return ms < 60_000 ? `${Math.round(ms / 1000)}s` : duration(ms)
-}
-
 function writingCard(w: Summary['writing']) {
   const card = $('writing-card')
   card.hidden = !w.measured
@@ -288,7 +238,7 @@ function render() {
     s.sessions
       .slice(0, 25)
       .map(
-        x => `<tr><td>${when(x.start)}</td><td>${esc(x.project)}</td><td class="num">${duration(x.activeMs)}</td><td class="num">${x.prompts}</td><td class="muted"><code>${esc(x.sessionId.slice(0, 8))}</code></td></tr>`,
+        x => `<tr><td>${when(x.start)}</td><td><a href="/session?id=${encodeURIComponent(x.sessionId)}">${esc(x.project)}</a></td><td class="num">${duration(x.activeMs)}</td><td class="num">${x.prompts}</td><td class="muted"><code>${esc(x.sessionId.slice(0, 8))}</code></td></tr>`,
       )
       .join('')
 }

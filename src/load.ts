@@ -3,6 +3,7 @@ import { readdir } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { parseLines, type Event } from './aggregate'
+import { parseTimelines, type Timeline } from './replay'
 
 // events.jsonl now, events-YYYY-MM.jsonl if the mod starts rotating
 const LOG_NAME = /^events.*\.jsonl$/
@@ -40,4 +41,15 @@ export async function loadEvents(dir: string): Promise<Event[]> {
     }
   }
   return events
+}
+
+// Session ids are uuids; anything else never reaches a path
+export const SESSION_ID = /^[\w-]{1,128}$/
+
+// A session's draft timelines, from drafts/<sessionId>.jsonl
+export async function loadTimelines(dir: string, sessionId: string): Promise<Timeline[]> {
+  if (!SESSION_ID.test(sessionId)) return []
+  const file = Bun.file(join(dir, 'drafts', `${sessionId}.jsonl`))
+  if (!(await file.exists())) return []
+  return parseTimelines(await file.text())
 }

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadEvents, projectFor } from './load'
+import { loadEvents, loadTimelines, projectFor } from './load'
 
 const scratch = () => mkdtempSync(join(tmpdir(), 'hackatime-test-'))
 
@@ -33,4 +33,16 @@ test('loadEvents reads every events*.jsonl and skips other files', async () => {
 
 test('loadEvents on a missing dir is empty', async () => {
   expect(await loadEvents(join(scratch(), 'nope'))).toEqual([])
+})
+
+test('loadTimelines reads one session and refuses odd ids', async () => {
+  const dir = scratch()
+  mkdirSync(join(dir, 'drafts'))
+  const row = { draftId: 'd1', outcome: 'sent', startedAt: '', endedAt: '', initialShape: '', initialCursor: 0, steps: [], truncated: false }
+  writeFileSync(join(dir, 'drafts', 'abc-123.jsonl'), `${JSON.stringify(row)}\n`)
+  writeFileSync(join(dir, 'secret.jsonl'), `${JSON.stringify(row)}\n`)
+  expect(await loadTimelines(dir, 'abc-123')).toHaveLength(1)
+  expect(await loadTimelines(dir, 'nope')).toEqual([])
+  expect(await loadTimelines(dir, '../secret')).toEqual([])
+  expect(await loadTimelines(dir, '../drafts/abc-123')).toEqual([])
 })
