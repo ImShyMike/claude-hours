@@ -48,6 +48,7 @@ Prompt text and file contents are never written.
 - The org plugin `cc-plugin-sec-default` sits above mods and skips their `classic.SessionStart` hooks, so there's no `startup`/`resume`/`clear` source on `session_start`. Other `classic.*` events may get skipped too, so prefer engine events.
 - `/clear` gives `session_end` with `reason: clear`, then lines under a new `sessionId` with no `session_start`.
 - `$.session.cwd()` follows a Bash `cd`, but the `cd` call's own `tool` row still lands under the old dir. A hot reload forgets the last cwd, so it writes a `cwd_changed` before its first row even if nothing moved.
+- Saving the hooks module swaps it at the next turn, not mid-turn (seen live 2026-10-20): calls in the turn that saved it still run the old code.
 - This build has no MultiEdit tool. If a later one does, add it to `EDIT_TOOLS`.
 
 ## Dev loop
