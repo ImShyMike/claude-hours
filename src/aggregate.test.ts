@@ -61,6 +61,15 @@ test('subagent turns do not stretch active time', () => {
   expect(s.turns).toBe(1)
 })
 
+test('a /compact between turns counts, a precompute does not', () => {
+  const events = [
+    at('2026-10-19T12:01:00Z', 'turn_end', { durationMs: 1 * MIN }),
+    at('2026-10-19T12:20:00Z', 'compact', { trigger: 'manual', durationMs: 2 * MIN }),
+    at('2026-10-19T12:40:00Z', 'compact', { trigger: 'precompute', durationMs: 2 * MIN }),
+  ]
+  expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(3 * MIN)
+})
+
 test('time splits at local midnight', () => {
   // 23:30 to 00:30 in New York
   const events = [at('2026-10-20T04:30:00Z', 'turn_end', { durationMs: 60 * MIN })]

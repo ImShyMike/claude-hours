@@ -84,9 +84,13 @@ const isMainTurn = (e: Event) => (e.event === 'turn_end' || e.event === 'interru
 
 // How long before its own line an event's activity began: a main-thread
 // turn's whole run, or the typing that went into a prompt (sent or not).
-// Typing uses typingMs, not composeMs, so a tea break mid-draft isn't counted
+// Typing uses typingMs, not composeMs, so a tea break mid-draft isn't counted.
+// A main-thread compaction is time spent waiting too; a precompute runs ahead
+// in the background, so it isn't
+const isWaitedCompact = (e: Event) => e.event === 'compact' && !e.agentId && e.trigger !== 'precompute'
+
 function leadMs(e: Event) {
-  if (isMainTurn(e)) return Number(e.durationMs) || 0
+  if (isMainTurn(e) || isWaitedCompact(e)) return Number(e.durationMs) || 0
   if (e.event === 'prompt' || e.event === 'draft_abandoned') return Number(e.typingMs) || 0
   return 0
 }

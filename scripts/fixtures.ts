@@ -124,7 +124,7 @@ for (let back = DAYS; back >= 0; back--) {
       const draftId = `demo-${lines.length}`
       if (typed) {
         drafts.push(JSON.stringify({
-          sessionId, v: 2, draftId, outcome: 'sent',
+          sessionId, v: 1, draftId, outcome: 'sent',
           startedAt: new Date(at - typed.durationMs).toISOString(), endedAt: new Date(at).toISOString(),
           initialShape: '', initialCursor: 0, steps: encodeSteps(typed.steps, 0), truncated: false,
         }))
@@ -149,6 +149,13 @@ for (let back = DAYS; back >= 0; back--) {
         if (outcome === 'ok' && (tool === 'Edit' || tool === 'Write')) {
           row('file_changed', { tool, toolUseId, path: `${cwd}/${pick(FILES)}`, via: 'tool' })
         }
+      }
+      // now and then the context fills up mid-turn
+      if (rand() < 0.06) {
+        const durationMs = Math.round(between(20, 90) * 1000)
+        at += durationMs
+        const tokensBefore = Math.round(between(150_000, 190_000))
+        row('compact', { trigger: 'auto', messages: Math.floor(between(80, 400)), outcome: 'compacted', tokensBefore, tokensAfter: Math.round(tokensBefore * 0.12), durationMs })
       }
       at += between(3, 40) * 1000
       const aborted = rand() < 0.07

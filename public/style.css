@@ -390,6 +390,7 @@ button.primary {
 .k-move { background: var(--neutral-2); }
 .k-before, .k-changed { background: var(--neutral); }
 .k-claude { background: var(--neutral-2); }
+.k-compact { background: var(--ink-2); }
 .k-critical { background: var(--critical); }
 
 .chart .lane-label {
@@ -398,6 +399,13 @@ button.primary {
 }
 .chart .span-claude { fill: var(--neutral-2); }
 .chart .span-tool { fill: var(--neutral); }
+/* sits on top of a turn, so a surface ring keeps the two apart */
+.chart .span-compact {
+  fill: var(--ink-2);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+.chart .span-compact.background { fill-opacity: 0.45; }
 .chart .span-you { fill: var(--typed); }
 .chart .span-you.abandoned {
   fill: transparent;

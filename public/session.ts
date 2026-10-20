@@ -12,7 +12,7 @@ import {
   type Step,
   type Timeline,
 } from '../src/replay'
-import { $, MIN, clockTime, duration, esc, hideTip, load, save, seconds, showTip } from './shared'
+import { $, MIN, clockTime, compact, duration, esc, hideTip, load, save, seconds, showTip } from './shared'
 
 const sessionId = new URLSearchParams(location.search).get('id') ?? ''
 
@@ -61,6 +61,7 @@ const TICKS_MS = [10_000, 30_000, MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 
 function drawLanes() {
   const el = $('lanes')
   const turns = events.filter(e => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId)
+  const compacts = events.filter(e => e.event === 'compact')
   const starts = new Map<string, Event>()
   const tools: { start: number; end: number; e: Event }[] = []
   for (const e of events) {
@@ -75,6 +76,7 @@ function drawLanes() {
     ...events.map(time),
     ...drafts.map(d => d.start),
     ...turns.map(t => time(t) - num(t.durationMs)),
+    ...compacts.map(c => time(c) - num(c.durationMs)),
   ]
   const t0 = Math.min(...all)
   const t1 = Math.max(...events.map(time), ...drafts.map(d => d.end))
@@ -127,6 +129,16 @@ function drawLanes() {
   for (const t of tools) {
     const tip = `<strong>${esc(String(t.e.tool))}</strong>${seconds(t.end - t.start)} · ${esc(String(t.e.outcome ?? ''))}`
     svg += bar('span-tool', t.start, t.end, 2, tipAttr(tip))
+  }
+  // over the Claude lane, since an auto compaction lands mid-turn
+  for (const c of compacts) {
+    const end = time(c)
+    const before = num(c.tokensBefore)
+    const after = num(c.tokensAfter)
+    const sizes = before ? `<br>${compact(before)} → ${after ? compact(after) : '?'} tokens` : ''
+    const who = c.agentId ? ', a subagent' : ''
+    const tip = `<strong>Compaction (${esc(String(c.trigger))}${who})</strong>${seconds(num(c.durationMs))}, ${esc(String(c.outcome))}${sizes}`
+    svg += bar(`span-compact${c.agentId || c.trigger === 'precompute' ? ' background' : ''}`, end - num(c.durationMs), end, 1, tipAttr(tip))
   }
 
   el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Session timeline">${svg}</svg>`
@@ -429,6 +441,7 @@ async function init() {
     ['k-typed', 'writing a prompt'],
     ['k-typed hollow', 'abandoned draft'],
     ['k-claude', 'Claude working'],
+    ['k-compact', 'compacting'],
     ['k-before', 'tool call'],
     ['k-critical', 'interrupt'],
   ])
