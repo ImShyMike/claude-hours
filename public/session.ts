@@ -31,6 +31,17 @@ let drafts: Draft[] = []
 let selected: Draft | undefined
 let zoom = Number(load('zoom', '1'))
 
+// the mod's own thresholds: a gap this long is a pause, and one this long a
+// break that stops counting as typing time
+const PAUSE_MS = 2_000
+const BREAK_MS = 30_000
+
+// a pause shows the surface through blue stripes, tighter for a short pause
+// and wider for a break, so both read as "not typing" inside the bar
+const hatch = (id: string, gap: number) =>
+  `<pattern id="${id}" width="${gap}" height="${gap}" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="hatch-bg" width="${gap}" height="${gap}"/><line class="hatch-line" x1="0" y1="0" x2="0" y2="${gap}"/></pattern>`
+const PAUSE_PATTERNS = `<defs>${hatch('hatch-pause', 4)}${hatch('hatch-break', 8)}</defs>`
+
 const time = (e: Event) => Date.parse(e.ts)
 const num = (v: unknown) => (typeof v === 'number' ? v : 0)
 
@@ -117,6 +128,16 @@ function drawLanes() {
     const when = d.line.midTurn ? '<br>sent while Claude was working' : ''
     const tip = `<strong>${d.outcome === 'sent' ? 'Prompt sent' : 'Draft abandoned'}</strong>${clockTime(d.start)}, ${seconds(d.end - d.start)} writing${when}${d.timeline ? '<br>click to replay' : ''}`
     svg += bar(cls, d.start, d.end, 0, `data-draft="${i}" ${tipAttr(tip)}`)
+    if (!d.timeline) return
+    // the pauses, hatched over the bar (denser for a break long enough to
+    // stop counting as typing), each with its own tooltip
+    const origin = Date.parse(d.timeline.startedAt)
+    for (const p of pausesOf(d.timeline, PAUSE_MS)) {
+      const start = origin + p.from
+      const kind = p.to - p.from >= BREAK_MS ? 'break' : 'pause'
+      const pauseTip = `<strong>${kind === 'break' ? 'Break' : 'Pause'}</strong>${seconds(p.to - p.from)}, from ${clockTime(start)}${kind === 'break' ? '<br>not counted as typing time' : ''}`
+      svg += `<rect class="pause-mark ${kind}" x="${x(start)}" y="${laneY(0) + 5}" width="${Math.max(2, x(origin + p.to) - x(start))}" height="${LANE - 12}" data-draft="${i}" ${tipAttr(pauseTip)}/>`
+    }
   })
   for (const t of turns) {
     const end = time(t)
@@ -150,7 +171,7 @@ function drawLanes() {
     svg += bar(`span-compact${c.agentId || c.trigger === 'precompute' ? ' background' : ''}`, end - num(c.durationMs), end, 1, tipAttr(tip))
   }
 
-  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Session timeline">${svg}</svg>`
+  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Session timeline">${PAUSE_PATTERNS}${svg}</svg>`
   el.querySelectorAll<SVGElement>('[data-tip]').forEach(node => {
     node.addEventListener('mousemove', e => showTip(e, tips[Number(node.dataset.tip)]!))
     node.addEventListener('mouseleave', hideTip)
@@ -449,6 +470,7 @@ async function init() {
   legend($('lanes-legend'), [
     ['k-typed', 'writing a prompt'],
     ['k-typed hollow', 'abandoned draft'],
+    ['k-pause', 'paused while writing'],
     ['k-claude', 'Claude working'],
     ['k-compact', 'compacting'],
     ['k-before', 'tool call'],
