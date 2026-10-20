@@ -1,4 +1,4 @@
-import type { Event } from '../src/aggregate'
+import { turnPieces, waitsOf, type Event } from '../src/aggregate'
 import {
   apply,
   countGroups,
@@ -141,10 +141,20 @@ function drawLanes() {
       svg += `<rect class="pause-mark ${kind}" x="${x(start)}" y="${laneY(0) + 5}" width="${Math.max(2, x(origin + p.to) - x(start))}" height="${LANE - 12}" data-draft="${i}" ${tipAttr(pauseTip)}/>`
     }
   })
+  // a question or plan waiting on the person is their time: it goes on the
+  // You lane, and the turn around it is drawn in pieces on either side
+  const waits = waitsOf(events)
+  for (const w of waits) {
+    const what = w.kind === 'question' ? `Answering ${esc(w.tool)}` : `Permission for ${esc(w.tool) || 'a tool'}`
+    const tip = `<strong>${what}</strong>${seconds(w.to - w.from)}, until ${clockTime(w.to)}<br>not counted as Claude working`
+    svg += bar('span-you answer', w.from, w.to, 0, tipAttr(tip))
+  }
   for (const t of turns) {
     const end = time(t)
-    const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}, ended ${clockTime(end)}`
-    svg += bar('span-claude', end - num(t.durationMs), end, 1, tipAttr(tip))
+    const pieces = turnPieces(end, num(t.durationMs), waits)
+    const waited = end - pieces[0]![0] - num(t.durationMs)
+    const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}${waited ? ` working, ${seconds(waited)} waiting on you` : ''}, ended ${clockTime(end)}`
+    for (const [s, e] of pieces) svg += bar('span-claude', s, e, 1, tipAttr(tip))
     if (t.event === 'interrupt') {
       svg += `<line class="interrupt" x1="${x(end)}" x2="${x(end)}" y1="${laneY(0) + 2}" y2="${laneY(2)}"/>`
       const running = Array.isArray(t.toolsRunning) && t.toolsRunning.length ? `<br>stopped ${esc(t.toolsRunning.join(', '))} mid-run` : ''
@@ -474,6 +484,7 @@ async function init() {
     ['k-typed', 'writing a prompt'],
     ['k-typed hollow', 'abandoned draft'],
     ['k-pause', 'paused while writing'],
+    ['k-typed faded', 'answering Claude'],
     ['k-claude', 'Claude working'],
     ['k-compact', 'compacting'],
     ['k-before', 'tool call'],

@@ -19,7 +19,7 @@ export type Options = {
   idleCapMs: number
 }
 
-type Interval = [start: number, end: number]
+export type Interval = [start: number, end: number]
 
 export type Summary = {
   totalMs: number
@@ -98,6 +98,50 @@ function leadMs(e: Event) {
   return 0
 }
 
+// Waiting on the person isn't Claude working, and the engine already leaves it
+// out of a turn's durationMs: a main-thread question or plan to approve (its
+// whole call), and a permission dialog (hook-analytics puts those on the turn
+// row as `waits`: [ms before the turn's end it opened, ms open, tool]). So a
+// turn with one in it began earlier than end - durationMs, and the wait is a
+// gap like any other: the idle cap decides it
+const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
+const isQuestion = (e: Event) => e.event === 'tool' && !e.agentId && QUESTION_TOOLS.has(String(e.tool))
+
+export type Wait = { from: number; to: number; tool: string; kind: 'question' | 'permission' }
+
+export function waitsOf(events: Event[]): Wait[] {
+  const waits: Wait[] = []
+  for (const e of events) {
+    if (isQuestion(e)) waits.push({ from: time(e) - (Number(e.durationMs) || 0), to: time(e), tool: String(e.tool), kind: 'question' })
+    if (!isMainTurn(e) || !Array.isArray(e.waits)) continue
+    for (const w of e.waits) {
+      if (!Array.isArray(w) || typeof w[0] !== 'number' || typeof w[1] !== 'number') continue
+      const from = time(e) - w[0]
+      waits.push({ from, to: from + w[1], tool: String(w[2] ?? ''), kind: 'permission' })
+    }
+  }
+  return waits
+}
+
+// The stretches a turn of workMs ending at `end` worked in: back from its end,
+// stepping over the waits, until workMs is used up
+export function turnPieces(end: number, workMs: number, waits: Wait[]): Interval[] {
+  const pieces: Interval[] = []
+  let at = end
+  let left = workMs
+  for (const { from, to } of [...waits].sort((a, b) => b.to - a.to)) {
+    if (to > end || from >= at) continue
+    if (to < at) {
+      if (at - to >= left) break
+      pieces.push([to, at])
+      left -= at - to
+    }
+    at = from
+  }
+  if (left > 0 || !pieces.length) pieces.push([at - left, at])
+  return pieces.reverse()
+}
+
 // YYYY-MM-DD in local time
 export function dayKey(ms: number) {
   const d = new Date(ms)
@@ -115,12 +159,14 @@ function nextHour(ms: number) {
 }
 
 // Each event is a moment of activity and each main-thread turn is a span, so a
-// long Bash call or a long think counts in full. Moments and spans closer than
-// idleCapMs merge; anything further apart is idle and doesn't count.
+// long Bash call or a long think counts in full, around any wait on the person.
+// Moments and spans closer than idleCapMs merge; anything further apart is
+// idle and doesn't count.
 export function activeIntervals(events: Event[], idleCapMs: number): Interval[] {
-  const raw: Interval[] = events.map(e => {
+  const waits = waitsOf(events)
+  const raw: Interval[] = events.flatMap(e => {
     const end = time(e)
-    return [end - leadMs(e), end]
+    return isMainTurn(e) ? turnPieces(end, leadMs(e), waits) : [[end - leadMs(e), end] as Interval]
   })
   raw.sort((a, b) => a[0] - b[0])
   const merged: Interval[] = []

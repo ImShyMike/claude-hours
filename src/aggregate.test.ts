@@ -32,6 +32,54 @@ test('a long turn counts in full, idle gaps past the cap do not', () => {
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(41 * MIN)
 })
 
+test('a turn that asked the person something works around the wait, judged like any gap', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    // 2 min of work, a 10 min wait on an answer, 3 more min of work; the
+    // engine's durationMs leaves the wait out
+    at('2026-10-19T12:12:00Z', 'tool', { tool: 'AskUserQuestion', durationMs: 10 * MIN }),
+    at('2026-10-19T12:15:00Z', 'turn_end', { durationMs: 5 * MIN }),
+  ]
+  expect(activeIntervals(events, 5 * MIN)).toEqual([
+    [Date.parse('2026-10-19T12:00:00Z'), Date.parse('2026-10-19T12:02:00Z')],
+    [Date.parse('2026-10-19T12:12:00Z'), Date.parse('2026-10-19T12:15:00Z')],
+  ])
+  expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(5 * MIN)
+  // a wait under the cap still counts, like the gap before a next prompt
+  expect(summarize(events, { idleCapMs: 15 * MIN }).totalMs).toBe(15 * MIN)
+})
+
+test("a permission dialog on the turn row is stepped over the same way", () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    // 2 min of work, a dialog up 10 min, 3 more min; waits says when it opened
+    at('2026-10-19T12:15:00Z', 'turn_end', { durationMs: 5 * MIN, waits: [[13 * MIN, 10 * MIN, 'Bash']] }),
+  ]
+  expect(activeIntervals(events, 5 * MIN)).toEqual([
+    [Date.parse('2026-10-19T12:00:00Z'), Date.parse('2026-10-19T12:02:00Z')],
+    [Date.parse('2026-10-19T12:12:00Z'), Date.parse('2026-10-19T12:15:00Z')],
+  ])
+})
+
+test('a wait before the turn began is not stepped over', () => {
+  const events = [
+    at('2026-10-19T12:10:00Z', 'tool', { tool: 'AskUserQuestion', durationMs: 5 * MIN }),
+    at('2026-10-19T12:20:00Z', 'turn_end', { durationMs: 3 * MIN }),
+  ]
+  expect(activeIntervals(events, 1 * MIN)).toEqual([
+    [Date.parse('2026-10-19T12:10:00Z'), Date.parse('2026-10-19T12:10:00Z')],
+    [Date.parse('2026-10-19T12:17:00Z'), Date.parse('2026-10-19T12:20:00Z')],
+  ])
+})
+
+test('a subagent asking does not move the main turn', () => {
+  const events = [
+    at('2026-10-19T12:12:00Z', 'tool', { tool: 'AskUserQuestion', durationMs: 10 * MIN, agentId: 'a1' }),
+    at('2026-10-19T12:15:00Z', 'turn_end', { durationMs: 5 * MIN }),
+  ]
+  expect(summarize(events, { idleCapMs: 1 * MIN }).totalMs).toBe(5 * MIN)
+})
+
 test('short idle gaps are bridged', () => {
   const events = [at('2026-10-19T12:00:00Z', 'tool'), at('2026-10-19T12:04:00Z', 'tool')]
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(4 * MIN)

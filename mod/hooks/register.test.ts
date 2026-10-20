@@ -569,6 +569,49 @@ test('an interrupt records how much answer had shown and the tools cut off', asy
   expect(JSON.stringify(lines)).not.toContain('lemme')
 })
 
+test('a permission dialog inside a turn is logged as a wait on its turn row', async ($, on) => {
+  const { lines, tick } = setup(on)
+  on('turn.start', () => ({ turnId: 't1' }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.check', () => ({ decision: 'ask' }))
+  // the engine: the check asks, the dialog stays up 20 s, the command runs 5 s
+  on('tool.call', async (_, e) => {
+    await $.tool.check({ tool: e.tool, input: {}, tool_use_id: e.tool_use_id })
+    tick(25_000)
+    return { result: {} }
+  })
+
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  tick(2_000)
+  await $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 'tu1' } as never)
+  tick(3_000)
+  // 30 s on the clock, 10 s of it the engine counts as the turn
+  await $.turn.complete({ answer: '', durationMs: 10_000, turnId: 't1', reason: 'answer', isAborted: false })
+
+  expect(lines.find(l => l.event === 'turn_end')!.waits).toEqual([[28_000, 20_000, 'Bash']])
+})
+
+test('a turn with no dialog, or only a question, logs no waits', async ($, on) => {
+  const { lines, tick } = setup(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.check', () => ({ decision: 'ask' }))
+  on('tool.call', async (_, e) => {
+    await $.tool.check({ tool: e.tool, input: {}, tool_use_id: e.tool_use_id })
+    tick(40_000)
+    return { result: {} }
+  })
+
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [], tool_use_id: 'tu1' } as never)
+  await $.turn.complete({ answer: '', durationMs: 0, turnId: 't1', reason: 'answer', isAborted: false })
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  tick(4_000)
+  await $.turn.complete({ answer: '', durationMs: 4_000, turnId: 't2', reason: 'answer', isAborted: false })
+
+  expect(lines.filter(l => l.event === 'turn_end').map(l => l.waits)).toEqual([undefined, undefined])
+})
+
 test("an MCP tool's file_path argument is never logged", async ($, on) => {
   const { lines } = setup(on)
   on('tool.call', () => ({ result: {} }))

@@ -135,7 +135,7 @@ format. The full field list is in the mod's `TODO.md`; the short version:
 | `session_start` / `session_end` | a session opens or exits |
 | `prompt` | a prompt is sent: word and char counts, who sent it (`origin`), `midTurn` if Claude was still working, and for a typed one the draft stats (typing time, fixes, rewrites, pauses, `draftId`) |
 | `draft_abandoned` | a typed draft was cleared, undone, deleted or left at exit without being sent |
-| `turn_end` / `interrupt` | a turn finished, or was stopped with Esc (`answerChars` and `toolsRunning` say what got cut off) |
+| `turn_end` / `interrupt` | a turn finished, or was stopped with Esc (`answerChars` and `toolsRunning` say what got cut off); `waits` lists its permission dialogs as `[ms before the end it opened, ms open, tool]` |
 | `compact` | a compaction finished: trigger, tokens before and after, how long it took |
 | `tool` | a tool call finished, with outcome and duration (its row is written at the end, so it began `durationMs` earlier) |
 | `file_changed` | a file edited by a tool, or changed during a Bash call |
@@ -238,6 +238,13 @@ the next session start resend it all (the hub skips what it already has).
   the middle.
 - Moments and spans closer together than the **idle cap** (2 to 15 min, picked
   on the page) merge into active time. Longer gaps are idle.
+- Waiting on you isn't Claude working: a main-thread `AskUserQuestion` or
+  `ExitPlanMode` call, or a permission dialog (the turn's `waits`). Claude
+  Code already leaves these out of the turn's `durationMs`, so a turn with one
+  in it is laid out back from its end, stepping over the wait. The wait is
+  then a gap like the one before your next prompt: under the idle cap it
+  still counts, over it it's idle. The session timeline shows it on the You
+  lane.
 - Subagent turns don't add time, because they overlap the main thread. Their
   tokens still count.
 - A main-thread compaction is a span of its `durationMs` too, so a `/compact`

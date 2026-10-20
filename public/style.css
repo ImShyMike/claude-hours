@@ -403,6 +403,7 @@ button.primary {
   background: transparent !important;
   box-shadow: inset 0 0 0 2px var(--typed);
 }
+.swatch.faded { opacity: 0.45; }
 .k-typed { background: var(--typed); }
 .k-deleted { background: var(--deleted); }
 .k-pasted { background: var(--pasted); }
@@ -429,6 +430,8 @@ button.primary {
   stroke: var(--typed);
   stroke-width: 2;
 }
+/* answering Claude: the person's time, but not typing a prompt */
+.chart .span-you.answer { fill-opacity: 0.45; }
 .chart .hatch-bg { fill: var(--surface); }
 .chart .hatch-line {
   stroke: var(--typed);

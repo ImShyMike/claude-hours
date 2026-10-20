@@ -191,6 +191,25 @@ let abandoned: Emptied[] = []
 const openTurns = new Set<string>()
 const runningTools = new Map<string, string>()
 
+// Waits on the person inside a main-loop turn. The engine leaves them out of
+// the turn's durationMs, so its clock time minus durationMs is what they took.
+// A question or plan approval waits for its whole call; a permission dialog
+// opens when the check answers `ask` and closes some time before the call
+// ends, so the left-out time is what tells how long it stayed open
+const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
+const askedAt = new Map<string, number>()
+let turnClock: { turnId: string; startedMs: number; questionsMs: number; asked: { tool: string; from: number; to: number }[] } | undefined
+
+// [ms before the turn's end it opened, ms open, tool] per dialog. Several in
+// one turn share the left-out time by how long each call ran past its ask
+function dialogWaits(clock: NonNullable<typeof turnClock>, endMs: number, durationMs: number) {
+  const dialogsMs = endMs - clock.startedMs - durationMs - clock.questionsMs
+  const askedMs = clock.asked.reduce((ms, a) => ms + a.to - a.from, 0)
+  if (dialogsMs < 500 || !askedMs) return undefined
+  const share = Math.min(1, dialogsMs / askedMs)
+  return clock.asked.map(a => [endMs - a.from, Math.round((a.to - a.from) * share), a.tool])
+}
+
 let home: Promise<string> | undefined
 let queue: Promise<void> = Promise.resolve()
 // the session file being written: its start, and the cwd its rows are under.
@@ -750,14 +769,20 @@ export const register: Register = on => {
     return changed
   }).catch(($, e, next) => next(e))
 
-  on('turn.start', async (_$, e, next) => {
-    if (e.agentId === undefined) openTurns.add(e.turnId)
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      openTurns.add(e.turnId)
+      turnClock = { turnId: e.turnId, startedMs: await $.clock.now(), questionsMs: 0, asked: [] }
+    }
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     const main = e.agentId === undefined
     if (main) openTurns.delete(e.turnId)
+    const clock = main && turnClock?.turnId === e.turnId ? turnClock : undefined
+    if (clock) turnClock = undefined
+    const waits = clock ? dialogWaits(clock, await $.clock.now(), e.durationMs) : undefined
     const aborted = e.reason === 'aborted'
     // what an Esc cut short: how much of the answer had shown (a count, never
     // the text) and any tools still running
@@ -768,6 +793,7 @@ export const register: Register = on => {
       agentId: e.agentId,
       reason: e.reason,
       durationMs: e.durationMs,
+      waits,
       usage: e.usage,
       ...cut,
     })
@@ -810,7 +836,14 @@ export const register: Register = on => {
       return result
     } finally {
       runningTools.delete(e.tool_use_id)
-      const durationMs = (await $.clock.now()) - startedMs
+      const endedMs = await $.clock.now()
+      const durationMs = endedMs - startedMs
+      const asked = askedAt.get(e.tool_use_id)
+      askedAt.delete(e.tool_use_id)
+      if (e.agentId === undefined && turnClock) {
+        if (QUESTION_TOOLS.has(tool)) turnClock.questionsMs += durationMs
+        else if (asked !== undefined) turnClock.asked.push({ tool, from: asked, to: endedMs })
+      }
       const [cwd, dir] = await Promise.all([$.session.cwd(), homeDir($)])
       const rules = await fileRules($, dir)
       const keep = (path: string | undefined) => (path && allowed(rules, path, cwd, dir) ? path : undefined)
@@ -829,5 +862,14 @@ export const register: Register = on => {
       }
       await logAll($, entries)
     }
+  }).catch(($, e, next) => next(e))
+
+  // when a main-loop call goes to a permission dialog (the verdict is passed
+  // on untouched). In auto mode an ask may settle with no dialog, which the
+  // turn's left-out time then shows as none
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    if (verdict.decision === 'ask' && e.tool_use_id && e.agentId === undefined) askedAt.set(e.tool_use_id, await $.clock.now())
+    return verdict
   }).catch(($, e, next) => next(e))
 }
