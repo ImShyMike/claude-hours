@@ -130,6 +130,9 @@ function columns(el: HTMLElement, data: Column[], labelEvery = 1) {
   })
 }
 
+// mcp__helium-devtools__new_page reads better as "helium-devtools · new_page"
+const toolName = (tool: string) => tool.replace(/^mcp__(.+?)__(.+)$/, '$1 · $2')
+
 type BarItem = { name: string; value: number; amount: string; tip: string }
 
 function barList(el: HTMLElement, items: BarItem[], limit = 10) {
@@ -180,7 +183,7 @@ function render() {
 
   const totalTurns = s.turns + s.interrupts
   $('tiles').innerHTML = [
-    tile('Prompts', compact(s.prompts.count), s.prompts.count ? `avg ${Math.round(s.prompts.avgWords)} words` : ''),
+    tile('Prompts', compact(s.prompts.count), s.prompts.count ? `avg ${Math.round(s.prompts.avgWords)} word${Math.round(s.prompts.avgWords) === 1 ? '' : 's'}` : ''),
     tile('Turns', compact(s.turns), ''),
     tile('Interrupts', compact(s.interrupts), totalTurns ? `${Math.round((s.interrupts / totalTurns) * 100)}% of turns` : ''),
     tile('Output tokens', compact(s.tokens.output), s.tokens.cacheRead ? `${compact(s.tokens.cacheRead)} cache reads` : ''),
@@ -239,10 +242,10 @@ function render() {
   barList(
     $('tools'),
     s.tools.map(t => ({
-      name: t.tool,
+      name: toolName(t.tool),
       value: t.calls,
       amount: compact(t.calls),
-      tip: `<strong>${esc(t.tool)}</strong>${t.calls} calls · avg ${t.avgMs < 1000 ? `${Math.round(t.avgMs)}ms` : `${(t.avgMs / 1000).toFixed(1)}s`}<br>${t.errors} errors · ${t.denied} denied`,
+      tip: `<strong>${esc(toolName(t.tool))}</strong>${t.calls} calls · avg ${t.avgMs < 1000 ? `${Math.round(t.avgMs)}ms` : `${(t.avgMs / 1000).toFixed(1)}s`}<br>${t.errors} errors · ${t.denied} denied`,
     })),
     12,
   )

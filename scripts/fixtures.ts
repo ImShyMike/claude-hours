@@ -33,7 +33,7 @@ for (let back = DAYS; back >= 0; back--) {
     const prompts = Math.floor(between(2, 14))
     for (let p = 0; p < prompts; p++) {
       const words = Math.floor(between(3, 80))
-      row('prompt', { words, chars: words * 6, origin: rand() < 0.9 ? 'composer' : 'queued' })
+      row('prompt', { words, chars: words * 6, origin: rand() < 0.9 ? 'composer' : 'task-notification' })
       const turnStart = at
       const calls = Math.floor(between(0, 9))
       for (let c = 0; c < calls; c++) {

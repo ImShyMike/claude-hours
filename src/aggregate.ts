@@ -54,6 +54,11 @@ export function languageOf(path: string) {
   return LANGUAGES[name.slice(dot + 1).toLowerCase()] ?? 'Other'
 }
 
+// prompt origins that are a person: Enter at the terminal (typed or queued),
+// Remote Control, or `claude -p`. Notifications, peers and schedules are
+// still activity, but they aren't prompts anyone wrote
+const HUMAN_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
+
 const time = (e: Event) => Date.parse(e.ts)
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')
 // subagent turns overlap the main thread's, so only main-thread turns make spans
@@ -185,6 +190,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
 
     switch (e.event) {
       case 'prompt':
+        if (e.isMeta || (typeof e.origin === 'string' && !HUMAN_ORIGINS.has(e.origin))) break
         promptCount++
         s.prompts++
         words += Number(e.words) || 0
@@ -194,8 +200,8 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         break
       case 'turn_end':
       case 'interrupt': {
-        if (e.event === 'interrupt') interrupts++
-        else if (!e.agentId) turns++
+        // one Esc can abort a subagent's turn and the main one, so count the main
+        if (!e.agentId) e.event === 'interrupt' ? interrupts++ : turns++
         const u = e.usage as Record<string, number> | undefined
         if (u) {
           tokens.input += u.input_tokens || 0

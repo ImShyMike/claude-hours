@@ -120,13 +120,18 @@ test('counts prompts, interrupts, tokens, tools and languages', () => {
   const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40, model: 'x' }
   const events = [
     at('2026-10-19T12:00:00Z', 'prompt', { words: 4, chars: 20, origin: 'composer' }),
-    at('2026-10-19T12:00:30Z', 'prompt', { words: 2, chars: 10, origin: 'queued' }),
+    at('2026-10-19T12:00:30Z', 'prompt', { words: 2, chars: 10, origin: 'bridge' }),
+    // not written by a person, so not counted as prompts
+    at('2026-10-19T12:00:40Z', 'prompt', { words: 50, chars: 300, origin: 'task-notification' }),
+    at('2026-10-19T12:00:45Z', 'prompt', { words: 50, chars: 300, origin: 'composer', isMeta: true }),
     at('2026-10-19T12:01:00Z', 'tool_end', { tool: 'Bash', outcome: 'ok', durationMs: 100 }),
     at('2026-10-19T12:01:10Z', 'tool_end', { tool: 'Bash', outcome: 'error', durationMs: 300 }),
     at('2026-10-19T12:01:20Z', 'tool_end', { tool: 'Edit', outcome: 'denied', durationMs: 5 }),
     at('2026-10-19T12:01:30Z', 'file_changed', { path: '/code/terra/a.ts', via: 'tool' }),
     at('2026-10-19T12:01:31Z', 'file_changed', { path: '/code/terra/Makefile', via: 'bash-window' }),
     at('2026-10-19T12:02:00Z', 'interrupt', { durationMs: 1000, usage }),
+    // the same Esc aborting a subagent doesn't count twice
+    at('2026-10-19T12:02:00Z', 'interrupt', { durationMs: 500, agentId: 'sub' }),
     at('2026-10-19T12:03:00Z', 'turn_end', { durationMs: 1000, usage, agentId: 'sub' }),
   ]
   const s = summarize(events, { idleCapMs: 5 * MIN })
