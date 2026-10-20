@@ -70,12 +70,13 @@ Running Claude Code inside WSL works like Linux.
 4. **Run the dashboard.** Install [Bun](https://bun.sh), then in this repo:
 
    ```sh
+   bun install     # Chart.js, for the overview's charts
    bun run dev     # http://127.0.0.1:4747, reads ~/.claude/analytics
    bun run demo    # generates fake events into fixtures/ and serves those
    bun run test
    ```
 
-   No dependencies, just Bun. The server only binds to `127.0.0.1`, since
+   The server only binds to `127.0.0.1`, since
    the events contain local paths. Set `ANALYTICS_DIR` and `PORT` to
    override the defaults. Add `?theme=dark` or `?theme=light` to the URL to
    pin the theme.

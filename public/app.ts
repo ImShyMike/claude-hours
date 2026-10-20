@@ -20,6 +20,7 @@ import {
   type Palette,
   type Range,
 } from './shared'
+import { calendar, stackedColumns, type Cell, type Series } from './charts'
 
 const REFRESH_MS = 30_000
 
@@ -29,87 +30,6 @@ let idleMin = Number(load('idle', '5'))
 let events: Event[] | undefined
 
 // --- charts --------------------------------------------------------------
-
-// clean duration ticks: the smallest step that keeps it to about four lines
-const STEPS_MIN = [1, 2, 5, 10, 15, 30, 60, 120, 180, 240, 360, 480, 720, 1440]
-function niceStep(maxMs: number) {
-  const maxMin = maxMs / MIN
-  return (STEPS_MIN.find(step => maxMin / step <= 4) ?? 1440) * MIN
-}
-
-const tickLabel = (ms: number) => (ms >= 60 * MIN ? `${ms / (60 * MIN)}h` : `${ms / MIN}m`)
-
-type Column = { label: string; segments: { color: string; value: number }[]; tip: string }
-
-// Columns from a single baseline, each stacked by project bottom up: thin
-// bars, a 2px surface gap between segments, a 4px rounded top, hairline grid,
-// and a hit target the full width of each band.
-const GAP = 2
-function columns(el: HTMLElement, data: Column[], labelEvery = 1) {
-  // drawn at the measured size so text never scales with the viewBox
-  const width = Math.max(el.clientWidth, 200)
-  const height = 200
-  const pad = { top: 8, right: 4, bottom: 22, left: 40 }
-  const plotW = width - pad.left - pad.right
-  const plotH = height - pad.top - pad.bottom
-  const total = (d: Column) => d.segments.reduce((sum, seg) => sum + seg.value, 0)
-  const max = Math.max(...data.map(total), 0)
-  const step = niceStep(max || MIN)
-  const top = Math.max(step, Math.ceil(max / step) * step)
-  const y = (v: number) => pad.top + plotH - (v / top) * plotH
-  const band = plotW / Math.max(data.length, 1)
-  const barW = Math.max(2, Math.min(24, band * 0.6))
-
-  let svg = ''
-  for (let v = 0; v <= top; v += step) {
-    svg += `<line class="${v === 0 ? 'baseline' : 'gridline'}" x1="${pad.left}" x2="${width - pad.right}" y1="${y(v)}" y2="${y(v)}"/>`
-    svg += `<text x="${pad.left - 6}" y="${y(v) + 4}" text-anchor="end">${tickLabel(v)}</text>`
-  }
-  data.forEach((d, i) => {
-    const cx = pad.left + band * i + band / 2
-    if (i % labelEvery === 0) svg += `<text x="${cx}" y="${height - 6}" text-anchor="middle">${esc(d.label)}</text>`
-    svg += `<rect class="hit" data-i="${i}" x="${cx - band / 2}" y="${pad.top}" width="${band}" height="${plotH}"/>`
-    const x0 = cx - barW / 2
-    const x1 = cx + barW / 2
-    // segments too thin to see after the gap fold into the one above them
-    const segs = d.segments.filter(seg => seg.value > 0)
-    let base = y(0)
-    let carried = 0
-    let bar = ''
-    segs.forEach((seg, k) => {
-      const h = y(0) - y(seg.value + carried)
-      const last = k === segs.length - 1
-      if (!last && h < GAP + 1) {
-        carried += seg.value
-        return
-      }
-      carried = 0
-      const yt = base - h
-      if (last) {
-        const r = Math.min(4, h, barW / 2)
-        bar += `<path fill="${seg.color}" d="M${x0},${base} V${yt + r} Q${x0},${yt} ${x0 + r},${yt} H${x1 - r} Q${x1},${yt} ${x1},${yt + r} V${base} Z"/>`
-      } else {
-        bar += `<rect fill="${seg.color}" x="${x0}" y="${yt + GAP}" width="${barW}" height="${h - GAP}"/>`
-      }
-      base = yt
-    })
-    if (bar) svg += `<g class="bar" data-i="${i}">${bar}</g>`
-  })
-  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img">${svg}</svg>`
-
-  el.querySelectorAll<SVGRectElement>('.hit').forEach(hit => {
-    const i = Number(hit.dataset.i)
-    const bar = el.querySelector(`.bar[data-i="${i}"]`)
-    hit.addEventListener('mousemove', e => {
-      bar?.classList.add('hover')
-      showTip(e, data[i]!.tip)
-    })
-    hit.addEventListener('mouseleave', () => {
-      bar?.classList.remove('hover')
-      hideTip()
-    })
-  })
-}
 
 // mcp__helium-devtools__new_page reads better as "helium-devtools · new_page"
 const toolName = (tool: string) => tool.replace(/^mcp__(.+?)__(.+)$/, '$1 · $2')
@@ -181,17 +101,27 @@ function writingCard(w: Summary['writing']) {
   ].join('')
 }
 
-// a day's or hour's split as stacked segments, palette order bottom up, and
-// the same split as tooltip lines, most time first
+// a day's or hour's split grouped by palette slot, and the same split as
+// tooltip lines, most time first
+function grouped(colors: Palette, split: Record<string, number>) {
+  const out = new Map<string, number>()
+  for (const [project, ms] of Object.entries(split)) out.set(colors.group(project), (out.get(colors.group(project)) ?? 0) + ms)
+  return out
+}
 function stack(colors: Palette, split: Record<string, number>) {
-  const grouped = new Map<string, number>()
-  for (const [project, ms] of Object.entries(split)) grouped.set(colors.group(project), (grouped.get(colors.group(project)) ?? 0) + ms)
-  const segments = colors.order.filter(p => grouped.has(p)).map(p => ({ color: colors.color(p), value: grouped.get(p)! }))
-  const lines = [...grouped]
+  const lines = [...grouped(colors, split)]
     .sort((a, b) => b[1] - a[1])
     .map(([p, ms]) => `<span class="tip-row"><span class="swatch" style="background:${colors.color(p)}"></span>${esc(p)} <span class="muted">${duration(ms)}</span></span>`)
     .join('')
-  return { segments, lines }
+  return { lines }
+}
+
+// the columns' splits as one series per project, palette order bottom up
+function series(colors: Palette, splits: Record<string, number>[]): Series[] {
+  const groups = splits.map(split => grouped(colors, split))
+  return colors.order
+    .filter(p => groups.some(g => g.has(p)))
+    .map(p => ({ name: p, color: colors.color(p), values: groups.map(g => g.get(p) ?? 0) }))
 }
 
 // how dark a day's cell is: fixed steps, so a cell means the same thing
@@ -203,47 +133,37 @@ const heatLevel = (ms: number) => (ms <= 0 ? 0 : 1 + HEAT_STEPS.filter(step => m
 // first), as many weeks as fit, ending this week
 function heatmap(el: HTMLElement, colors: Palette, days: Summary['days']) {
   const byDay = new Map(days.map(d => [d.day, d]))
-  const left = 28
-  const top = 16
-  const width = Math.max(el.clientWidth, 200)
-  // a year of weeks when they fit at 10px or more, cells growing to fill
-  // the width; a narrow screen shows fewer weeks instead
-  const weeks = Math.max(8, Math.min(53, Math.floor((width - left) / 13)))
-  const step = Math.min(22, (width - left) / weeks)
-  const cell = step - 3
+  // a year of weeks when they fit at 10px or more; a narrow screen shows
+  // fewer weeks instead
+  const weeks = Math.max(8, Math.min(53, Math.floor((Math.max(el.clientWidth, 200) - 30) / 13)))
   const start = new Date()
   start.setHours(12, 0, 0, 0)
   start.setDate(start.getDate() - ((start.getDay() + 6) % 7) - (weeks - 1) * 7)
   const today = dayKey(Date.now())
-  let svg = ''
-  ;['Mon', 'Wed', 'Fri'].forEach((name, k) => (svg += `<text x="0" y="${top + step * k * 2 + cell - 2}">${name}</text>`))
+  const months: string[] = []
+  const cells: Cell[] = []
   let lastMonth = -1
-  const cells: { day: string; x: number; y: number }[] = []
-  for (let wk = 0; wk < weeks; wk++) {
+  for (let week = 0; week < weeks; week++) {
     for (let dow = 0; dow < 7; dow++) {
       const d = new Date(start)
-      d.setDate(start.getDate() + wk * 7 + dow)
+      d.setDate(start.getDate() + week * 7 + dow)
       const day = dayKey(d.getTime())
       if (day > today) continue
       if (dow === 0 && d.getMonth() !== lastMonth) {
-        if (lastMonth !== -1 || d.getDate() <= 7) svg += `<text x="${left + wk * step}" y="${top - 5}">${d.toLocaleDateString(undefined, { month: 'short' })}</text>`
+        if (lastMonth !== -1 || d.getDate() <= 7) months[week] = d.toLocaleDateString(undefined, { month: 'short' })
         lastMonth = d.getMonth()
       }
-      const x = left + wk * step
-      const y = top + dow * step
-      cells.push({ day, x, y })
-      svg += `<rect class="heat${day === today ? ' today' : ''}" data-day="${day}" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="2" style="fill:var(--heat-${heatLevel(byDay.get(day)?.ms ?? 0)})"/>`
+      const x = byDay.get(day)
+      cells.push({
+        week,
+        dow,
+        level: heatLevel(x?.ms ?? 0),
+        today: day === today,
+        tip: `<strong>${longDay(day)}</strong>${x?.ms ? `${duration(x.ms)} active${stack(colors, x.projects).lines}` : 'nothing logged'}`,
+      })
     }
   }
-  const height = top + step * 7
-  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Active time per day">${svg}</svg>`
-  el.querySelectorAll<SVGRectElement>('.heat').forEach(rect => {
-    const d = byDay.get(rect.dataset.day!)
-    rect.addEventListener('mousemove', e =>
-      showTip(e, `<strong>${longDay(rect.dataset.day!)}</strong>${d?.ms ? `${duration(d.ms)} active${stack(colors, d.projects).lines}` : 'nothing logged'}`),
-    )
-    rect.addEventListener('mouseleave', hideTip)
-  })
+  calendar(el, weeks, months, cells)
   const labels = ['under 30m', '30m to 1h', '1h to 2h', '2h to 4h', '4h or more']
   $('heat-legend').innerHTML =
     '<span>less</span>' +
@@ -287,27 +207,23 @@ function render() {
   daysCard.hidden = s.days.length <= 1
   if (!daysCard.hidden) {
     const today = dayKey(Date.now())
-    columns(
+    stackedColumns(
       $('days'),
-      s.days.map(d => {
-        const { segments, lines } = stack(colors, d.projects)
-        return {
-          label: d.day === today ? 'today' : shortDay(d.day),
-          segments,
-          tip: `<strong>${longDay(d.day)}</strong>${duration(d.ms)} active · ${d.prompts} prompt${d.prompts === 1 ? '' : 's'}${lines}`,
-        }
-      }),
-      Math.ceil(s.days.length / 8),
+      s.days.map(d => (d.day === today ? 'today' : shortDay(d.day))),
+      series(colors, s.days.map(d => d.projects)),
+      s.days.map(
+        d => `<strong>${longDay(d.day)}</strong>${duration(d.ms)} active · ${d.prompts} prompt${d.prompts === 1 ? '' : 's'}${stack(colors, d.projects).lines}`,
+      ),
+      8,
     )
   }
 
-  columns(
+  stackedColumns(
     $('hours'),
-    s.hours.map((ms, h) => {
-      const { segments, lines } = stack(colors, s.hourProjects[h]!)
-      return { label: hourLabel(h), segments, tip: `<strong>${hourLabel(h)}</strong>${duration(ms)} active${lines}` }
-    }),
-    3,
+    s.hours.map((_, h) => hourLabel(h)),
+    series(colors, s.hourProjects),
+    s.hours.map((ms, h) => `<strong>${hourLabel(h)}</strong>${duration(ms)} active${stack(colors, s.hourProjects[h]!).lines}`),
+    8,
   )
 
   barList(
@@ -413,6 +329,9 @@ new ResizeObserver(([entry]) => {
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(render, 50)
 }).observe(document.querySelector('main')!)
+
+// the charts read their colors when drawn, so a theme flip redraws them
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render)
 
 // On the hub: whose dashboard this is, a picker for an admin, and log out
 document.querySelectorAll<HTMLAnchorElement>('nav a').forEach(a => (a.href = withPerson(a.getAttribute('href')!)))

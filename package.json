@@ -7,5 +7,9 @@
     "start": "NODE_ENV=production bun src/server.ts",
     "demo": "bun scripts/fixtures.ts && ANALYTICS_DIR=fixtures bun --hot src/server.ts",
     "test": "TZ=America/New_York bun test src scripts"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "chartjs-chart-matrix": "^3.1.0"
   }
 }

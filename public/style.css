@@ -313,6 +313,11 @@ select {
   padding: 32px 0;
 }
 
+.chart:has(> canvas) {
+  position: relative;
+  overflow: hidden;
+}
+
 .chart svg {
   display: block;
   overflow: visible;
@@ -336,15 +341,8 @@ select {
   stroke: var(--axis);
   stroke-width: 1;
 }
-.chart .bar {
-  fill: var(--series);
-}
 .chart .hit {
   fill: transparent;
-}
-.chart .hit:hover + .bar,
-.chart .bar.hover {
-  opacity: 0.8;
 }
 
 .bars {
@@ -472,11 +470,6 @@ td.chips {
   min-width: 140px;
 }
 
-.chart .heat:hover,
-.chart .heat.today {
-  stroke: var(--ink);
-  stroke-width: 1;
-}
 .heat-legend {
   display: flex;
   align-items: center;
