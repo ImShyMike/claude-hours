@@ -4,7 +4,8 @@
 // when the mod couldn't read the header back), and no cwd: a cwd_changed row
 // moves it, and `file` / `path` under it are relative to it. The header and
 // a cwd_changed carry `root` too when the cwd is below its repo's root (or in
-// a worktree of it), the repo's own folder. A field at its
+// a worktree of it), the repo's own folder, and `rootName` when the repo's
+// origin remote names it something other than its folder. A field at its
 // usual value (DEFAULTS) is left out, and so is a typed draft's 0 counter.
 // draft_abandoned says when it ended, as epoch ms; it began composeMs before.
 //
@@ -36,6 +37,7 @@ export function decodeSession(text: string, sessionId: string): Event[] {
   let start: number | undefined
   let cwd = ''
   let root: string | undefined
+  let rootName: string | undefined
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     let row: Record<string, unknown>
@@ -51,6 +53,7 @@ export function decodeSession(text: string, sessionId: string): Event[] {
       start = row.start
       if (typeof row.cwd === 'string') cwd = row.cwd
       root = typeof row.root === 'string' ? row.root : undefined
+      rootName = typeof row.rootName === 'string' ? row.rootName : undefined
       continue
     }
     const at = typeof row.at === 'number' ? row.at : start !== undefined && typeof row.t === 'number' ? start + row.t : undefined
@@ -58,6 +61,7 @@ export function decodeSession(text: string, sessionId: string): Event[] {
     if (typeof row.cwd === 'string') {
       cwd = row.cwd
       root = typeof row.root === 'string' ? row.root : undefined
+      rootName = typeof row.rootName === 'string' ? row.rootName : undefined
     }
     const { t: _t, at: _at, ...rest } = row
     const zeros = typeof row.typingMs === 'number' ? Object.fromEntries(DRAFT_COUNTERS.map(key => [key, 0])) : {}
@@ -68,6 +72,7 @@ export function decodeSession(text: string, sessionId: string): Event[] {
     }
     for (const key of PATH_FIELDS) if (key in e) e[key] = absolute(e[key], cwd)
     if (root) e.root = root
+    if (rootName) e.rootName = rootName
     events.push(e)
   }
   return events
@@ -81,7 +86,10 @@ export function encodeSession(events: Event[]): string {
   if (!events.length) return ''
   const start = Date.parse(events[0]!.ts)
   let cwd = events[0]!.cwd
-  const rooted = (e: Event) => (typeof e.root === 'string' ? { root: e.root } : {})
+  const rooted = (e: Event) => ({
+    ...(typeof e.root === 'string' ? { root: e.root } : {}),
+    ...(typeof e.rootName === 'string' ? { rootName: e.rootName } : {}),
+  })
   const rows: Record<string, unknown>[] = [{ v: FORMAT, event: 'session', start, cwd, ...rooted(events[0]!) }]
   for (const e of events) {
     const t = Date.parse(e.ts) - start
@@ -89,7 +97,7 @@ export function encodeSession(events: Event[]): string {
       cwd = e.cwd
       rows.push({ t, event: 'cwd_changed', cwd, ...rooted(e) })
     }
-    const { ts: _ts, sessionId: _s, cwd: _c, root: _r, project: _p, workProject: _w, event, ...rest } = e
+    const { ts: _ts, sessionId: _s, cwd: _c, root: _r, rootName: _rn, project: _p, workProject: _w, event, ...rest } = e
     if (event === 'cwd_changed') continue
     const row: Record<string, unknown> = { t, event }
     const usual = DEFAULTS[event] ?? {}

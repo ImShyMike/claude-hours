@@ -106,6 +106,24 @@ test('a folder with no repo to be found under the session start is part of its p
   expect((await loadEvents(dir)).map(e => e.project)).toEqual(['hours', 'hours', 'elsewhere'])
 })
 
+test('a repo the mod named by its origin goes by that name', async () => {
+  const dir = scratch()
+  mkdirSync(join(dir, 'events'))
+  const rows = [
+    { v: 1, event: 'session', start: Date.parse('2026-10-19T12:00:00Z'), cwd: '/u/terra' },
+    { t: 1, event: 'tool', tool: 'Bash', repo: '/tmp/scratch/ts-clone', repoName: 'telescreen' },
+    { t: 2, event: 'cwd_changed', cwd: '/tmp/scratch/ts-clone/server', root: '/tmp/scratch/ts-clone', rootName: 'telescreen' },
+  ]
+  writeFileSync(join(dir, 'events', 'abc-1.jsonl'), rows.map(r => `${JSON.stringify(r)}\n`).join(''))
+  for (const remote of [false, true]) {
+    const events = await loadEvents(dir, { remote })
+    expect(events.map(e => [e.project, e.workProject])).toEqual([
+      ['terra', 'telescreen'],
+      ['telescreen', undefined],
+    ])
+  }
+})
+
 test('loadEvents on a missing dir is empty', async () => {
   expect(await loadEvents(join(scratch(), 'nope'))).toEqual([])
 })

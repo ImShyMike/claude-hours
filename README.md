@@ -117,7 +117,10 @@ ms>,"cwd":...}`. After it, every row has `event` and `t`, ms since that start,
 and nothing repeated: the file name is the session, a `cwd_changed` row says
 when the cwd moves, and paths under the cwd are written relative to it. The
 header and `cwd_changed` also carry `root`, the repo's folder, when the cwd
-is below it (or in a worktree of it), so the hub can name the project. A
+is below it (or in a worktree of it), so the hub can name the project, and
+`rootName` when the repo's origin remote calls it something else than its
+folder (a clone into a scratch folder, say). A `tool` row's `repo` gets a
+`repoName` the same way. A
 field at its usual value is left out too (`outcome: "ok"`, `via: "tool"`,
 `origin: "composer"` and friends, plus a typed draft's counters at 0), and
 the decoder puts them back.
@@ -271,7 +274,8 @@ the next session start resend it all (the hub skips what it already has).
 - A project is named after the nearest git root above the event's `cwd` (or
   above the file or `repo` it worked in), so subdirectories don't split a
   repo. A worktree (like a subagent's under `.claude/worktrees`) counts as
-  the repo it was made from. `~/.claude` shows up as `~/.claude`. On a hub,
+  the repo it was made from, and a repo whose origin remote has another name
+  than its folder goes by the remote's. `~/.claude` shows up as `~/.claude`. On a hub,
   where the paths are someone else's disk, it's the folder of the `root` the
   mod sent, else the cwd's own folder, and only the mod's `repo` moves time.
   A folder with no repo to be found (renamed away since, say) under where the

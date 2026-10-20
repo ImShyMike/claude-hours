@@ -63,6 +63,7 @@ export function projectFor(cwd: string, home = homedir()) {
 // thread's time there (aggregate's projectSpans)
 function workProject(e: Event, remote: boolean) {
   if (e.event !== 'tool' && e.event !== 'file_changed') return undefined
+  if (typeof e.repoName === 'string') return e.repoName
   if (typeof e.repo === 'string') return remote ? repoName(e.repo) : repoFor(e.repo)
   const path = typeof e.file === 'string' ? e.file : typeof e.path === 'string' ? e.path : undefined
   if (path) return path.startsWith(`${e.cwd}/`) ? e.project : remote ? undefined : repoFor(dirname(path))
@@ -107,7 +108,8 @@ export async function loadEvents(dir: string, { remote = false } = {}): Promise<
       for (const e of decodeSession(text, sessionId)) {
         if (e.cwd) {
           const root = typeof e.root === 'string' ? e.root : undefined
-          const known = remote ? root && repoName(root) : repoFor(e.cwd)
+          // the name the mod read off the repo's origin beats any folder's
+          const known = typeof e.rootName === 'string' ? e.rootName : remote ? root && repoName(root) : repoFor(e.cwd)
           if (!known && base && e.cwd.startsWith(`${base.cwd}/`)) e.project = base.project
           else e.project = known || (remote ? repoName(e.cwd) : projectFor(e.cwd))
           base ??= { cwd: root ?? e.cwd, project: e.project }

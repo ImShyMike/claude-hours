@@ -39,7 +39,13 @@ const setup = (on: On) => {
     ['/proj/.claude/worktrees/w1', '/proj/.claude/worktrees/w1', '/proj/.git'],
     ['/proj', '/proj'],
     ['/code/hub', '/code/hub'],
+    ['/tmp/scratch/ts-clone', '/tmp/scratch/ts-clone'],
   ]
+  // origin urls by repo, for `git -C <root> remote get-url origin`
+  const remotes: Record<string, string> = {
+    '/proj': 'git@github.com:me/proj.git',
+    '/tmp/scratch/ts-clone': 'https://github.com/hackclub/telescreen.git',
+  }
   let sweepOutput = ''
   let cwd = '/proj'
   let now = 1_790_000_000_000
@@ -77,6 +83,10 @@ const setup = (on: On) => {
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
     let exitCode = 0
+    if (cmd === 'git' && e.argv[3] === 'remote') {
+      stdout = remotes[e.argv[2]!] ?? ''
+      return { value: { exitCode: stdout ? 0 : 2, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (cmd === 'git') {
       const dir = e.argv[2]!
       const found = gitRoots.find(([root]) => dir === root || dir.startsWith(`${root}/`))
@@ -651,6 +661,24 @@ test('a cwd below its repo root, or in a worktree, says which repo it is', async
     ['/proj', undefined],
   ])
   expect(lines.find(l => l.event === 'tool')!.repo).toBeUndefined()
+})
+
+test('a repo cloned under another folder name goes by its origin', async ($, on) => {
+  const { lines, cd } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.tool.call({ tool: 'Bash', command: 'cd /tmp/scratch/ts-clone && bun test' })
+  cd('/tmp/scratch/ts-clone/server')
+  await $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false })
+
+  const tool = lines.find(l => l.event === 'tool')!
+  expect([tool.repo, tool.repoName]).toEqual(['/tmp/scratch/ts-clone', 'telescreen'])
+  const moved = lines.find(l => l.event === 'cwd_changed')!
+  expect([moved.root, moved.rootName]).toEqual(['/tmp/scratch/ts-clone', 'telescreen'])
+  // the origin matching the folder adds nothing
+  await $.tool.call({ tool: 'Bash', command: 'cd /proj && ls' })
+  expect(lines.filter(l => l.event === 'tool')[1]!.repoName).toBeUndefined()
 })
 
 test('a call working in another repo logs that repo, never the command', async ($, on) => {

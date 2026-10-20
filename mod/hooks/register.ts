@@ -288,7 +288,8 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields][], 
       // the repo the cwd is in, beside it when that's a folder further up, so
       // a reader that can't see this disk (the hub) still names the project
       const root = await rootOf($, cwd)
-      const rooted = root && root !== cwd ? { root } : {}
+      const rootName = root ? await remoteName($, root) : undefined
+      const rooted = { ...(root && root !== cwd ? { root } : {}), ...(rootName ? { rootName } : {}) }
       const h = await headFor($, path, sessionId, now, cwd, rows, rooted)
       const stamp = h.start === undefined ? { at: now } : { t: now - h.start }
       if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd, ...rooted })
@@ -341,6 +342,25 @@ function rootOf($: EngineInterface, dir: string) {
     roots.set(dir, root)
   }
   return root
+}
+
+// A repo's name from its origin remote (git@github.com:hackclub/telescreen.git
+// is telescreen), when that's not its folder's name: a clone into a scratch
+// folder, say. Undefined when it has no origin or the names agree
+const names = new Map<string, Promise<string | undefined>>()
+function remoteName($: EngineInterface, root: string) {
+  let name = names.get(root)
+  if (!name) {
+    name = $.process
+      .run(['git', '-C', root, 'remote', 'get-url', 'origin'], { timeoutMs: 2_000 })
+      .then(r => {
+        const from = r.exitCode === 0 ? /([^/:]+?)(?:\.git)?\/?$/.exec(r.stdout.trim())?.[1] : undefined
+        return from && from !== root.split('/').pop() ? from : undefined
+      })
+      .catch(() => undefined)
+    names.set(root, name)
+  }
+  return name
 }
 
 // `..` and `.` folded away, relative paths taken from base
@@ -900,8 +920,9 @@ export const register: Register = on => {
       const file = keep(typeof named === 'string' ? named : undefined)
       const where = file ? resolvePath(cwd, file).replace(/\/[^/]*$/, '') : e.tool === 'Bash' ? cdTarget(e.command, cwd, dir) : undefined
       const repo = keep(await workRepo($, where, cwd))
+      const repoName = repo ? await remoteName($, repo) : undefined
       const entries: [string, Fields][] = [
-        ['tool', { ...ids, file, repo, commandChars: e.tool === 'Bash' ? e.command.length : undefined, outcome, durationMs }],
+        ['tool', { ...ids, file, repo, repoName, commandChars: e.tool === 'Bash' ? e.command.length : undefined, outcome, durationMs }],
       ]
       if (outcome === 'ok' && EDIT_TOOLS.has(tool)) {
         if (file) entries.push(['file_changed', { ...ids, path: file, via: 'tool' }])
