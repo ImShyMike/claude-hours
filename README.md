@@ -8,6 +8,27 @@ It reads the JSONL log that the `hook-analytics` mod writes to
 
 There are two halves: the mod, which records, and this repo, which shows.
 
+### Quick install (macOS and Linux)
+
+Needs [Bun](https://bun.sh) and Claude Code. From this repo:
+
+```sh
+./install.sh                     # load the mod in every Claude Code session
+./install.sh uninstall           # stop loading it, keep your data
+./install.sh uninstall --purge   # stop loading it and delete ~/.claude/analytics
+```
+
+The installer only edits `env.CLAUDE_CODE_PLUGIN_DIRS` in
+`~/.claude/settings.json` (keeping a `settings.json.bak`), adding this repo's
+`mod/` folder and dropping any other copy of hook-analytics so nothing gets
+logged twice. Other plugin folders listed there are left alone. Then start
+a new Claude Code session and run `bun run dev` to see the dashboard.
+
+Windows isn't supported yet: the mod writes with `tee`, `mkdir` and `find`.
+Running Claude Code inside WSL works like Linux.
+
+### By hand
+
 1. **Get the mod.** `hook-analytics` is a Claude Code plugin made of a
    function-hooks module, in this repo's `mod/` folder:
 

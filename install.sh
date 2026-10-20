@@ -1,0 +1,51 @@
+#!/usr/bin/env sh
+# Installs (or removes) claude-hackatime on macOS and Linux.
+#
+#   ./install.sh               load the mod in every Claude Code session
+#   ./install.sh uninstall     stop loading it (your data stays)
+#   ./install.sh uninstall --purge   ...and delete ~/.claude/analytics too
+set -eu
+
+repo=$(cd "$(dirname "$0")" && pwd)
+mod="$repo/mod"
+data="$HOME/.claude/analytics"
+
+case "$(uname -s)" in
+  Darwin | Linux) ;;
+  *) echo "only macOS and Linux for now (on Windows, run Claude Code in WSL)" >&2; exit 1 ;;
+esac
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "claude-hackatime needs Bun. Install it with:" >&2
+  echo "  curl -fsSL https://bun.sh/install | bash" >&2
+  echo "then open a new terminal and run this again." >&2
+  exit 1
+fi
+
+case "${1:-install}" in
+  install)
+    echo "installing claude-hackatime"
+    mkdir -p "$HOME/.claude"
+    bun "$repo/scripts/settings.ts" add "$mod"
+    command -v claude >/dev/null 2>&1 || echo "  (Claude Code isn't on your PATH yet, the mod loads once it is)"
+    echo
+    echo "done! start a new Claude Code session and it starts recording to $data"
+    echo "see your stats with:  cd $repo && bun run dev   (then open http://127.0.0.1:4747)"
+    ;;
+  uninstall)
+    echo "uninstalling claude-hackatime"
+    bun "$repo/scripts/settings.ts" remove "$mod"
+    if [ "${2:-}" = "--purge" ]; then
+      rm -rf "$data"
+      echo "  deleted $data"
+    else
+      echo "  your data is still in $data (run with --purge to delete it)"
+    fi
+    echo
+    echo "done! new Claude Code sessions won't load the mod. sessions already open keep it until they exit"
+    ;;
+  *)
+    echo "usage: ./install.sh [install | uninstall [--purge]]" >&2
+    exit 2
+    ;;
+esac
