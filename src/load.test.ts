@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { loadEvents, loadTimelines, projectFor } from './load'
+import { loadEvents, loadTimelines, projectFor, repoName } from './load'
 
 const scratch = () => mkdtempSync(join(tmpdir(), 'claude-hours-test-'))
 
@@ -13,6 +13,19 @@ test('projectFor names the git root, not the subdir', () => {
   mkdirSync(join(home, 'code/terra/packages/db'), { recursive: true })
   expect(projectFor(join(home, 'code/terra/packages/db'), home)).toBe('terra')
   expect(projectFor(join(home, 'code/loose'), home)).toBe('loose')
+})
+
+test('a worktree is named after the repo it was made from', () => {
+  const home = scratch()
+  const tree = join(home, 'code/terra/.claude/worktrees/agent-1')
+  mkdirSync(join(home, 'code/terra/.git/worktrees/agent-1'), { recursive: true })
+  mkdirSync(join(tree, 'src'), { recursive: true })
+  writeFileSync(join(tree, '.git'), `gitdir: ${join(home, 'code/terra/.git/worktrees/agent-1')}\n`)
+  expect(projectFor(join(tree, 'src'), home)).toBe('terra')
+  // the hub only has the path to go on
+  expect(repoName('/u/code/terra/.claude/worktrees/agent-1/src')).toBe('terra')
+  expect(repoName('/u/.claude/.claude/worktrees/agent-1')).toBe('~/.claude')
+  expect(repoName('/u/code/terra')).toBe('terra')
 })
 
 test('projectFor gives ~/.claude a friendly name', () => {
@@ -62,6 +75,35 @@ test('loadEvents says which repo a tool call really worked in', async () => {
   // on the hub, only what the mod said counts: someone else's disk can't be read
   const remote = await loadEvents(dir, { remote: true })
   expect(remote.map(e => e.workProject)).toEqual(['hub', undefined, undefined, 'terra', 'terra', undefined])
+})
+
+test('on the hub a project is the root the mod sent, else the cwd folder', async () => {
+  const dir = scratch()
+  mkdirSync(join(dir, 'events'))
+  const rows = [
+    { v: 1, event: 'session', start: Date.parse('2026-10-19T12:00:00Z'), cwd: '/u/terra/packages/api', root: '/u/terra' },
+    { t: 1, event: 'prompt' },
+    { t: 2, event: 'cwd_changed', cwd: '/u/terra/.claude/worktrees/agent-1' },
+    { t: 3, event: 'cwd_changed', cwd: '/u/loose/notes' },
+  ]
+  writeFileSync(join(dir, 'events', 'abc-1.jsonl'), rows.map(r => `${JSON.stringify(r)}\n`).join(''))
+  const events = await loadEvents(dir, { remote: true })
+  expect(events.map(e => e.project)).toEqual(['terra', 'terra', 'notes'])
+})
+
+test('a folder with no repo to be found under the session start is part of its project', async () => {
+  const dir = scratch()
+  const code = scratch()
+  mkdirSync(join(dir, 'events'))
+  const rows = [
+    // renamed away since, so nothing on disk says which repo it was
+    { v: 1, event: 'session', start: Date.parse('2026-10-19T12:00:00Z'), cwd: join(code, 'hours') },
+    { t: 0, event: 'prompt' },
+    { t: 1, event: 'cwd_changed', cwd: join(code, 'hours/mod/hooks') },
+    { t: 2, event: 'cwd_changed', cwd: join(code, 'elsewhere') },
+  ]
+  writeFileSync(join(dir, 'events', 'abc-1.jsonl'), rows.map(r => `${JSON.stringify(r)}\n`).join(''))
+  expect((await loadEvents(dir)).map(e => e.project)).toEqual(['hours', 'hours', 'elsewhere'])
 })
 
 test('loadEvents on a missing dir is empty', async () => {

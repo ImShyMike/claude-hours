@@ -256,7 +256,7 @@ const relative = (path: unknown, cwd: string) =>
 
 // The session file's header: written when the file is new, read back after a
 // reload. A file too big to read back gets absolute times instead
-async function headFor($: EngineInterface, path: string, sessionId: string, now: number, cwd: string, rows: Fields[]) {
+async function headFor($: EngineInterface, path: string, sessionId: string, now: number, cwd: string, rows: Fields[], rooted: Fields) {
   if (head?.sessionId === sessionId) return head
   if (await $.fs.exists(path)) {
     const text = await $.fs.read(path).catch(() => '')
@@ -267,7 +267,7 @@ async function headFor($: EngineInterface, path: string, sessionId: string, now:
     } catch {}
     head = { sessionId, start }
   } else {
-    rows.push({ v: FORMAT, event: 'session', start: now, cwd })
+    rows.push({ v: FORMAT, event: 'session', start: now, cwd, ...rooted })
     head = { sessionId, start: now, cwd }
   }
   return head
@@ -285,9 +285,13 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields][], 
       const [now, sessionId, cwd, dir] = await Promise.all([at, session, where, homeDir($)])
       const path = `${dir}/${EVENTS_DIR}/${sessionId}.jsonl`
       const rows: Fields[] = []
-      const h = await headFor($, path, sessionId, now, cwd, rows)
+      // the repo the cwd is in, beside it when that's a folder further up, so
+      // a reader that can't see this disk (the hub) still names the project
+      const root = await rootOf($, cwd)
+      const rooted = root && root !== cwd ? { root } : {}
+      const h = await headFor($, path, sessionId, now, cwd, rows, rooted)
       const stamp = h.start === undefined ? { at: now } : { t: now - h.start }
-      if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd })
+      if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd, ...rooted })
       h.cwd = cwd
       for (const [event, fields] of entries) {
         rows.push({ ...stamp, event, ...compactRow(event, { ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) }) })
@@ -319,14 +323,20 @@ async function filesChangedSince($: EngineInterface, startedMs: number, repo?: s
 
 // Where a call worked when that's another repo than the cwd's: the git root
 // of a file outside the cwd, or of where a Bash command cd's to first
-// (`cd ../hub && make`). Only the root is logged, never the command
+// (`cd ../hub && make`). Only the root is logged, never the command.
+// A worktree (a subagent's under .claude/worktrees, say) is the repo it was
+// made from: its common git dir is that repo's .git
 const roots = new Map<string, Promise<string | undefined>>()
 function rootOf($: EngineInterface, dir: string) {
   let root = roots.get(dir)
   if (!root) {
     root = $.process
-      .run(['git', '-C', dir, 'rev-parse', '--show-toplevel'], { timeoutMs: 2_000 })
-      .then(r => (r.exitCode === 0 && r.stdout.trim()) || undefined)
+      .run(['git', '-C', dir, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir'], { timeoutMs: 2_000 })
+      .then(r => {
+        const [top, common] = r.exitCode === 0 ? r.stdout.trim().split('\n') : []
+        if (!top) return undefined
+        return common?.endsWith('/.git') && common !== `${top}/.git` ? common.slice(0, -'/.git'.length) : top
+      })
       .catch(() => undefined)
     roots.set(dir, root)
   }

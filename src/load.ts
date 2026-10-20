@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -8,6 +8,25 @@ import { decodeSession } from './eventlog'
 import { parseTimelines, type Timeline } from './replay'
 
 const repoCache = new Map<string, string | null>()
+
+// A repo's folder by name, ~/.claude by a friendly one. A worktree (a
+// subagent's under <repo>/.claude/worktrees, say) goes by the repo it was made
+// from, which on the hub, where nothing can be read, its path has to tell
+export function repoName(dir: string) {
+  const main = /^(.+?)\/\.claude\/worktrees\/[^/]+(?:\/|$)/.exec(dir)?.[1] ?? dir
+  return main.endsWith('/.claude') ? '~/.claude' : basename(main) || '/'
+}
+
+// a worktree's .git is a file pointing into its repo's .git/worktrees
+function worktreeOf(at: string) {
+  try {
+    if (!statSync(join(at, '.git')).isFile()) return undefined
+    const gitdir = /^gitdir:\s*(.+)$/m.exec(readFileSync(join(at, '.git'), 'utf8'))?.[1]?.trim()
+    return gitdir && /^(.+)\/\.git\/worktrees\/[^/]+\/?$/.exec(gitdir)?.[1]
+  } catch {
+    return undefined
+  }
+}
 
 // the name of the nearest git root at or above dir (~/.claude gets a friendly
 // name of its own), or undefined when there's none
@@ -21,7 +40,8 @@ export function repoFor(dir: string, home = homedir()) {
       break
     }
     if (existsSync(join(at, '.git'))) {
-      name = basename(at)
+      const main = worktreeOf(at)
+      name = main ? repoName(main) : basename(at)
       break
     }
     if (at === dirname(at) || at === home) break
@@ -43,7 +63,7 @@ export function projectFor(cwd: string, home = homedir()) {
 // thread's time there (aggregate's projectSpans)
 function workProject(e: Event, remote: boolean) {
   if (e.event !== 'tool' && e.event !== 'file_changed') return undefined
-  if (typeof e.repo === 'string') return remote ? basename(e.repo) || '/' : repoFor(e.repo)
+  if (typeof e.repo === 'string') return remote ? repoName(e.repo) : repoFor(e.repo)
   const path = typeof e.file === 'string' ? e.file : typeof e.path === 'string' ? e.path : undefined
   if (path) return path.startsWith(`${e.cwd}/`) ? e.project : remote ? undefined : repoFor(dirname(path))
   return e.tool === 'Bash' ? e.project : undefined
@@ -73,15 +93,25 @@ async function sessionParts(path: string): Promise<string[]> {
 const sessionOf = (name: string) => /^(.+)\.jsonl(\.gz)?$/.exec(name)?.[1]
 
 // every session file in events/, flattened and tagged with its project. On
-// the hub the cwds are someone else's disk, so a project is its last folder
+// the hub the cwds are someone else's disk, so a project is the folder of the
+// repo the mod said the cwd is in, else the cwd's own. Locally the disk says
 export async function loadEvents(dir: string, { remote = false } = {}): Promise<Event[]> {
   const names = await readdir(join(dir, 'events')).catch(() => [])
   const ids = [...new Set(names.map(sessionOf))].filter((id): id is string => !!id && SESSION_ID.test(id)).sort()
   const events: Event[] = []
   for (const sessionId of ids) {
+    // a folder with no repo to be found (gone since, or never said) under
+    // where the session started is part of the session's project
+    let base: { cwd: string; project: string } | undefined
     for (const text of await sessionParts(join(dir, 'events', `${sessionId}.jsonl`))) {
       for (const e of decodeSession(text, sessionId)) {
-        if (e.cwd) e.project = remote ? basename(e.cwd) || '/' : projectFor(e.cwd)
+        if (e.cwd) {
+          const root = typeof e.root === 'string' ? e.root : undefined
+          const known = remote ? root && repoName(root) : repoFor(e.cwd)
+          if (!known && base && e.cwd.startsWith(`${base.cwd}/`)) e.project = base.project
+          else e.project = known || (remote ? repoName(e.cwd) : projectFor(e.cwd))
+          base ??= { cwd: root ?? e.cwd, project: e.project }
+        }
         const work = workProject(e, remote)
         if (work) e.workProject = work
         events.push(e)

@@ -32,8 +32,14 @@ const setup = (on: On) => {
   // what each file holds, so fs.exists / fs.read answer like a disk would
   const files = new Map<string, string>()
   let findOutput = ''
-  // git roots by folder, for `git -C <dir> rev-parse --show-toplevel`
-  const gitRoots: [string, string][] = [['/proj', '/proj'], ['/code/hub', '/code/hub']]
+  // git roots by folder, for `git -C <dir> rev-parse --show-toplevel
+  // --git-common-dir`: [folder, its toplevel, its common dir if not the
+  // toplevel's .git]. Most specific first
+  const gitRoots: [string, string, string?][] = [
+    ['/proj/.claude/worktrees/w1', '/proj/.claude/worktrees/w1', '/proj/.git'],
+    ['/proj', '/proj'],
+    ['/code/hub', '/code/hub'],
+  ]
   let sweepOutput = ''
   let cwd = '/proj'
   let now = 1_790_000_000_000
@@ -73,7 +79,8 @@ const setup = (on: On) => {
     let exitCode = 0
     if (cmd === 'git') {
       const dir = e.argv[2]!
-      stdout = gitRoots.find(([root]) => dir === root || dir.startsWith(`${root}/`))?.[1] ?? ''
+      const found = gitRoots.find(([root]) => dir === root || dir.startsWith(`${root}/`))
+      stdout = found ? `${found[1]}\n${found[2] ?? `${found[1]}/.git`}\n` : ''
       exitCode = stdout ? 0 : 128
     }
     return { value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -618,6 +625,32 @@ test('a turn with no dialog, or only a question, logs no waits', async ($, on) =
   await $.turn.complete({ answer: '', durationMs: 4_000, turnId: 't2', reason: 'answer', isAborted: false })
 
   expect(lines.filter(l => l.event === 'turn_end').map(l => l.waits)).toEqual([undefined, undefined])
+})
+
+test('a cwd below its repo root, or in a worktree, says which repo it is', async ($, on) => {
+  const { lines, cd } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => ({ text: '' }))
+  const turn = { answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false } as const
+
+  await $.turn.complete(turn)
+  cd('/proj/packages/api')
+  await $.turn.complete(turn)
+  cd('/proj/.claude/worktrees/w1')
+  await $.turn.complete(turn)
+  cd('/nowhere')
+  await $.turn.complete(turn)
+  // a worktree of the cwd's own repo isn't another repo
+  cd('/proj')
+  await $.tool.call({ tool: 'Edit', file_path: '/proj/.claude/worktrees/w1/a.ts', old_string: 'a', new_string: 'b' })
+
+  expect(lines.filter(l => l.event === 'cwd_changed').map(l => [l.cwd, l.root])).toEqual([
+    ['/proj/packages/api', '/proj'],
+    ['/proj/.claude/worktrees/w1', '/proj'],
+    ['/nowhere', undefined],
+    ['/proj', undefined],
+  ])
+  expect(lines.find(l => l.event === 'tool')!.repo).toBeUndefined()
 })
 
 test('a call working in another repo logs that repo, never the command', async ($, on) => {

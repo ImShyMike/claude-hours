@@ -73,3 +73,15 @@ test('restores left-out defaults, draft zeros and an abandoned draft\'s times', 
   expect(plain).not.toHaveProperty('pauses')
   expect(gone).toMatchObject({ endedAt: '2026-10-19T12:00:05.000Z', startedAt: '2026-10-19T12:00:03.000Z' })
 })
+
+test('a root rides along with its cwd until the next cwd_changed, and back', () => {
+  const text = file(
+    { v: 1, event: 'session', start, cwd: '/code/terra/packages/api', root: '/code/terra' },
+    { t: 0, event: 'prompt' },
+    { t: 1, event: 'cwd_changed', cwd: '/code/vxm' },
+    { t: 2, event: 'prompt' },
+  )
+  const events = decodeSession(text, 's1')
+  expect(events.map(e => e.root)).toEqual(['/code/terra', undefined, undefined])
+  expect(encodeSession(events)).toBe(text)
+})
