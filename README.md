@@ -4,15 +4,109 @@ A local, Hackatime-style dashboard for the time spent coding with Claude Code.
 It reads the JSONL log that the `hook-analytics` mod writes to
 `~/.claude/analytics/events*.jsonl`.
 
-```sh
-bun run dev     # http://127.0.0.1:4747, reads ~/.claude/analytics
-bun run demo    # generates fake events into fixtures/ and serves those
-bun run test
+## Setup
+
+There are two halves: the mod, which records, and this repo, which shows.
+
+1. **Get the mod.** `hook-analytics` is a Claude Code plugin made of a
+   function-hooks module. It lives outside this repo, at
+   `~/.claude/mods/hook-analytics/`:
+
+   ```
+   hook-analytics/
+     .claude-plugin/plugin.json   # name, version, description
+     hooks/register.ts            # every hook; the whole mod
+     hooks/register.test.ts       # tests (claude plugin test)
+     TODO.md                      # what it logs, field by field, and open todos
+   ```
+
+2. **Load it in every session.** Point Claude Code at the folder in
+   `~/.claude/settings.json`:
+
+   ```json
+   { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/hook-analytics" } }
+   ```
+
+   For a one-off try, `claude --plugin-dir ~/.claude/mods/hook-analytics`
+   works too. Start a new session; a `session_start` line in
+   `~/.claude/analytics/events.jsonl` means it's recording. Editing
+   `register.ts` hot-reloads it in running sessions.
+
+3. **Check the mod** (optional, after editing it):
+
+   ```sh
+   cd ~/.claude/mods/hook-analytics
+   claude plugin test        # its tests
+   claude plugin validate .  # the manifest
+   ```
+
+4. **Run the dashboard.** Install [Bun](https://bun.sh), then in this repo:
+
+   ```sh
+   bun run dev     # http://127.0.0.1:4747, reads ~/.claude/analytics
+   bun run demo    # generates fake events into fixtures/ and serves those
+   bun run test
+   ```
+
+   No dependencies, just Bun. The server only binds to `127.0.0.1`, since
+   the events contain local paths. Set `ANALYTICS_DIR` and `PORT` to
+   override the defaults. Add `?theme=dark` or `?theme=light` to the URL to
+   pin the theme.
+
+## Where things live
+
+```
+~/.claude/analytics/
+  events.jsonl                 # one JSON line per event, every session
+  drafts/<sessionId>.jsonl     # draft edit timelines for the replay, one file per session
 ```
 
-No dependencies, just Bun. The server only binds to `127.0.0.1`, since the
-events contain local paths. Set `ANALYTICS_DIR` and `PORT` to override the
-defaults. Add `?theme=dark` or `?theme=light` to the URL to pin the theme.
+- **Nothing here holds prompt text.** Prompts are logged as counts (words,
+  chars, typing time, edits). Draft timelines keep shapes only: where letters,
+  blanks and newlines were, never which letters. An interrupt records how many
+  characters of the answer had shown, not the answer.
+- **It does hold local paths:** every line's `cwd`, plus the files tools
+  touched (`file_changed`). That's why the server stays on localhost.
+- **Nothing leaves the machine.** The mod appends with `tee -a`; the dashboard
+  reads the files on every request and does all the math in the browser.
+- **Nothing is rotated yet.** The log grows forever (it's small, roughly a
+  few hundred bytes per tool call). The reader already globs `events*.jsonl`,
+  so renaming an old file to `events-2026-10.jsonl` keeps it counted.
+- Deleting the files is safe: the next event recreates them. Keep the
+  folders, though; the mod only creates them once per session.
+
+### What gets logged
+
+Every line has `ts`, `sessionId`, `cwd` and `event`. The full field list is
+in the mod's `TODO.md`; the short version:
+
+| event | when |
+| --- | --- |
+| `session_start` / `session_end` | a session opens or exits |
+| `prompt` | a prompt is sent: word and char counts, who sent it (`origin`), `midTurn` if Claude was still working, and for a typed one the draft stats (typing time, fixes, rewrites, pauses, `draftId`) |
+| `draft_abandoned` | a typed draft was cleared, undone, deleted or left at exit without being sent |
+| `turn_end` / `interrupt` | a turn finished, or was stopped with Esc (`answerChars` and `toolsRunning` say what got cut off) |
+| `compact` | a compaction finished: trigger, tokens before and after, how long it took |
+| `tool_start` / `tool_end` | each tool call, with outcome and duration |
+| `file_changed` | a file edited by a tool, or changed during a Bash call |
+| `cwd_changed` | the session's working directory moved |
+
+### How the mod hears things
+
+It's all Claude Code function hooks, each one watching and passing the event
+on unchanged:
+
+- `prompt.edit` fires on every keystroke in the prompt box. The mod keeps the
+  draft in memory (counts and the shape timeline) and writes nothing until
+  the prompt is sent or given up, so typing never waits on disk.
+- `prompt.submit`, `turn.start`, `turn.complete`, `tool.call` and
+  `session.compact` give the prompt, turn, tool and compaction lines.
+  `turn.start` / `turn.complete` also tell it whether a turn is open, which
+  is how `midTurn` and `toolsRunning` work.
+- After a Bash call it runs `find` for files newer than the call's start, so
+  scripts that write files still show up in Languages.
+- A hot reload forgets in-memory state: a half-typed draft, or a turn that's
+  already running.
 
 ## How time is counted
 
@@ -24,6 +118,9 @@ defaults. Add `?theme=dark` or `?theme=light` to the URL to pin the theme.
   on the page) merge into active time. Longer gaps are idle.
 - Subagent turns don't add time, because they overlap the main thread. Their
   tokens still count.
+- A main-thread compaction is a span of its `durationMs` too, so a `/compact`
+  between turns counts as time spent. A `precompute` runs in the background
+  and doesn't.
 - Time is computed separately for each session and project, so a `cd` from
   one repo into another doesn't bridge them.
 - Typing a prompt counts too. hook-analytics times each draft from its first
