@@ -343,6 +343,25 @@ a {
 .hscroll {
   overflow-x: auto;
 }
+.lanes-wrap {
+  position: relative;
+}
+.lane-labels {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--surface);
+  pointer-events: none;
+}
+.lane-labels.scrolled {
+  box-shadow: 6px 0 6px -6px var(--axis);
+}
+.lane-labels span {
+  position: absolute;
+  left: 0;
+  color: var(--ink-2);
+  font-size: 12px;
+}
 .zoom {
   display: flex;
   gap: 4px;
@@ -395,10 +414,6 @@ button.primary {
 .k-pause { background: repeating-linear-gradient(45deg, var(--typed) 0 2px, var(--surface) 2px 4px); }
 .k-midturn { background: repeating-linear-gradient(to bottom, var(--ink-2) 0 3px, transparent 3px 5px); width: 3px; }
 
-.chart .lane-label {
-  fill: var(--ink-2);
-  font-size: 12px;
-}
 .chart .span-claude { fill: var(--neutral-2); }
 .chart .span-tool { fill: var(--neutral); }
 /* sits on top of a turn, so a surface ring keeps the two apart */

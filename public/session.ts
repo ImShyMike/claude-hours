@@ -110,8 +110,17 @@ function drawLanes() {
     const label = new Date(t).toLocaleTimeString(undefined, tick < MIN ? { hour: 'numeric', minute: '2-digit', second: '2-digit' } : { hour: 'numeric', minute: '2-digit' })
     svg += `<text x="${x(t)}" y="12" text-anchor="middle">${label}</text>`
   }
-  lanes.forEach((name, i) => {
-    svg += `<text class="lane-label" x="0" y="${laneY(i) + LANE / 2 + 4}">${name}</text>`
+  // the names sit in a column over the chart, outside the scroller, so they
+  // stay put when a zoomed timeline scrolls sideways
+  const labels = $('lane-labels')
+  // (below the time axis, so its ticks scroll by uncovered)
+  labels.style.top = `${pad.top - 4}px`
+  labels.style.width = `${pad.left - 4}px`
+  labels.style.height = `${height - pad.top + 4}px`
+  labels.innerHTML = lanes
+    .map((name, i) => `<span style="top:${laneY(i) - pad.top + 4}px;height:${LANE}px;line-height:${LANE}px">${name}</span>`)
+    .join('')
+  lanes.forEach((_, i) => {
     svg += `<line class="baseline" x1="${pad.left}" x2="${width - pad.right}" y1="${laneY(i) + LANE - 3}" y2="${laneY(i) + LANE - 3}"/>`
   })
 
@@ -514,6 +523,11 @@ addEventListener('keydown', e => {
     setPlaying(!playing)
   } else if (e.key === 'ArrowLeft') jump(-1)
   else if (e.key === 'ArrowRight') jump(1)
+})
+
+// a soft edge on the label column once the timeline scrolls under it
+$('lanes-scroll').addEventListener('scroll', e => {
+  $('lane-labels').classList.toggle('scrolled', (e.target as HTMLElement).scrollLeft > 0)
 })
 
 let lastWidth = 0
