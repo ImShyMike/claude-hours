@@ -97,8 +97,10 @@ Running Claude Code inside WSL works like Linux.
   characters of the answer had shown, not the answer.
 - **It does hold local paths:** the session's `cwd`, plus the files tools
   touched (`file_changed`). That's why the server stays on localhost.
-- **Nothing leaves the machine.** The mod appends with `tee -a`; the dashboard
-  reads the files on every request and does all the math in the browser.
+- **Nothing leaves the machine unless you set a hub.** The mod appends with
+  `tee -a`; the dashboard reads the files on every request and does all the
+  math in the browser. With a `server` in `config.json`, the session files go
+  to that hub as they are (see Central hub).
 - **It splits itself.** Each session gets its own small file, so there's no
   one log to rotate. Delete old session files to forget them.
 - **Ended sessions are gzipped.** When a session exits, the mod appends its
@@ -176,6 +178,55 @@ on unchanged:
 - A hot reload forgets in-memory state: a half-typed draft, or a turn that's
   already running.
 
+## Central hub
+
+The same server can run as a hub that everyone's mod uploads to, where each
+person logs in and sees their own dashboard (an admin sees anyone's).
+
+```sh
+# on the server: keep data in /srv/hackatime, listen behind your TLS proxy
+HUB_DIR=/srv/hackatime HOST=127.0.0.1 PORT=4747 NODE_ENV=production bun src/server.ts
+
+# a token per person (only its hash is kept; prints their config.json bit)
+HUB_DIR=/srv/hackatime bun scripts/hub-token.ts ada --url https://hub.example
+HUB_DIR=/srv/hackatime bun scripts/hub-token.ts miggy --admin --url https://hub.example
+```
+
+Each person puts the printed bit in `~/.claude/analytics/config.json`
+(`chmod 600` it, the token is a password) next to any `files` rules:
+
+```json
+{ "server": { "url": "https://hub.example", "token": "..." } }
+```
+
+The wire format is the session file itself. Files only ever grow, so the
+mod sends the bytes past what the hub holds:
+
+```
+POST /v1/sessions/<sessionId>/<events|drafts>?offset=<bytes>
+Authorization: Bearer <token>
+
+<whole lines of the file, from that offset>
+```
+
+The hub appends what it doesn't have yet and answers `{"length": <bytes>}`;
+an offset past its end gets `409` with its length, and the mod resends from
+there. So a repeated, interrupted or duplicate send never doubles or tears a
+row. The mod keeps the hub's last answer in `sent/<sessionId>.json`.
+
+- The mod sends after each turn, without waiting for it (a slow or missing
+  hub never holds anything up). The rows written at exit, and anything sent
+  while offline, go up at the next session's start, which sweeps finished
+  sessions it hasn't fully sent.
+- A hub that's down or refusing gets one line in the mod's log per session,
+  then quiet retries.
+- On the hub, each person's uploads are kept in `people/<person>/`, laid out
+  like `~/.claude/analytics`; `tokens.json` maps token hashes to people.
+- Logging in sets an HttpOnly cookie holding the token. Uploads only take the
+  `Authorization` header, so a browser can't be tricked into sending one.
+- What goes up is everything in the session files, cwd and file paths
+  included. Use `files` rules to keep paths out.
+
 ## How time is counted
 
 - Every event is a moment of activity. Every main-thread turn (`turn_end` or
@@ -237,7 +288,9 @@ Languages come from the extensions of `file_changed` paths. Tools come from
 - `src/aggregate.ts`: pure summarizing, shared by the page and the tests
 - `src/replay.ts`: pure draft replay (apply steps, squash pauses), shared too
 - `src/load.ts`: reads every session file in `events/` and tags each event with its project
-- `src/server.ts`: `Bun.serve` with both pages, `/api/events` and `/api/session/:id`
+- `src/server.ts`: `Bun.serve` with both pages, `/api/events` and `/api/session/:id`; with `HUB_DIR`, the hub (login, uploads)
+- `src/hub.ts`: the hub's tokens, uploads and who sees what
+- `scripts/hub-token.ts`: mints a person's token
 - `public/`: the pages (`index.html` + `app.ts`, `session.html` + `session.ts`, shared bits in `shared.ts`); Bun bundles them on the fly
 - `scripts/fixtures.ts`: deterministic fake data for the demo
 - `mod/`: the hook-analytics mod that writes the data (see Setup)

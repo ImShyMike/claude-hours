@@ -49,6 +49,8 @@ Prompt text and file contents are never written.
 - `/clear` gives `session_end` with `reason: clear`, then lines under a new `sessionId` with no `session_start`.
 - `$.session.cwd()` follows a Bash `cd`, but the `cd` call's own `tool` row still lands under the old dir. A hot reload forgets the last cwd, so it writes a `cwd_changed` before its first row even if nothing moved.
 - Saving the hooks module swaps it at the next turn, not mid-turn (seen live 2026-10-20): calls in the turn that saved it still run the old code.
+- Uploads (with `server` in `config.json`) go after each main-loop turn, fire and forget, and at session start a sweep sends finished sessions not fully sent; the exit's own rows wait for that sweep. Seen live 2026-10-20 with `claude -p`: the turn's upload lands even when the process exits right after. Pack moves the file to `.packing` before gzipping so a concurrent read sees fewer bytes, never doubled ones.
+- On the hub, a project is named after the cwd's last folder: the hub can't look for `.git` on someone else's disk, so a session started in a subfolder shows as that subfolder. Sending the project root in the header would fix it.
 - This build has no MultiEdit tool. If a later one does, add it to `EDIT_TOOLS`.
 
 ## Dev loop

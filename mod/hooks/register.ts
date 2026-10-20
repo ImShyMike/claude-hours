@@ -20,8 +20,15 @@ const LOG_DIR = '.claude/analytics'
 const EVENTS_DIR = `${LOG_DIR}/events`
 const DRAFTS_DIR = `${LOG_DIR}/drafts`
 const FORMAT = 1
-// which files get logged, globs in {"files":{"include":[...],"exclude":[...]}}
+// which files get logged, globs in {"files":{"include":[...],"exclude":[...]}},
+// and where to send them, {"server":{"url":...,"token":...}}
 const CONFIG_FILE = `${LOG_DIR}/config.json`
+// how far each session's files have reached the server: sent/<session>.json
+const SENT_DIR = `${LOG_DIR}/sent`
+// one upload's most, cut back to its last whole line
+const CHUNK_BYTES = 512 * 1024
+const UPLOAD_TIMEOUT_MS = 10_000
+const KINDS = ['events', 'drafts'] as const
 
 // a field at this value is left out of its row; readers put it back
 const DEFAULTS: Record<string, Fields> = {
@@ -194,7 +201,7 @@ let head: { sessionId: string; start?: number; cwd?: string } | undefined
 function homeDir($: EngineInterface) {
   return (home ??= $.env.get('HOME').then(async dir => {
     if (!dir) throw new Error('HOME is not set')
-    await $.process.run(['mkdir', '-p', `${dir}/${EVENTS_DIR}`, `${dir}/${DRAFTS_DIR}`])
+    await $.process.run(['mkdir', '-p', `${dir}/${EVENTS_DIR}`, `${dir}/${DRAFTS_DIR}`, `${dir}/${SENT_DIR}`])
     return dir
   }))
 }
@@ -207,13 +214,15 @@ async function append($: EngineInterface, path: string, rows: Fields[]) {
 
 // A finished session's files, gzipped onto <file>.gz. A resumed session
 // appends one more gzip member there, and readers take them as one stream.
-// Runs behind the queue, so every row is in before the file goes
+// Runs behind the queue, so every row is in before the file goes. The file
+// moves aside first, so an upload reading gz-then-plain meanwhile sees less
+// of it for a moment, never the same rows twice
 function packSession($: EngineInterface) {
   queue = queue
     .then(async () => {
       const [sessionId, dir] = await Promise.all([$.session.id(), homeDir($)])
       const files = [`${dir}/${EVENTS_DIR}/${sessionId}.jsonl`, `${dir}/${DRAFTS_DIR}/${sessionId}.jsonl`]
-      const script = 'for f; do [ -f "$f" ] || continue; gzip -c "$f" >> "$f.gz" && rm -f "$f"; done'
+      const script = 'for f; do [ -f "$f" ] || continue; mv "$f" "$f.packing" && gzip -c "$f.packing" >> "$f.gz" && rm -f "$f.packing"; done'
       const { exitCode, stderr } = await $.process.run(['sh', '-c', script, 'sh', ...files], { timeoutMs: 1_000 })
       if (exitCode !== 0) throw new Error(`gzip failed: ${stderr.trim()}`)
       if (head?.sessionId === sessionId) head = undefined
@@ -317,20 +326,161 @@ function globMatches(glob: string, path: string, cwd: string, home: string) {
 }
 
 type FileRules = { include: string[]; exclude: string[] }
+type Server = { url: string; token: string }
 
-// The config's file rules, read fresh for each tool call (it's tiny). A
-// missing file means log everything; a broken one says so and logs everything
-async function fileRules($: EngineInterface, dir: string): Promise<FileRules> {
+// The config, read fresh each time (it's tiny). A missing file means log
+// everything and send nothing; a broken one says so and does the same
+async function readConfig($: EngineInterface, dir: string): Promise<Record<string, unknown>> {
   const path = `${dir}/${CONFIG_FILE}`
-  if (!(await $.fs.exists(path).catch(() => false))) return { include: [], exclude: [] }
+  if (!(await $.fs.exists(path).catch(() => false))) return {}
   try {
-    const files = JSON.parse(String(await $.fs.read(path))).files ?? {}
-    const list = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : [])
-    return { include: list(files.include), exclude: list(files.exclude) }
+    const config = JSON.parse(String(await $.fs.read(path)))
+    return config && typeof config === 'object' ? config : {}
   } catch (err) {
     $.ui.log(`${$.plugin.name}: ignoring ${path}: ${String(err)}`)
-    return { include: [], exclude: [] }
+    return {}
   }
+}
+
+async function fileRules($: EngineInterface, dir: string): Promise<FileRules> {
+  const files = ((await readConfig($, dir)).files ?? {}) as Record<string, unknown>
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : [])
+  return { include: list(files.include), exclude: list(files.exclude) }
+}
+
+async function serverOf($: EngineInterface, dir: string): Promise<Server | undefined> {
+  const server = (await readConfig($, dir)).server as Record<string, unknown> | undefined
+  if (typeof server?.url !== 'string' || typeof server.token !== 'string') return undefined
+  return { url: server.url.replace(/\/+$/, ''), token: server.token }
+}
+
+// Uploads. A session's files are append-only, so the wire format is the file
+// itself: POST the bytes past what the server holds, and it answers its new
+// length. Every send can be repeated safely, and the server is the one that
+// counts (in bytes, never a JS string's length). sent/<session>.json keeps the
+// last length it answered, plus the .gz sizes once a finished session is in.
+//
+// This runs on its own chain, never awaited by a hook: a slow server must not
+// hold up the log or the person.
+type Sent = { events?: number; drafts?: number; gz?: [number, number] }
+
+let syncing: Promise<void> = Promise.resolve()
+let warned = false
+
+function sentPath(dir: string, sessionId: string) {
+  return `${dir}/${SENT_DIR}/${sessionId}.json`
+}
+
+async function readSent($: EngineInterface, dir: string, sessionId: string): Promise<Sent> {
+  const path = sentPath(dir, sessionId)
+  if (!(await $.fs.exists(path).catch(() => false))) return {}
+  try {
+    return JSON.parse(String(await $.fs.read(path))) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+// the session's file as one stream (the .gz's members, then the plain file),
+// from `offset` bytes on, cut back to its last whole line
+async function chunkFrom($: EngineInterface, path: string, offset: number) {
+  const script = '{ [ -f "$1.gz" ] && gzip -dc "$1.gz" 2>/dev/null; [ -f "$1" ] && cat "$1"; } | tail -c +$(($2 + 1)) | head -c $3'
+  const { stdout } = await $.process.run(['sh', '-c', script, 'sh', path, String(offset), String(CHUNK_BYTES)], { timeoutMs: 5_000 })
+  return stdout.slice(0, stdout.lastIndexOf('\n') + 1)
+}
+
+async function post($: EngineInterface, server: Server, url: string, body: string) {
+  const timeout = $.clock.sleep(UPLOAD_TIMEOUT_MS).then(() => {
+    throw new Error(`no answer from ${server.url} in ${UPLOAD_TIMEOUT_MS / 1000}s`)
+  })
+  return Promise.race([
+    $.http.fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/x-ndjson' },
+      body,
+    }),
+    timeout,
+  ])
+}
+
+// Sends one session's files up to their last whole line. True if the server
+// holds all of it
+async function pushSession($: EngineInterface, server: Server, dir: string, sessionId: string, sent: Sent) {
+  let complete = true
+  for (const kind of KINDS) {
+    const path = `${dir}/${LOG_DIR}/${kind}/${sessionId}.jsonl`
+    let drained = false
+    // a 409 moves the offset to the server's, so a few rounds always settle
+    for (let round = 0; round < 8 && !drained; round++) {
+      const offset = sent[kind] ?? 0
+      const body = await chunkFrom($, path, offset)
+      drained = !body
+      if (drained) break
+      const url = `${server.url}/v1/sessions/${encodeURIComponent(sessionId)}/${kind}?offset=${offset}`
+      const res = await post($, server, url, body)
+      const length = Number((JSON.parse(res.text || '{}') as { length?: unknown }).length)
+      if ((res.ok || res.status === 409) && Number.isSafeInteger(length) && length >= 0) {
+        sent[kind] = length
+        await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
+        continue
+      }
+      throw new Error(`upload refused: ${res.status} ${res.text.slice(0, 200)}`)
+    }
+    if (!drained) complete = false
+  }
+  return complete
+}
+
+function warnOnce($: EngineInterface, err: unknown) {
+  if (warned) return
+  warned = true
+  $.ui.log(`${$.plugin.name}: upload paused: ${String(err)}`)
+}
+
+// This session's files, after the writes queued so far. Not awaited
+function syncSession($: EngineInterface) {
+  const written = queue
+  syncing = syncing
+    .then(async () => {
+      await written
+      const [sessionId, dir] = await Promise.all([$.session.id(), homeDir($)])
+      const server = await serverOf($, dir)
+      if (!server) return
+      await pushSession($, server, dir, sessionId, await readSent($, dir, sessionId))
+      warned = false
+    })
+    .catch(err => warnOnce($, err))
+}
+
+// Finished sessions not yet all sent: one that crashed, ran offline or ended
+// after its last upload. Only finished ones (.gz alone, no plain file and no
+// pack under way), since a live session sends its own. A .gz whose size
+// matches what sent/ recorded is already in. Not awaited
+function sweep($: EngineInterface) {
+  syncing = syncing
+    .then(async () => {
+      const dir = await homeDir($)
+      const server = await serverOf($, dir)
+      if (!server) return
+      const list =
+        'cd "$1" || exit 0; for f in events/*.jsonl.gz; do [ -e "$f" ] || continue; id=${f#events/}; id=${id%.jsonl.gz}; ' +
+        'for p in events/$id.jsonl drafts/$id.jsonl events/$id.jsonl.packing drafts/$id.jsonl.packing; do [ -e "$p" ] && continue 2; done; ' +
+        'd=0; [ -f "drafts/$id.jsonl.gz" ] && d=$(wc -c < "drafts/$id.jsonl.gz"); echo "$id $(wc -c < "$f") $d"; done'
+      const { stdout } = await $.process.run(['sh', '-c', list, 'sh', `${dir}/${LOG_DIR}`], { timeoutMs: 5_000 })
+      for (const line of stdout.split('\n')) {
+        const [sessionId, e, d] = line.trim().split(/\s+/)
+        if (!sessionId || !/^[\w-]{1,128}$/.test(sessionId)) continue
+        const gz: [number, number] = [Number(e), Number(d)]
+        const sent = await readSent($, dir, sessionId)
+        if (sent.gz?.[0] === gz[0] && sent.gz[1] === gz[1]) continue
+        if (await pushSession($, server, dir, sessionId, sent)) {
+          sent.gz = gz
+          await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
+        }
+      }
+      warned = false
+    })
+    .catch(err => warnOnce($, err))
 }
 
 // excluded always loses; with any includes, only those are logged
@@ -509,6 +659,7 @@ export const register: Register = on => {
     if (!(await read($, startedSessions)).includes(sessionId)) {
       await update($, startedSessions, ids => [...ids, sessionId])
       await log($, 'session_start', { surface: e.surface, isInteractive: e.isInteractive })
+      sweep($)
     }
     return started
   })
@@ -617,6 +768,7 @@ export const register: Register = on => {
       usage: e.usage,
       ...cut,
     })
+    if (main) syncSession($)
     return next(e)
   })
 

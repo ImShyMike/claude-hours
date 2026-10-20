@@ -14,6 +14,13 @@
           <p class="muted">time spent with Claude, from <code>hook-analytics</code></p>
         </div>
         <div class="controls">
+          <form id="who" class="who muted" method="post" action="/logout" hidden>
+            <label>
+              viewing
+              <select id="person" aria-label="Whose dashboard"></select>
+            </label>
+            <button type="submit" class="link">log out</button>
+          </form>
           <div class="segmented" role="group" aria-label="Range">
             <button data-range="today">Today</button>
             <button data-range="7">7 days</button>

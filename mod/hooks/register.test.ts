@@ -32,6 +32,7 @@ const setup = (on: On) => {
   // what each file holds, so fs.exists / fs.read answer like a disk would
   const files = new Map<string, string>()
   let findOutput = ''
+  let sweepOutput = ''
   let cwd = '/proj'
   let now = 1_790_000_000_000
   on('clock.now', () => ({ value: now }))
@@ -57,7 +58,16 @@ const setup = (on: On) => {
         }
       }
     }
-    const stdout = cmd === 'find' ? findOutput : ''
+    let stdout = cmd === 'find' ? findOutput : ''
+    // the upload's reads: a session file as one stream from a byte offset,
+    // and the sweep's list of finished sessions
+    if (cmd === 'sh' && e.argv[2]?.includes('tail -c')) {
+      const path = e.argv[4]!
+      const all = new TextEncoder().encode((files.get(`${path}.gz`) ?? '') + (files.get(path) ?? ''))
+      const from = Number(e.argv[5])
+      stdout = new TextDecoder().decode(all.subarray(from, from + Number(e.argv[6])))
+    }
+    if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   // the box as the editor would leave it, and the submit going through
@@ -68,6 +78,10 @@ const setup = (on: On) => {
   on('prompt.change', (_, e) => ({ text: e.text }))
   on('fs.exists', (_, e) => ({ value: files.has(e.path) }))
   on('fs.read', (_, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.write', (_, e) => {
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
   on('prompt.submit', (_, e) => ({ text: e.text }))
   return {
     runs,
@@ -78,6 +92,7 @@ const setup = (on: On) => {
     timelines,
     timelineFiles,
     setFind: (out: string) => (findOutput = out),
+    setSweep: (out: string) => (sweepOutput = out),
     cd: (dir: string) => (cwd = dir),
     tick: (ms: number) => (now += ms),
   }
@@ -633,4 +648,135 @@ test('a session ending gzips its files behind the last row', async ($, on) => {
   expect(pack.slice(4)).toEqual(['/home/test/.claude/analytics/events/sess-1.jsonl', '/home/test/.claude/analytics/drafts/sess-1.jsonl'])
   // after every tee, never before
   expect(runs.findIndex(argv => argv[0] === 'sh')).toBeGreaterThan(runs.findLastIndex(argv => argv[0] === 'tee'))
+})
+
+// A hub that keeps each file's bytes and answers like the real one: append
+// what's past its length, 409 with its length when the offset is ahead
+const hub = (on: On, { down = false } = {}) => {
+  const stored = new Map<string, Uint8Array>()
+  const posts: { url: string; auth?: string }[] = []
+  on('clock.sleep', () => new Promise(() => {}))
+  on('http.fetch', (_, e) => {
+    posts.push({ url: e.url, auth: e.init?.headers?.authorization })
+    if (down) return { value: { status: 503, ok: false, headers: {}, text: 'down' } }
+    const url = new URL(e.url)
+    const key = url.pathname
+    const offset = Number(url.searchParams.get('offset'))
+    const have = stored.get(key) ?? new Uint8Array()
+    const body = new TextEncoder().encode(e.init?.body ?? '')
+    if (offset > have.length) return { value: { status: 409, ok: false, headers: {}, text: JSON.stringify({ length: have.length }) } }
+    const next = new Uint8Array([...have, ...body.subarray(have.length - offset)])
+    stored.set(key, next)
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ length: next.length }) } }
+  })
+  return { stored, posts }
+}
+
+const text = (stored: Map<string, Uint8Array>, key: string) => new TextDecoder().decode(stored.get(key))
+
+// uploads run behind the hook, so give them a moment (the test runner has
+// timers; the mod's own types don't list them)
+declare const setTimeout: (run: () => void, ms: number) => unknown
+const settle = async () => {
+  for (let i = 0; i < 20; i++) await new Promise<void>(r => setTimeout(() => r(), 5))
+}
+
+const CONFIG = '/home/test/.claude/analytics/config.json'
+const SERVER = { server: { url: 'https://hub.test/', token: 'tok' } }
+const EVENTS = '/home/test/.claude/analytics/events/sess-1.jsonl'
+const SENT = '/home/test/.claude/analytics/sent/sess-1.json'
+
+const endTurn = ($: { turn: { complete: (e: never) => Promise<unknown> } }) =>
+  $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false } as never)
+
+test('with no server in the config nothing is sent', async ($, on) => {
+  setup(on)
+  const { posts } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  await endTurn($)
+  await settle()
+  expect(posts).toEqual([])
+})
+
+test('a turn sends the session file past what the server has, and remembers its answer', async ($, on) => {
+  const { files } = setup(on)
+  const { stored, posts } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+
+  await endTurn($)
+  await settle()
+  expect(posts[0]).toEqual({ url: 'https://hub.test/v1/sessions/sess-1/events?offset=0', auth: 'Bearer tok' })
+  expect(text(stored, '/v1/sessions/sess-1/events')).toBe(files.get(EVENTS))
+  const first = JSON.parse(files.get(SENT)!).events
+  expect(first).toBe(new TextEncoder().encode(files.get(EVENTS)!).length)
+
+  // the next turn sends only the new rows
+  await endTurn($)
+  await settle()
+  expect(posts.at(-1)!.url).toEndWith(`offset=${first}`)
+  expect(text(stored, '/v1/sessions/sess-1/events')).toBe(files.get(EVENTS))
+})
+
+test('a server ahead of the mod answers 409, and the mod resends from there', async ($, on) => {
+  const { files } = setup(on)
+  const { stored, posts } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  await endTurn($)
+  await settle()
+  const first = JSON.parse(files.get(SENT)!).events
+  // the hub loses its copy, so the mod's offset is past what it holds
+  stored.clear()
+  posts.length = 0
+  await endTurn($)
+  await settle()
+  expect(posts.map(p => new URL(p.url).searchParams.get('offset'))).toEqual([String(first), '0'])
+  expect(text(stored, '/v1/sessions/sess-1/events')).toBe(files.get(EVENTS))
+})
+
+test('only whole lines go up', async ($, on) => {
+  const { files } = setup(on)
+  const { stored } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  await endTurn($)
+  // a row half written when the upload reads
+  files.set(EVENTS, `${files.get(EVENTS)}{"t":5,"ev`)
+  await endTurn($)
+  await settle()
+  expect(text(stored, '/v1/sessions/sess-1/events')).toEndWith('}\n')
+})
+
+test('a server that is down is mentioned once, not every turn', async ($, on) => {
+  const logs: string[] = []
+  const { files } = setup(on)
+  hub(on, { down: true })
+  on('turn.complete', () => ({ text: '' }))
+  on('ui.log', (_, e) => {
+    logs.push(String(e.text ?? e))
+    return { value: undefined }
+  })
+  files.set(CONFIG, JSON.stringify(SERVER))
+  await endTurn($)
+  await endTurn($)
+  await settle()
+  expect(logs.filter(l => l.includes('upload paused'))).toHaveLength(1)
+})
+
+test('the sweep sends finished sessions once, and skips ones already in', async ($, on) => {
+  const { files, setSweep } = setup(on)
+  const { stored, posts } = hub(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  const old = '/home/test/.claude/analytics/events/old-1.jsonl'
+  files.set(`${old}.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
+  files.set('/home/test/.claude/analytics/sent/done-1.json', JSON.stringify({ events: 10, drafts: 0, gz: [40, 0] }))
+  setSweep('old-1 70 0\ndone-1 40 0\n')
+
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  await settle()
+  expect(posts.map(p => new URL(p.url).pathname)).toEqual(['/v1/sessions/old-1/events'])
+  expect(text(stored, '/v1/sessions/old-1/events')).toBe(files.get(`${old}.gz`))
+  expect(JSON.parse(files.get('/home/test/.claude/analytics/sent/old-1.json')!).gz).toEqual([70, 0])
 })

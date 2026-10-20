@@ -1,5 +1,5 @@
 import { dayKey, summarize, type Event, type Summary } from '../src/aggregate'
-import { $, MIN, compact, duration, esc, hideTip, load, save, seconds, showTip } from './shared'
+import { $, MIN, api, compact, duration, esc, hideTip, load, save, seconds, showTip, withPerson, type Me } from './shared'
 
 const REFRESH_MS = 30_000
 
@@ -238,7 +238,7 @@ function render() {
     s.sessions
       .slice(0, 25)
       .map(
-        x => `<tr><td>${when(x.start)}</td><td><a href="/session?id=${encodeURIComponent(x.sessionId)}">${esc(x.project)}</a></td><td class="num">${duration(x.activeMs)}</td><td class="num">${x.prompts}</td><td class="muted"><code>${esc(x.sessionId.slice(0, 8))}</code></td></tr>`,
+        x => `<tr><td>${when(x.start)}</td><td><a href="${withPerson(`/session?id=${encodeURIComponent(x.sessionId)}`)}">${esc(x.project)}</a></td><td class="num">${duration(x.activeMs)}</td><td class="num">${x.prompts}</td><td class="muted"><code>${esc(x.sessionId.slice(0, 8))}</code></td></tr>`,
       )
       .join('')
 }
@@ -247,8 +247,7 @@ function render() {
 
 async function refresh() {
   try {
-    const res = await fetch('/api/events')
-    events = await res.json()
+    events = await api<Event[]>('/api/events')
   } catch (err) {
     console.error('could not load events', err)
     events ??= []
@@ -289,6 +288,24 @@ new ResizeObserver(([entry]) => {
   resizeTimer = setTimeout(render, 50)
 }).observe(document.querySelector('main')!)
 
+// On the hub: whose dashboard this is, a picker for an admin, and log out
+async function who() {
+  const me = await api<Me>('/api/me').catch((): Me => ({}))
+  if (!me.me) return
+  $('who').hidden = false
+  const pick = $<HTMLSelectElement>('person')
+  const names = me.admin && me.people?.length ? me.people : [me.person!]
+  pick.innerHTML = names.map(name => `<option${name === me.person ? ' selected' : ''}>${esc(name)}</option>`).join('')
+  pick.disabled = names.length < 2
+  pick.addEventListener('change', () => {
+    const url = new URL(location.href)
+    if (pick.value === me.me) url.searchParams.delete('person')
+    else url.searchParams.set('person', pick.value)
+    location.href = url.toString()
+  })
+}
+
 syncControls()
+who()
 refresh()
 setInterval(refresh, REFRESH_MS)

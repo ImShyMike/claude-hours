@@ -12,7 +12,7 @@ import {
   type Step,
   type Timeline,
 } from '../src/replay'
-import { $, MIN, clockTime, compact, duration, esc, hideTip, load, save, seconds, showTip } from './shared'
+import { $, MIN, api, clockTime, compact, duration, esc, hideTip, load, save, seconds, showTip, withPerson } from './shared'
 
 const sessionId = new URLSearchParams(location.search).get('id') ?? ''
 
@@ -446,13 +446,14 @@ function legend(el: HTMLElement, keys: [cls: string, label: string][]) {
 }
 
 async function init() {
+  document.querySelector<HTMLAnchorElement>('a.back')!.href = withPerson('/')
   if (!sessionId) {
     $('empty').hidden = false
     return
   }
   const [all, timelines] = await Promise.all([
-    fetch('/api/events').then(r => r.json() as Promise<Event[]>),
-    fetch(`/api/session/${encodeURIComponent(sessionId)}`).then(r => r.json() as Promise<Timeline[]>),
+    api<Event[]>('/api/events'),
+    api<Timeline[]>(`/api/session/${encodeURIComponent(sessionId)}`),
   ])
   events = all.filter(e => e.sessionId === sessionId).sort((a, b) => time(a) - time(b))
   if (!events.length) {

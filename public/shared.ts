@@ -21,6 +21,24 @@ export const save = (key: string, value: string) => {
 const theme = new URLSearchParams(location.search).get('theme')
 if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme
 
+// On the hub, an admin looking at someone else's dashboard carries ?person=
+// from page to page and into every API call
+const person = new URLSearchParams(location.search).get('person')
+export const withPerson = (path: string) =>
+  person ? `${path}${path.includes('?') ? '&' : '?'}person=${encodeURIComponent(person)}` : path
+
+// The hub answers 401 until you log in; the local dashboard never does
+export async function api<T>(path: string): Promise<T> {
+  const res = await fetch(withPerson(path))
+  if (res.status === 401) {
+    location.href = '/login'
+    throw new Error('log in first')
+  }
+  return res.json() as Promise<T>
+}
+
+export type Me = { person?: string; me?: string; admin?: boolean; people?: string[] }
+
 export const esc = (s: string) => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
 
 export function duration(ms: number) {
