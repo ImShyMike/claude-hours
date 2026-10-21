@@ -32,7 +32,7 @@ Prompt text and file contents are never written.
 
 - [x] **See a real interrupt.** Seen live on 2026-10-20: Esc 1.4 s into a turn logged one `interrupt` (no `agentId`), and the prompt went back into the box.
 - [x] **Check Bash latency.** Every Bash result waits for a `find` (3 s timeout, prunes `.git`, `node_modules`, `target`, `.venv`, `venv`, `__pycache__`, `dist`, `build`). Inside a repo it's quick, but a session started in a folder full of repos (`~/Documents`) walked all of them and could hit the timeout, which also logs nothing. Since 2026-10-21 a working dir in no repo is only scanned two folders deep.
-- [ ] **Check the session_start dedupe live.** Edit the mod during an interactive session (hot reload) and confirm there's no second `session_start`.
+- [x] **Check the session_start dedupe live.** Seen on 2026-10-21: a session hot-reloaded several times by mod syncs kept one `session_start` (each reload shows as a `cwd_changed` to the same cwd). Several starts in one file are resumes, each after its own `session_end` and header.
 - [x] **Something to read it with.** `~/Documents/GitHub/claude-hours`: local Bun dashboard (`bun run dev`, http://127.0.0.1:4747). It reads every file in `events/`.
 
 ## Known limits (by design, for now)
