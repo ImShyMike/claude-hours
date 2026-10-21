@@ -60,6 +60,8 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
 const FILE_TOOLS = new Set(['Read', ...EDIT_TOOLS])
 const PRUNE = ['.git', 'node_modules', 'target', '.venv', 'venv', '__pycache__', 'dist', 'build']
 const MAX_PATHS_PER_CALL = 50
+// files right in a working dir outside any repo, and one folder down
+const SHALLOW_DEPTH = 2
 // Claude Code's own churn under ~/.claude, this log included
 const NOISY_HOME_DIRS = ['.claude/projects', '.claude/state', '.claude/analytics', '.claude/plugins']
 
@@ -305,16 +307,24 @@ const log = ($: EngineInterface, event: string, fields: Fields = {}) => logAll($
 
 // Bash (and python run from it) can touch anything, so look for files under
 // the working dir modified since the call started. Can't tell who did it.
+// A working dir in no repo (a folder full of repos, say) is only looked at
+// SHALLOW_DEPTH deep: walking all of it can outlast the timeout
 async function filesChangedSince($: EngineInterface, startedMs: number, repo?: string) {
   const [cwd, dir] = await Promise.all([$.session.cwd(), homeDir($)])
-  const roots = [cwd === '/' || cwd === dir ? undefined : cwd, repo].filter((root): root is string => !!root)
-  if (!roots.length) return []
+  const scans: [string, string[]][] = []
+  if (cwd !== '/' && cwd !== dir) scans.push([cwd, (await rootOf($, cwd)) ? [] : ['-maxdepth', String(SHALLOW_DEPTH)]])
+  if (repo) scans.push([repo, []])
+  if (!scans.length) return []
   const prune = PRUNE.flatMap((name, i) => (i === 0 ? ['-name', name] : ['-o', '-name', name]))
-  const argv = ['find', ...roots, '(', ...prune, ')', '-prune', '-o', '-type', 'f', '-newermt', isoSeconds(startedMs), '-print']
-  const { stdout } = await $.process.run(argv, { timeoutMs: 3_000 })
+  const since = isoSeconds(startedMs)
+  const found = await Promise.all(
+    scans.map(([root, depth]) =>
+      $.process.run(['find', root, ...depth, '(', ...prune, ')', '-prune', '-o', '-type', 'f', '-newermt', since, '-print'], { timeoutMs: 3_000 }),
+    ),
+  )
   const noisy = NOISY_HOME_DIRS.map(sub => `${dir}/${sub}/`)
-  return stdout
-    .split('\n')
+  return found
+    .flatMap(({ stdout }) => stdout.split('\n'))
     .filter(path => path && !noisy.some(prefix => path.startsWith(prefix)))
     .slice(0, MAX_PATHS_PER_CALL)
 }

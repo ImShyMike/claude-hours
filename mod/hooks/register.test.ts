@@ -756,7 +756,22 @@ test('a call working in another repo logs that repo, never the command', async (
   expect(tools.map(l => l.repo)).toEqual(['/code/hub', '/code/hub', undefined, undefined, undefined])
   expect(JSON.stringify(lines)).not.toContain('deploy')
   // the Bash window looks in the repo it cd'd into too
-  expect(runs.find(r => r[0] === 'find')!.slice(1, 3)).toEqual(['/proj', '/code/hub'])
+  expect(runs.filter(r => r[0] === 'find').map(r => r[1])).toContain('/code/hub')
+})
+
+test('a working dir in no repo is only looked at two folders deep', async ($, on) => {
+  const { runs, cd } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+
+  await $.tool.call({ tool: 'Bash', command: 'make' })
+  cd('/home/test/Documents')
+  await $.tool.call({ tool: 'Bash', command: 'make' })
+
+  const finds = runs.filter(r => r[0] === 'find')
+  expect(finds.map(r => r.slice(1, 4))).toEqual([
+    ['/proj', '(', '-name'],
+    ['/home/test/Documents', '-maxdepth', '2'],
+  ])
 })
 
 test("an MCP tool's file_path argument is never logged", async ($, on) => {
