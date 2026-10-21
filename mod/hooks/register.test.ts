@@ -286,7 +286,10 @@ test('a long keyless insert counts as a paste', async ($, on) => {
   expect(lines[0]).toMatchObject({ typedChars: 6, pastedChars: 40 })
 })
 
-test('text the edits never brought, like a folded-up paste, counts as pasted', async ($, on) => {
+// how the sent text carries a paste the box folded into a placeholder
+const folded = (id: string, text: string) => `\n\n<pasted_content id="${id}">\n\n${text}\n</pasted_content id="${id}">\n\n`
+
+test('a folded-up paste counts as pasted, without its tags', async ($, on) => {
   const { lines, tick } = setup(on)
   const box = composer($)
 
@@ -294,10 +297,67 @@ test('text the edits never brought, like a folded-up paste, counts as pasted', a
   tick(1_000)
   await box.back()
   // the box holds a placeholder; the sent text has the paste in full
-  await submit($, `look ${'lorem '.repeat(20)}`)
+  await submit($, `look ${folded('3fca', 'lorem '.repeat(20).trim())}`)
 
   expect(lines).toHaveLength(1)
-  expect(lines[0]).toMatchObject({ chars: 125, typedChars: 6, deletedChars: 1, pastedChars: 120 })
+  expect(lines[0]).toMatchObject({ typedChars: 6, deletedChars: 1, pastedChars: 119 })
+})
+
+test('every folded block counts, ids shared or not, on top of a keyless insert', async ($, on) => {
+  const { lines } = setup(on)
+  const box = composer($)
+
+  await box.type('fix these')
+  await box.paste('x'.repeat(40))
+  await submit($, `fix these${'x'.repeat(40)}${folded('9326', 'a\nb')}AND${folded('9326', 'cdé')}${folded('77', '\n  ef')}`)
+
+  expect(lines[0]).toMatchObject({ typedChars: 9, pastedChars: 40 + 3 + 3 + 4 })
+})
+
+test('a prompt that was only a paste carries just its pasted chars', async ($, on) => {
+  const { lines, timelines } = setup(on)
+
+  await submit($, folded('7974', 'at NodePgPreparedQuery'))
+
+  expect(lines[0]).toMatchObject({ event: 'prompt', origin: 'composer', pastedChars: 22 })
+  expect(lines[0]).not.toHaveProperty('typingMs')
+  expect(timelines).toHaveLength(0)
+})
+
+test('a recalled prompt is not a paste', async ($, on) => {
+  const { lines } = setup(on)
+  const box = composer($)
+
+  await box.type('a')
+  await box.recall('an older prompt from history')
+  await submit($, box.text)
+
+  expect(lines[0]).toMatchObject({ typedChars: 1, pastedChars: 0 })
+})
+
+test('pasted images and files are counted by kind, never named', async ($, on) => {
+  const { lines, raw } = setup(on)
+
+  const attachments = [
+    { type: 'image', mediaType: 'image/png', id: 'i1' },
+    { type: 'image', mediaType: 'image/jpeg', id: 'i2' },
+    { type: 'document', mediaType: 'application/pdf', filename: 'secret-plans.pdf', id: 'd1' },
+  ] as const
+  await $.prompt.submit({ text: 'look [Image #1] [Image #2]', wait: false, attachments, origin: { kind: 'composer' } as never })
+  await submit($, 'just words')
+
+  expect(lines[0]).toMatchObject({ images: 2, documents: 1 })
+  expect(lines[0]).not.toHaveProperty('audio')
+  expect(JSON.stringify(raw)).not.toContain('secret-plans')
+  expect(lines[1]).not.toHaveProperty('images')
+})
+
+test('tags in a prompt someone else sent are not counted', async ($, on) => {
+  const { lines } = setup(on)
+
+  await submit($, folded('1', 'quoted'), 'task-notification')
+
+  expect(lines[0]).not.toHaveProperty('pastedChars')
 })
 
 test('a clear just before the submit still belongs to that prompt', async ($, on) => {

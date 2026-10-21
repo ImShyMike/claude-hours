@@ -434,7 +434,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         if (typeof e.typingMs === 'number') {
           writing.sent++
           countTyping(e)
-        }
+        } else writing.pastedChars += Number(e.pastedChars) || 0 // a prompt that was only a paste
         break
       case 'draft_abandoned':
         writing.abandoned++

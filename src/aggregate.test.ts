@@ -278,6 +278,15 @@ test('typing a prompt counts as active time, tea breaks do not', () => {
   expect(s.writing).toMatchObject({ typingMs: 2 * MIN, sent: 1, abandoned: 0, abandonedMs: 0, typedChars: 300, pastedChars: 0, measured: 0 })
 })
 
+test('a prompt that was only a paste adds its chars but no draft', () => {
+  const events = [
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', composeMs: MIN, typingMs: MIN, typedChars: 10, pastedChars: 5, fixes: 0 }),
+    at('2026-10-19T12:11:00Z', 'prompt', { origin: 'composer', pastedChars: 3000 }),
+  ]
+  const s = summarize(events, { idleCapMs: 1 * MIN })
+  expect(s.writing).toMatchObject({ sent: 1, measured: 1, typedChars: 10, pastedChars: 3005 })
+})
+
 test('an abandoned draft is placed by its own end, not its late line', () => {
   // given up at 23:50 in New York, but only logged at 01:00 when the next draft began
   const events = [

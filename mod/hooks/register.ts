@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptEditInput, Register } from 'claude-code'
+import type { EngineInterface, PromptEditInput, PromptSubmitAttachment, Register } from 'claude-code'
 import type { StartedSessions } from '../types'
 
 // One JSON object per line, one file per session, under $HOME. Prompt text
@@ -168,9 +168,6 @@ type Draft = {
   id: string
   initialShape: string
   initialCursor: number
-  // chars already in the box when the draft began (a recalled or put-back
-  // prompt, or typing from before a hot reload): not pasted, just there
-  initialChars: number
   steps: Step[]
   shapeChars: number
   truncated: boolean
@@ -665,13 +662,30 @@ function noteRetype(d: Draft, chars: number) {
 }
 
 // A big paste never comes through prompt.edit: the box folds it into a
-// placeholder by its own route. So whatever the sent text holds beyond what
-// the edits put there arrived some other way, and counts as pasted (a recalled
-// history entry lands here too)
-function sentFields(d: Draft, endMs: number, chars: number) {
-  const fields = draftFields(d, endMs)
-  const fromEdits = d.initialChars + d.typedChars + d.pastedChars - d.deletedChars
-  return { ...fields, pastedChars: d.pastedChars + Math.max(0, chars - fromEdits) }
+// placeholder by its own route, and the sent text carries it in full between
+// <pasted_content id="…"> tags (several blocks may share an id). Its chars
+// are the ones between the tags, less the newlines the box pads it with
+const PASTE_BLOCK = /<pasted_content id="([^"]*)">\n*([\s\S]*?)\n*<\/pasted_content id="\1">/g
+
+function foldedPasteChars(text: string) {
+  let chars = 0
+  for (const [, , pasted = ''] of text.matchAll(PASTE_BLOCK)) chars += [...pasted].length
+  return chars
+}
+
+// images, audio and documents pasted or attached to a prompt, counted by
+// kind: never their bytes or file names
+function attachmentCounts(items: readonly PromptSubmitAttachment[] = []) {
+  const count = (type: PromptSubmitAttachment['type']) => items.filter(a => a.type === type).length || undefined
+  return { images: count('image'), audio: count('audio'), documents: count('document') }
+}
+
+// a prompt that was only a folded paste never started a draft, so it carries
+// just its pasted chars
+function sentFields(d: Draft | undefined, endMs: number, text: string) {
+  const folded = foldedPasteChars(text)
+  if (!d) return folded ? { pastedChars: folded } : {}
+  return { ...draftFields(d, endMs), pastedChars: d.pastedChars + folded }
 }
 
 // the emptied draft is past claiming: it was abandoned
@@ -711,7 +725,6 @@ function trackEdit(at: number, e: PromptEditInput, after: string) {
       id: `${at.toString(36)}-${e.text.length.toString(36)}`,
       initialShape: shapeOf(e.text),
       initialCursor: e.cursor,
-      initialChars: [...e.text].length,
       steps: [],
       shapeChars: e.text.length,
       truncated: false,
@@ -797,7 +810,8 @@ export const register: Register = on => {
           isMeta: e.isMeta,
           origin: e.origin.kind,
           midTurn: midTurn || undefined,
-          ...(typed && sentFields(typed, at, chars)),
+          ...attachmentCounts(e.attachments),
+          ...(e.origin.kind === 'composer' && sentFields(typed, at, e.text)),
         },
       ])
       if (typed) timelines.push(timelineOf(typed, 'sent', at))
