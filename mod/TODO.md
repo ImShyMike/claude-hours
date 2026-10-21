@@ -26,7 +26,7 @@ Prompt text and file contents are never written.
 
 ## Still to do
 
-- [ ] **Check delete keys live.** Press Ctrl+W, Ctrl+Backspace, Option/Alt+Backspace, Ctrl+U and Ctrl+K once each in a draft, send it, and check which `key` arrives and how each was classed (`jq -r '.steps | split(",")[] | select(test("^[0-9]+[wkbd]"))' ~/.claude/analytics/drafts/<session>.jsonl`).
+- [x] **Check delete keys live.** All seen on 2026-10-21: Ctrl+W, Ctrl+Backspace and Alt+Backspace each logged a word delete (`w`), Ctrl+U killed back to the line start and Ctrl+K to its end (both `k`). Ctrl+K with the cursor already at the line's end is a no-op and logs nothing. Recheck with `jq -r '.steps | split(",")[] | select(test("^[0-9]+[wkbd]"))' ~/.claude/analytics/drafts/<session>.jsonl`.
 - [ ] **Tab-out tracking.** Claude Code doesn't hand terminal focus (DEC 1004) to mods, and `ui.focus` is only focus inside its own panes. A window-manager watcher outside Claude Code could log focus changes if wanted.
 
 - [x] **See draft tracking live.** All seen on 2026-10-20: sent prompts, a backspaced-away draft (`how: deleted`), and an Esc/Ctrl+C clear (`how: clear`, correctly not claimed by the prompt 8.7 s later). A big paste skipped `prompt.edit` entirely (the box folds it into a placeholder), which led to the leftover-chars fix below. Big pastes showed up in `pastedChars` on 2026-10-21, but a prompt that was only a paste got none (no edit, so no draft), which led to counting the `<pasted_content>` blocks instead. Seen live on 2026-10-21: a typed prompt with one block and a screenshot logged `pastedChars: 1637` (matching the block) and `images: 1`. Still to see live: a paste-only prompt logging `pastedChars` and no `typingMs`.
