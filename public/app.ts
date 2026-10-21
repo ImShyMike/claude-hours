@@ -3,6 +3,7 @@ import {
   $,
   MIN,
   api,
+  attachments,
   chip,
   compact,
   duration,
@@ -83,6 +84,13 @@ function writingTile(w: Summary['writing']) {
   const wpm = w.typingMs ? Math.round(w.typedChars / 5 / (w.typingMs / MIN)) : 0
   const gaveUp = `${w.abandoned} abandoned`
   return tile('Writing', duration(w.typingMs), wpm ? `${gaveUp} · ${wpm} wpm` : gaveUp)
+}
+
+// pasted chars (folded pastes, and long keyless inserts) and what came along
+function pastedTile(w: Summary['writing']) {
+  const sent = w.typedChars + w.pastedChars
+  const share = sent ? `${Math.round((w.pastedChars / sent) * 100)}% of chars` : ''
+  return tile('Pasted', compact(w.pastedChars), [share, attachments(w)].filter(Boolean).join(' · '))
 }
 
 function writingCard(w: Summary['writing']) {
@@ -190,6 +198,7 @@ function render() {
     tile('Interrupts', compact(s.interrupts), totalTurns ? `${Math.round((s.interrupts / totalTurns) * 100)}% of turns${s.interruptsMidTool ? `, ${compact(s.interruptsMidTool)} mid-tool` : ''}` : ''),
     tile('Tokens out', compact(s.tokens.output), s.tokens.cacheRead ? `${compact(s.tokens.cacheRead)} cache reads` : ''),
     writingTile(s.writing),
+    pastedTile(s.writing),
   ].join('')
 
   $('empty').hidden = any

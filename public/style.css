@@ -205,8 +205,9 @@ select {
   .top .hero {
     margin: 0;
   }
+  /* six tiles, two even rows beside the headline */
   .top .tiles {
-    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 /* two cards side by side once there's room, the same height */

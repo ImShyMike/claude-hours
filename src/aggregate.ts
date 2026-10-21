@@ -43,6 +43,10 @@ export type Summary = {
     abandonedMs: number
     typedChars: number
     pastedChars: number
+    // pasted or attached to sent prompts, counted by kind
+    images: number
+    audio: number
+    documents: number
     // drafts carrying the fields below (older lines don't), for averages
     measured: number
     fixes: number
@@ -397,7 +401,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   const sessions = new Map<string, Summary['sessions'][number]>()
   let promptCount = 0, words = 0, chars = 0, typed = 0, midTurn = 0, turns = 0, interrupts = 0, interruptsMidTool = 0
   const writing: Summary['writing'] = {
-    typingMs: 0, sent: 0, abandoned: 0, abandonedMs: 0, typedChars: 0, pastedChars: 0,
+    typingMs: 0, sent: 0, abandoned: 0, abandonedMs: 0, typedChars: 0, pastedChars: 0, images: 0, audio: 0, documents: 0,
     measured: 0, fixes: 0, rewrites: 0, rewrittenChars: 0, pauses: 0, breaks: 0, longestPauseMs: 0,
   }
   const countTyping = (e: Event) => {
@@ -430,6 +434,9 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         chars += Number(e.chars) || 0
         if (e.origin === 'composer') typed++
         if (e.midTurn) midTurn++
+        writing.images += Number(e.images) || 0
+        writing.audio += Number(e.audio) || 0
+        writing.documents += Number(e.documents) || 0
         inc(dayPrompts, dayKey(at))
         if (typeof e.typingMs === 'number') {
           writing.sent++

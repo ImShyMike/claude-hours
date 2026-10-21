@@ -75,6 +75,16 @@ export function seconds(ms: number) {
 export const compact = (n: number) =>
   new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 
+// what prompts carried besides text: "2 images, 1 file", or '' for none
+export function attachments(counts: { images?: unknown; audio?: unknown; documents?: unknown }) {
+  const kinds = [['image', counts.images], ['audio clip', counts.audio], ['file', counts.documents]] as const
+  return kinds
+    .map(([name, n]) => [name, typeof n === 'number' ? n : 0] as const)
+    .filter(([, n]) => n > 0)
+    .map(([name, n]) => `${compact(n)} ${name}${n === 1 ? '' : 's'}`)
+    .join(', ')
+}
+
 export const clockTime = (ms: number) =>
   new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })
 

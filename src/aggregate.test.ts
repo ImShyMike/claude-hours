@@ -287,6 +287,16 @@ test('a prompt that was only a paste adds its chars but no draft', () => {
   expect(s.writing).toMatchObject({ sent: 1, measured: 1, typedChars: 10, pastedChars: 3005 })
 })
 
+test('pasted images and files add up across every prompt sent, draft or not', () => {
+  const events = [
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', typingMs: MIN, typedChars: 10, images: 2 }),
+    at('2026-10-19T12:11:00Z', 'prompt', { origin: 'composer', pastedChars: 300, images: 1, documents: 1 }),
+    at('2026-10-19T12:12:00Z', 'prompt', { origin: 'task-notification', images: 5 }),
+  ]
+  const s = summarize(events, { idleCapMs: 1 * MIN })
+  expect(s.writing).toMatchObject({ images: 3, audio: 0, documents: 1 })
+})
+
 test('an abandoned draft is placed by its own end, not its late line', () => {
   // given up at 23:50 in New York, but only logged at 01:00 when the next draft began
   const events = [

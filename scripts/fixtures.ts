@@ -134,6 +134,10 @@ for (let back = DAYS; back >= 0; back--) {
         words,
         chars: words * 6,
         origin: composer ? 'composer' : 'task-notification',
+        // a screenshot every few prompts, and once in a while a file (no
+        // rand() here, so the rest of the demo stays as it was)
+        images: composer && p % 5 === 2 ? 1 + (p % 2) : undefined,
+        documents: composer && p % 11 === 7 ? 1 : undefined,
         ...(typed && { ...typed.stats, composeMs: typed.durationMs, draftId }),
       })
       const turnStart = at

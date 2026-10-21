@@ -12,7 +12,7 @@ import {
   type Step,
   type Timeline,
 } from '../src/replay'
-import { $, MIN, api, chip, clockTime, compact, duration, esc, hideTip, load, palette, save, seconds, showTip, withPerson, type Palette } from './shared'
+import { $, MIN, api, attachments, chip, clockTime, compact, duration, esc, hideTip, load, palette, save, seconds, showTip, withPerson, type Palette } from './shared'
 
 const sessionId = new URLSearchParams(location.search).get('id') ?? ''
 
@@ -498,7 +498,7 @@ function drawStats(d: Draft) {
   $('draft-stats').innerHTML = [
     stat('Writing', seconds(d.end - d.start), `${seconds(num(l.typingMs))} of it typing`),
     stat('Edits', String(num(l.edits)), groups ? `${groups.move} cursor moves` : ''),
-    stat('Typed', String(num(l.typedChars)), `${num(l.pastedChars)} pasted`),
+    stat('Typed', String(num(l.typedChars)), [`${num(l.pastedChars)} pasted`, attachments(l)].filter(Boolean).join(' · ')),
     stat('Deleted', String(num(l.deletedChars)), `${num(l.wordDeletes)} word, ${num(l.lineKills)} line`),
     stat('Fixes / rewrites', `${num(l.fixes)} / ${num(l.rewrites)}`, `${num(l.rewrittenChars)} chars redone`),
     stat('Pauses', String(num(l.pauses)), `${num(l.breaks)} breaks, longest ${seconds(num(l.longestPauseMs))}`),
