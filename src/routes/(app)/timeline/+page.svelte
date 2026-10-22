@@ -182,6 +182,7 @@
                             : 'shadow-[0_0_0_1px_var(--card)]',
                         ]}
                         href={withPerson(`/session?id=${encodeURIComponent(piece.sessionId)}`)}
+                        data-sveltekit-reload
                         aria-label="{piece.project}, {hm(piece.from)} to {hm(piece.to)}"
                         style:left="{pct(tl.hours, row.day, piece.from)}%"
                         style:width="{pct(tl.hours, row.day, piece.to) - pct(tl.hours, row.day, piece.from)}%"

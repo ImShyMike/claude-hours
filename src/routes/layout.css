@@ -126,6 +126,8 @@
   }
   html {
     @apply font-sans;
+    /* room for the scrollbar on short pages too, so the header doesn't shift */
+    scrollbar-gutter: stable;
   }
 }
 

@@ -34,7 +34,7 @@
 
   let { data }: PageProps = $props()
 
-  // the page loads once per visit, so whether anyone's logged in never changes
+  // logging in or out is always a whole page load, so this never changes under the page
   const loggedIn = untrack(() => !!data.person)
   const live = loggedIn ? liveEvents() : { events: [] }
   const who = loggedIn ? whoIsLooking() : { me: {} }
@@ -294,8 +294,10 @@
                 {#each s.sessions.slice(0, 25) as x (x.sessionId)}
                   <Table.Row>
                     <Table.Cell>
-                      <a class="font-medium underline-offset-4 hover:underline" href={withPerson(`/session?id=${encodeURIComponent(x.sessionId)}`)}
-                        >{when(x.start)}</a
+                      <a
+                        class="font-medium underline-offset-4 hover:underline"
+                        data-sveltekit-reload
+                        href={withPerson(`/session?id=${encodeURIComponent(x.sessionId)}`)}>{when(x.start)}</a
                       >
                     </Table.Cell>
                     <Table.Cell

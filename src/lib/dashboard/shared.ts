@@ -22,9 +22,12 @@ const theme = new URLSearchParams(location.search).get('theme')
 if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme
 
 // On the hub, an admin looking at someone else's dashboard carries ?person=
-// from page to page and into every API call
-const person = new URLSearchParams(location.search).get('person')
-export const withPerson = (path: string) => (person ? `${path}${path.includes('?') ? '&' : '?'}person=${encodeURIComponent(person)}` : path)
+// from page to page and into every API call. It's read each time, since the
+// overview and timeline move between each other without a reload
+export const withPerson = (path: string) => {
+  const person = new URLSearchParams(location.search).get('person')
+  return person ? `${path}${path.includes('?') ? '&' : '?'}person=${encodeURIComponent(person)}` : path
+}
 
 // The hub answers 401 until you log in (or once the session runs out), and
 // comes back here after

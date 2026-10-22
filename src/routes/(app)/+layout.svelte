@@ -21,7 +21,8 @@
 </script>
 
 <header class="border-b">
-  <nav class={['mx-auto flex flex-wrap items-center gap-x-1 gap-y-2 px-4 py-3', wide ? 'max-w-6xl' : 'max-w-4xl']}>
+  <!-- always the widest page's width, so the links never move between pages -->
+  <nav class="mx-auto flex max-w-6xl flex-wrap items-center gap-x-1 gap-y-2 px-4 py-3">
     <a href={withPerson('/')} class="mr-auto basis-full font-semibold whitespace-nowrap sm:basis-auto">claude-hours</a>
     {#if data.person}
       {#each links as link (link.route)}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation'
   import * as Select from '#lib/components/ui/select/index.js'
   import type { Me } from '../shared'
 
@@ -11,7 +12,7 @@
     const url = new URL(location.href)
     if (Number(value) === me.me) url.searchParams.delete('person')
     else url.searchParams.set('person', value)
-    location.href = url.toString()
+    goto(url)
   }
 </script>
 
