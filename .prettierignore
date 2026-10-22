@@ -1,2 +1,6 @@
 # written by drizzle-kit
 drizzle
+
+# prettier pads every markdown table row to its widest cell, and the docs'
+# tables have paragraph-long cells
+*.md

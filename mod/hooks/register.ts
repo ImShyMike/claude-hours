@@ -45,7 +45,18 @@ const DEFAULTS: Record<string, Fields> = {
   compact: { outcome: 'compacted' },
 }
 // a typed draft's counters, left out at 0 (only on rows with typingMs)
-const DRAFT_COUNTERS = ['pastedChars', 'deletedChars', 'fixes', 'rewrites', 'rewrittenChars', 'pauses', 'breaks', 'longestPauseMs', 'wordDeletes', 'lineKills']
+const DRAFT_COUNTERS = [
+  'pastedChars',
+  'deletedChars',
+  'fixes',
+  'rewrites',
+  'rewrittenChars',
+  'pauses',
+  'breaks',
+  'longestPauseMs',
+  'wordDeletes',
+  'lineKills',
+]
 
 function compactRow(event: string, fields: Fields) {
   const usual = DEFAULTS[event] ?? {}
@@ -109,7 +120,7 @@ type Step = [number, string, number, number?, string?, string?]
 // its count unless it's 1 ("5a_3a" is five letters, a blank, three letters)
 function rle(shape: string) {
   let out = ''
-  for (let i = 0; i < shape.length; ) {
+  for (let i = 0; i < shape.length;) {
     const ch = shape[i]!
     let n = 1
     while (shape[i + n] === ch) n++
@@ -257,8 +268,7 @@ function packSession($: EngineInterface) {
 }
 
 // a path under the cwd, written relative to it
-const relative = (path: unknown, cwd: string) =>
-  typeof path === 'string' && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path
+const relative = (path: unknown, cwd: string) => (typeof path === 'string' && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path)
 
 // The session file's header: written when the file is new, read back after a
 // reload. A file too big to read back gets absolute times instead
@@ -668,7 +678,9 @@ let loginId = 0
 // for a moment between a write and a chmod
 async function writeConfig($: EngineInterface, dir: string, config: Record<string, unknown>) {
   const script = 'umask 077 && cat > "$1.tmp" && mv "$1.tmp" "$1"'
-  const { exitCode, stderr } = await $.process.run(['sh', '-c', script, 'sh', `${dir}/${CONFIG_FILE}`], { stdin: `${JSON.stringify(config, null, 2)}\n` })
+  const { exitCode, stderr } = await $.process.run(['sh', '-c', script, 'sh', `${dir}/${CONFIG_FILE}`], {
+    stdin: `${JSON.stringify(config, null, 2)}\n`,
+  })
   if (exitCode !== 0) throw new Error(`couldn't save the config: ${stderr.trim()}`)
 }
 
@@ -737,7 +749,13 @@ function pollLogin($: EngineInterface, url: string, code: Record<string, unknown
         interval += 5
         continue
       }
-      throw new Error(answer.error === 'access_denied' ? 'it was denied' : answer.error === 'expired_token' ? 'the code ran out' : `${res.status} ${String(answer.error ?? '')}`)
+      throw new Error(
+        answer.error === 'access_denied'
+          ? 'it was denied'
+          : answer.error === 'expired_token'
+            ? 'the code ran out'
+            : `${res.status} ${String(answer.error ?? '')}`,
+      )
     }
     throw new Error('the code ran out')
   }
@@ -783,8 +801,7 @@ async function runCommand($: EngineInterface, args: string) {
 
 // excluded always loses; with any includes, only those are logged
 const allowed = (rules: FileRules, path: string, cwd: string, home: string) =>
-  !rules.exclude.some(g => globMatches(g, path, cwd, home)) &&
-  (!rules.include.length || rules.include.some(g => globMatches(g, path, cwd, home)))
+  !rules.exclude.some(g => globMatches(g, path, cwd, home)) && (!rules.include.length || rules.include.some(g => globMatches(g, path, cwd, home)))
 
 // the pause before Enter (or before giving up) is part of writing it too
 function draftFields(d: Draft, endMs: number) {
@@ -928,9 +945,22 @@ function trackEdit(at: number, e: PromptEditInput, after: string) {
     if (!after) return
     settleEmptied()
     draft = {
-      startedAt: at, lastAt: at, typingMs: 0, edits: 0, typedChars: 0, pastedChars: 0, deletedChars: 0,
-      fixes: 0, rewrites: 0, rewrittenChars: 0, pauses: 0, breaks: 0, longestPauseMs: 0, deleteRun: 0,
-      wordDeletes: 0, lineKills: 0,
+      startedAt: at,
+      lastAt: at,
+      typingMs: 0,
+      edits: 0,
+      typedChars: 0,
+      pastedChars: 0,
+      deletedChars: 0,
+      fixes: 0,
+      rewrites: 0,
+      rewrittenChars: 0,
+      pauses: 0,
+      breaks: 0,
+      longestPauseMs: 0,
+      deleteRun: 0,
+      wordDeletes: 0,
+      lineKills: 0,
       id: `${at.toString(36)}-${e.text.length.toString(36)}`,
       initialShape: shapeOf(e.text),
       initialCursor: e.cursor,
@@ -970,7 +1000,11 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command
-      .register({ name: 'hook-analytics', description: 'Log in to a claude-hours hub to send it your analytics', argumentHint: 'login <hub url> | status | logout' })
+      .register({
+        name: 'hook-analytics',
+        description: 'Log in to a claude-hours hub to send it your analytics',
+        argumentHint: 'login <hub url> | status | logout',
+      })
       .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
     const sessionId = await $.session.id()
     if (!(await read($, startedSessions)).includes(sessionId)) {

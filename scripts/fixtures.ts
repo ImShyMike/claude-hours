@@ -12,7 +12,7 @@ const TOOLS = ['Read', 'Bash', 'Edit', 'Grep', 'Write', 'Glob', 'Agent']
 const FILES = ['src/index.ts', 'src/app.tsx', 'README.md', 'main.py', 'style.css', 'schema.sql', 'Makefile', 'config.toml']
 
 let seed = 42
-const rand = () => ((seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31) / 2 ** 31)
+const rand = () => (seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31) / 2 ** 31
 const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)]!
 const between = (lo: number, hi: number) => lo + rand() * (hi - lo)
 
@@ -31,8 +31,19 @@ function simulate(words: number) {
   let len = 0
   let last = 0
   const stats = {
-    typingMs: 0, edits: 0, typedChars: 0, pastedChars: 0, deletedChars: 0, fixes: 0, rewrites: 0,
-    rewrittenChars: 0, pauses: 0, breaks: 0, longestPauseMs: 0, wordDeletes: 0, lineKills: 0,
+    typingMs: 0,
+    edits: 0,
+    typedChars: 0,
+    pastedChars: 0,
+    deletedChars: 0,
+    fixes: 0,
+    rewrites: 0,
+    rewrittenChars: 0,
+    pauses: 0,
+    breaks: 0,
+    longestPauseMs: 0,
+    wordDeletes: 0,
+    lineKills: 0,
   }
   const step = (gap: number, st: [string, number, number?, string?]) => {
     t += gap
@@ -114,21 +125,39 @@ for (let back = DAYS; back >= 0; back--) {
       if (rand() < 0.12) {
         const typingMs = Math.round(between(5, 90) * 1000)
         const endedAt = at - between(30, 300) * 1000
-        lines.push(JSON.stringify({
-          ts: new Date(at).toISOString(), sessionId, cwd, event: 'draft_abandoned',
-          startedAt: new Date(endedAt - typingMs * 1.4).toISOString(), endedAt: new Date(endedAt).toISOString(),
-          composeMs: Math.round(typingMs * 1.4), typingMs, edits: Math.floor(typingMs / 900), typedChars: Math.floor(typingMs / 220),
-          pastedChars: 0, deletedChars: 4, how: rand() < 0.6 ? 'clear' : 'deleted',
-        }))
+        lines.push(
+          JSON.stringify({
+            ts: new Date(at).toISOString(),
+            sessionId,
+            cwd,
+            event: 'draft_abandoned',
+            startedAt: new Date(endedAt - typingMs * 1.4).toISOString(),
+            endedAt: new Date(endedAt).toISOString(),
+            composeMs: Math.round(typingMs * 1.4),
+            typingMs,
+            edits: Math.floor(typingMs / 900),
+            typedChars: Math.floor(typingMs / 220),
+            pastedChars: 0,
+            deletedChars: 4,
+            how: rand() < 0.6 ? 'clear' : 'deleted',
+          }),
+        )
       }
       const composer = rand() < 0.9
       const typed = composer ? simulate(words) : undefined
       const draftId = `demo-${lines.length}`
       if (typed) {
-        drafts.push(JSON.stringify({
-          sessionId, v: 1, draftId, outcome: 'sent',
-          startedAt: at - typed.durationMs, durationMs: typed.durationMs, steps: encodeSteps(typed.steps, 0),
-        }))
+        drafts.push(
+          JSON.stringify({
+            sessionId,
+            v: 1,
+            draftId,
+            outcome: 'sent',
+            startedAt: at - typed.durationMs,
+            durationMs: typed.durationMs,
+            steps: encodeSteps(typed.steps, 0),
+          }),
+        )
       }
       row('prompt', {
         words,
@@ -160,7 +189,14 @@ for (let back = DAYS; back >= 0; back--) {
         const durationMs = Math.round(between(20, 90) * 1000)
         at += durationMs
         const tokensBefore = Math.round(between(150_000, 190_000))
-        row('compact', { trigger: 'auto', messages: Math.floor(between(80, 400)), outcome: 'compacted', tokensBefore, tokensAfter: Math.round(tokensBefore * 0.12), durationMs })
+        row('compact', {
+          trigger: 'auto',
+          messages: Math.floor(between(80, 400)),
+          outcome: 'compacted',
+          tokensBefore,
+          tokensAfter: Math.round(tokensBefore * 0.12),
+          durationMs,
+        })
       }
       at += between(3, 40) * 1000
       const aborted = rand() < 0.07
@@ -170,7 +206,13 @@ for (let back = DAYS; back >= 0; back--) {
         reason: aborted ? 'aborted' : 'answer',
         durationMs: at - turnStart,
         ...(aborted && { answerChars: Math.floor(between(0, 900)), toolsRunning: rand() < 0.4 ? ['Bash'] : undefined }),
-        usage: { input_tokens: 20, output_tokens: output, cache_read_input_tokens: output * 30, cache_creation_input_tokens: output * 2, model: 'claude-opus-5-5' },
+        usage: {
+          input_tokens: 20,
+          output_tokens: output,
+          cache_read_input_tokens: output * 30,
+          cache_creation_input_tokens: output * 2,
+          model: 'claude-opus-5-5',
+        },
       })
       // reading, thinking, sometimes wandering off
       at += rand() < 0.15 ? between(20, 90) * 60_000 : between(20, 300) * 1000

@@ -12,7 +12,18 @@ const DEFAULTS: Record<string, Record<string, unknown>> = {
   session_start: { isInteractive: true },
   compact: { outcome: 'compacted' },
 }
-const DRAFT_COUNTERS = ['pastedChars', 'deletedChars', 'fixes', 'rewrites', 'rewrittenChars', 'pauses', 'breaks', 'longestPauseMs', 'wordDeletes', 'lineKills']
+const DRAFT_COUNTERS = [
+  'pastedChars',
+  'deletedChars',
+  'fixes',
+  'rewrites',
+  'rewrittenChars',
+  'pauses',
+  'breaks',
+  'longestPauseMs',
+  'wordDeletes',
+  'lineKills',
+]
 const restore = (row: Record<string, unknown>) => {
   const zeros = typeof row.typingMs === 'number' ? Object.fromEntries(DRAFT_COUNTERS.map(k => [k, 0])) : {}
   return { ...DEFAULTS[String(row.event)], ...zeros, ...row }
@@ -617,7 +628,15 @@ test('a compaction logs its trigger, sizes and how long it took', async ($, on) 
   await $.session.compact({ trigger: 'plugin', messages: summary })
 
   expect(lines).toHaveLength(2)
-  expect(lines[0]).toMatchObject({ event: 'compact', trigger: 'auto', outcome: 'compacted', messages: 2, tokensBefore: 180_000, tokensAfter: 21_000, durationMs: 42_000 })
+  expect(lines[0]).toMatchObject({
+    event: 'compact',
+    trigger: 'auto',
+    outcome: 'compacted',
+    messages: 2,
+    tokensBefore: 180_000,
+    tokensAfter: 21_000,
+    durationMs: 42_000,
+  })
   expect(lines[1]).toMatchObject({ event: 'compact', trigger: 'plugin', outcome: 'skipped', durationMs: 0 })
 })
 
@@ -664,8 +683,7 @@ test('an interrupt records how much answer had shown and the tools cut off', asy
 // an ask: it's refused there and the call ends at once. So a dialog's length
 // is checked on dialogWaits itself (a real one was seen live on 2026-10-21,
 // a 4.1 s dialog logged as a 4.1 s wait)
-const clock = (asked: { tool: string; from: number; to: number }[], questionsMs = 0) =>
-  ({ turnId: 't1', startedMs: 0, questionsMs, asked })
+const clock = (asked: { tool: string; from: number; to: number }[], questionsMs = 0) => ({ turnId: 't1', startedMs: 0, questionsMs, asked })
 
 test('a dialog is the time the engine left out of the turn', () => {
   // asked 2 s in, the call ended at 27 s, the turn at 30 s with 10 s counted
@@ -801,7 +819,10 @@ test('after a reload the start is read back from the header, and the cwd is writ
   const { lines, headers, files } = setup(on)
   on('turn.complete', () => ({ text: '' }))
   const start = 1_790_000_000_000 - 60_000
-  files.set('/home/test/.claude/analytics/events/sess-1.jsonl', `${JSON.stringify({ v: 1, event: 'session', start, cwd: '/proj' })}\n{"t":5,"event":"turn_end"}\n`)
+  files.set(
+    '/home/test/.claude/analytics/events/sess-1.jsonl',
+    `${JSON.stringify({ v: 1, event: 'session', start, cwd: '/proj' })}\n{"t":5,"event":"turn_end"}\n`,
+  )
 
   await $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false })
 
@@ -866,7 +887,6 @@ test('a session ending gzips its files behind the last row', async ($, on) => {
   expect(runs.findIndex(argv => argv[0] === 'sh')).toBeGreaterThan(runs.findLastIndex(argv => argv[0] === 'tee'))
 })
 
-
 // A hub that follows the real one's rules (src/lib/server/ingest.ts in
 // claude-hours): each run holds a contiguous prefix of its rows, a send that
 // starts past it is a gap, and a new events run needs its header
@@ -887,7 +907,13 @@ const hub = (on: On, { down = false } = {}) => {
     if (e.init?.method && e.init.method !== 'GET' && headers['content-type'] !== 'application/json') return reply(403, { message: 'cross-site form' })
     if (url.pathname === '/v1/hello') return reply(200, { protocols: [1] })
     if (url.pathname === '/v1/device/code')
-      return reply(200, { device_code: 'dc', user_code: 'ABCD-EFGH', verification_uri: 'https://elsewhere.test/device', expires_in: 600, interval: 5 })
+      return reply(200, {
+        device_code: 'dc',
+        user_code: 'ABCD-EFGH',
+        verification_uri: 'https://elsewhere.test/device',
+        expires_in: 600,
+        interval: 5,
+      })
     if (url.pathname === '/v1/device/token') {
       if (state.pending-- > 0) return reply(400, { error: 'authorization_pending' })
       return state.denied ? reply(400, { error: 'access_denied' }) : reply(200, { access_token: (state.token = 'hct_new'), token_type: 'Bearer' })
@@ -981,9 +1007,15 @@ test('a turn sends each run past what the hub holds, and remembers how far it go
   expect(first!.headers).toMatchObject({ authorization: 'Bearer tok', 'x-protocol': '1', 'content-type': 'application/json' })
   expect(first!.headers['user-agent']).toStartWith('hook-analytics/')
   const [start, rows] = [...runsIn(files.get(EVENTS)!)][0]!
-  expect(first!.body.runs).toEqual([{ session: 'sess-1', stream: 'events', run: start, header: expect.objectContaining({ event: 'session', start }), from: 0, rows }])
+  expect(first!.body.runs).toEqual([
+    { session: 'sess-1', stream: 'events', run: start, header: expect.objectContaining({ event: 'session', start }), from: 0, rows },
+  ])
   expect(stored.get(`sess-1/events/${start}`)).toEqual(rows)
-  expect(JSON.parse(files.get(SENT)!)).toMatchObject({ v: 2, url: 'https://hub.test', events: { lines: files.get(EVENTS)!.split('\n').length - 1, run: start, acked: rows!.length } })
+  expect(JSON.parse(files.get(SENT)!)).toMatchObject({
+    v: 2,
+    url: 'https://hub.test',
+    events: { lines: files.get(EVENTS)!.split('\n').length - 1, run: start, acked: rows!.length },
+  })
 
   // the next turn sends only the new rows, numbered on from there
   await endTurn($)
@@ -998,7 +1030,17 @@ test('a resume starts a new run, and rows before any header belong to none', asy
   const { stored } = hub(on)
   on('turn.complete', () => ({ text: '' }))
   files.set(CONFIG, JSON.stringify(SERVER))
-  files.set(EVENTS, ['{"t":1,"event":"orphan"}', '{"v":1,"event":"session","start":100,"cwd":"/p"}', '{"t":1,"event":"prompt"}', '{"v":1,"event":"session","start":200,"cwd":"/p"}', '{"t":2,"event":"prompt"}', ''].join('\n'))
+  files.set(
+    EVENTS,
+    [
+      '{"t":1,"event":"orphan"}',
+      '{"v":1,"event":"session","start":100,"cwd":"/p"}',
+      '{"t":1,"event":"prompt"}',
+      '{"v":1,"event":"session","start":200,"cwd":"/p"}',
+      '{"t":2,"event":"prompt"}',
+      '',
+    ].join('\n'),
+  )
 
   await endTurn($)
   await settle()
@@ -1032,7 +1074,11 @@ test('a hub that lost rows answers with a gap, and the mod starts that stream ov
   const before = posts().length
   await endTurn($)
   await settle()
-  expect(posts().slice(before).map(p => p.body.runs[0].from)).toEqual([JSON.parse(files.get(SENT)!).events.acked - 1, 0])
+  expect(
+    posts()
+      .slice(before)
+      .map(p => p.body.runs[0].from),
+  ).toEqual([JSON.parse(files.get(SENT)!).events.acked - 1, 0])
   const [start, rows] = [...runsIn(files.get(EVENTS)!)][0]!
   expect(stored.get(`sess-1/events/${start}`)).toEqual(rows)
 })
@@ -1118,7 +1164,8 @@ test('a session sent to another hub, or by the old uploads, is sent again', asyn
   const { stored } = hub(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   files.set(CONFIG, JSON.stringify(SERVER))
-  for (const id of ['other-1', 'bytes-1']) files.set(`${DIR}/events/${id}.jsonl.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
+  for (const id of ['other-1', 'bytes-1'])
+    files.set(`${DIR}/events/${id}.jsonl.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
   files.set(`${DIR}/sent/other-1.json`, JSON.stringify({ v: 2, url: 'http://127.0.0.1:4749', events: { lines: 2, run: 1, acked: 1 }, gz: [70, 0] }))
   // the byte-offset uploads' manifest, all in by its reckoning
   files.set(`${DIR}/sent/bytes-1.json`, JSON.stringify({ url: 'https://hub.test', events: 70, gz: [70, 0] }))
