@@ -183,14 +183,29 @@ export function waitsOf(events: Event[]): Wait[] {
   return waits
 }
 
+// a list of waits sorted latest end first, worked out once however many
+// turns step over it
+const latestFirst = new WeakMap<Wait[], Wait[]>()
+
 // The stretches a turn of workMs ending at `end` worked in: back from its end,
 // stepping over the waits, until workMs is used up
 export function turnPieces(end: number, workMs: number, waits: Wait[]): Interval[] {
+  let sorted = latestFirst.get(waits)
+  if (!sorted) latestFirst.set(waits, (sorted = [...waits].sort((a, b) => b.to - a.to)))
+  // the waits ending after the turn don't touch it: skip past them
+  let lo = 0,
+    hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (sorted[mid]!.to > end) lo = mid + 1
+    else hi = mid
+  }
   const pieces: Interval[] = []
   let at = end
   let left = workMs
-  for (const { from, to } of [...waits].sort((a, b) => b.to - a.to)) {
-    if (to > end || from >= at) continue
+  for (let i = lo; i < sorted.length; i++) {
+    const { from, to } = sorted[i]!
+    if (from >= at) continue
     if (to < at) {
       if (at - to >= left) break
       pieces.push([to, at])
@@ -334,14 +349,19 @@ function movesOf(events: Event[]) {
   return moves
 }
 
-// a span cut where its thread moved, each piece with its project
-function placed([start, end]: Interval, moves: Move[] | undefined, home: string): [string, Interval][] {
-  let away: string | undefined
-  const cuts: Move[] = []
-  for (const m of moves ?? []) {
-    if (m.at <= start) away = m.away
-    else if (m.at < end) cuts.push(m)
+// a span cut where its thread moved, each piece with its project. The moves
+// are in time order, so where the span starts is found by halving
+function placed([start, end]: Interval, moves: Move[] = [], home: string): [string, Interval][] {
+  let lo = 0,
+    hi = moves.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (moves[mid]!.at <= start) lo = mid + 1
+    else hi = mid
   }
+  let away = moves[lo - 1]?.away
+  const cuts: Move[] = []
+  for (let i = lo; i < moves.length && moves[i]!.at < end; i++) cuts.push(moves[i]!)
   const pieces: [string, Interval][] = []
   let from = start
   for (const m of cuts) {
