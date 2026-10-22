@@ -1,0 +1,4 @@
+# written by drizzle-kit
+packages/db/migrations
+apps/web/build
+apps/web/.svelte-kit

@@ -1,0 +1,16 @@
+# Local Postgres for the hub (apps/web). 5434 so it won't fight the Postgres instances
+# already on 5432 and 5433
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: claude_hours
+      POSTGRES_PASSWORD: claude_hours
+      POSTGRES_DB: claude_hours
+    ports:
+      - '127.0.0.1:5434:5432'
+    volumes:
+      - postgres:/var/lib/postgresql/data
+
+volumes:
+  postgres:

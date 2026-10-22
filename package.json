@@ -2,14 +2,24 @@
   "name": "claude-hours",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "bun --hot src/server.ts",
     "start": "NODE_ENV=production bun src/server.ts",
     "demo": "bun scripts/fixtures.ts && ANALYTICS_DIR=fixtures bun --hot src/server.ts",
-    "test": "TZ=America/New_York bun test src scripts"
+    "test": "TZ=America/New_York bun test src scripts",
+    "format": "prettier --write apps packages"
   },
   "dependencies": {
     "chart.js": "^4.5.1",
     "chartjs-chart-matrix": "^3.1.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.3",
+    "prettier-plugin-svelte": "^4.1.0",
+    "prettier-plugin-tailwindcss": "^0.8.0"
   }
 }
