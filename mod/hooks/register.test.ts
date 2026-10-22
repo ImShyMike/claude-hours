@@ -1,5 +1,6 @@
 import type { On, PromptChangeInput, PromptEditInput, PromptEditResult } from 'claude-code'
 import { expect, test, type Engine } from 'claude-code/testing'
+import { dialogWaits } from './register'
 
 // What the mod leaves out at its usual value, put back the way the dashboard
 // does (src/eventlog.ts), so tests read rows whole
@@ -654,47 +655,53 @@ test('an interrupt records how much answer had shown and the tools cut off', asy
   expect(JSON.stringify(lines)).not.toContain('lemme')
 })
 
-test('a permission dialog inside a turn is logged as a wait on its turn row', async ($, on) => {
+// Since Claude Code 2.1.307 the permission check runs when the mod's tool.call
+// hook calls next, before any hook beneath it, and a test has nobody to answer
+// an ask: it's refused there and the call ends at once. So a dialog's length
+// is checked on dialogWaits itself (a real one was seen live on 2026-10-21,
+// a 4.1 s dialog logged as a 4.1 s wait)
+const clock = (asked: { tool: string; from: number; to: number }[], questionsMs = 0) =>
+  ({ turnId: 't1', startedMs: 0, questionsMs, asked })
+
+test('a dialog is the time the engine left out of the turn', () => {
+  // asked 2 s in, the call ended at 27 s, the turn at 30 s with 10 s counted
+  expect(dialogWaits(clock([{ tool: 'Bash', from: 2_000, to: 27_000 }]), 30_000, 10_000)).toEqual([[28_000, 20_000, 'Bash']])
+})
+
+test('several dialogs share the left-out time by how long each call ran past its ask', () => {
+  const asked = [
+    { tool: 'Bash', from: 1_000, to: 11_000 },
+    { tool: 'Edit', from: 20_000, to: 50_000 },
+  ]
+  expect(dialogWaits(clock(asked), 60_000, 40_000)).toEqual([
+    [59_000, 5_000, 'Bash'],
+    [40_000, 15_000, 'Edit'],
+  ])
+})
+
+test('a question, a tiny gap or no ask at all is no dialog', () => {
+  // the 40 s left out was a question being answered
+  expect(dialogWaits(clock([{ tool: 'Bash', from: 0, to: 40_000 }], 40_000), 50_000, 10_000)).toBeUndefined()
+  // under half a second left out is noise
+  expect(dialogWaits(clock([{ tool: 'Bash', from: 0, to: 9_000 }]), 10_000, 9_700)).toBeUndefined()
+  expect(dialogWaits(clock([]), 30_000, 10_000)).toBeUndefined()
+})
+
+test('an ask the test engine cannot answer is refused, and leaves no wait', async ($, on) => {
   const { lines, tick } = setup(on)
   on('turn.start', () => ({ turnId: 't1' }))
   on('turn.complete', () => ({ text: '' }))
   on('tool.check', () => ({ decision: 'ask' }))
-  // the engine: the check asks, the dialog stays up 20 s, the command runs 5 s
-  on('tool.call', async (_, e) => {
-    await $.tool.check({ tool: e.tool, input: {}, tool_use_id: e.tool_use_id })
-    tick(25_000)
-    return { result: {} }
-  })
 
   await $.turn.start({ text: 'hi', turnId: 't1' })
   tick(2_000)
   await $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 'tu1' } as never)
   tick(3_000)
-  // 30 s on the clock, 10 s of it the engine counts as the turn
-  await $.turn.complete({ answer: '', durationMs: 10_000, turnId: 't1', reason: 'answer', isAborted: false })
+  await $.turn.complete({ answer: '', durationMs: 5_000, turnId: 't1', reason: 'answer', isAborted: false })
 
-  expect(lines.find(l => l.event === 'turn_end')!.waits).toEqual([[28_000, 20_000, 'Bash']])
-})
-
-test('a turn with no dialog, or only a question, logs no waits', async ($, on) => {
-  const { lines, tick } = setup(on)
-  on('turn.start', (_, e) => ({ turnId: e.turnId }))
-  on('turn.complete', () => ({ text: '' }))
-  on('tool.check', () => ({ decision: 'ask' }))
-  on('tool.call', async (_, e) => {
-    await $.tool.check({ tool: e.tool, input: {}, tool_use_id: e.tool_use_id })
-    tick(40_000)
-    return { result: {} }
-  })
-
-  await $.turn.start({ text: 'hi', turnId: 't1' })
-  await $.tool.call({ tool: 'AskUserQuestion', questions: [], tool_use_id: 'tu1' } as never)
-  await $.turn.complete({ answer: '', durationMs: 0, turnId: 't1', reason: 'answer', isAborted: false })
-  await $.turn.start({ text: 'again', turnId: 't2' })
-  tick(4_000)
-  await $.turn.complete({ answer: '', durationMs: 4_000, turnId: 't2', reason: 'answer', isAborted: false })
-
-  expect(lines.filter(l => l.event === 'turn_end').map(l => l.waits)).toEqual([undefined, undefined])
+  // the engine answers it as a failed call, not a deny
+  expect(lines.find(l => l.event === 'tool')).toMatchObject({ tool: 'Bash', outcome: 'error' })
+  expect(lines.find(l => l.event === 'turn_end')!.waits).toBeUndefined()
 })
 
 test('a cwd below its repo root, or in a worktree, says which repo it is', async ($, on) => {

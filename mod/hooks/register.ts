@@ -200,8 +200,10 @@ const askedAt = new Map<string, number>()
 let turnClock: { turnId: string; startedMs: number; questionsMs: number; asked: { tool: string; from: number; to: number }[] } | undefined
 
 // [ms before the turn's end it opened, ms open, tool] per dialog. Several in
-// one turn share the left-out time by how long each call ran past its ask
-function dialogWaits(clock: NonNullable<typeof turnClock>, endMs: number, durationMs: number) {
+// one turn share the left-out time by how long each call ran past its ask.
+// Exported for its tests: a test engine can't answer an ask, so a dialog's
+// length can't be played through the hooks
+export function dialogWaits(clock: NonNullable<typeof turnClock>, endMs: number, durationMs: number) {
   const dialogsMs = endMs - clock.startedMs - durationMs - clock.questionsMs
   const askedMs = clock.asked.reduce((ms, a) => ms + a.to - a.from, 0)
   if (dialogsMs < 500 || !askedMs) return undefined
