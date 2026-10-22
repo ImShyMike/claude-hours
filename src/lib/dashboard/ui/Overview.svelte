@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { page } from '$app/state'
   import { dayKey, type Summary } from '#lib/analytics/aggregate.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
@@ -10,6 +11,7 @@
   import Calendar from './Calendar.svelte'
   import Columns from './Columns.svelte'
   import Legend from './Legend.svelte'
+  import Pager from './Pager.svelte'
   import PersonPicker from './PersonPicker.svelte'
   import ProjectChip from './ProjectChip.svelte'
   import RangePicker from './RangePicker.svelte'
@@ -19,6 +21,13 @@
   const who = whoIsLooking()
   const range = stored<Range>('range', '7')
   const live = liveDigest(() => range.value)
+  const person = $derived(page.url.searchParams.get('person') ?? '')
+  // the sessions table a page at a time, back to the newest whenever the
+  // range or whose dashboard it is changes
+  const SESSIONS = 15
+  let paged = $state<{ key: string; page: number }>()
+  const sessionPage = $derived(paged?.key === `${range.value} ${person}` ? paged.page : 0)
+  const turnTo = (next: number) => (paged = { key: `${range.value} ${person}`, page: next })
 
   const period = $derived(rangeWindow(range.value))
   const s = $derived(live.value?.range)
@@ -255,7 +264,7 @@
             </Table.Header>
             <Table.Body>
               <!-- a session with no active time in range keeps its home project -->
-              {#each s.sessions.slice(0, 25) as x (x.sessionId)}
+              {#each s.sessions.slice(sessionPage * SESSIONS, (sessionPage + 1) * SESSIONS) as x (x.sessionId)}
                 <Table.Row>
                   <Table.Cell>
                     <a class="font-medium underline-offset-4 hover:underline" href={withPerson(`/session?id=${encodeURIComponent(x.sessionId)}`)}
@@ -280,6 +289,7 @@
               {/each}
             </Table.Body>
           </Table.Root>
+          <Pager bind:page={() => sessionPage, turnTo} count={s.sessions.length} size={SESSIONS} back="Newer sessions" on="Older sessions" />
         </Card.Content>
       </Card.Root>
     {/if}

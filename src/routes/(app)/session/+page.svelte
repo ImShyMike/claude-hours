@@ -1,16 +1,14 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
-  import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
   import { page } from '$app/state'
   import { summarize } from '#lib/analytics/aggregate.js'
-  import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
   import { liveSession } from '#lib/dashboard/live.svelte.js'
   import { DRAFT_HEAD, buildDrafts, draftRow, projectTracks, time } from '#lib/dashboard/session.js'
   import { duration, palette } from '#lib/dashboard/shared.js'
+  import Pager from '#lib/dashboard/ui/Pager.svelte'
   import ProjectChip from '#lib/dashboard/ui/ProjectChip.svelte'
   import Lanes from '#lib/dashboard/ui/session/Lanes.svelte'
   import Replay from '#lib/dashboard/ui/session/Replay.svelte'
@@ -128,17 +126,7 @@
             {/each}
           </Table.Body>
         </Table.Root>
-        {#if pages > 1}
-          <div class="mt-3 flex items-center justify-end gap-2 text-sm text-muted-foreground">
-            <span class="tabular-nums">{current * PAGE + 1} to {Math.min(drafts.length, (current + 1) * PAGE)} of {drafts.length}</span>
-            <Button variant="outline" size="icon-sm" aria-label="Earlier drafts" disabled={current === 0} onclick={() => turnTo(current - 1)}>
-              <ChevronLeftIcon />
-            </Button>
-            <Button variant="outline" size="icon-sm" aria-label="Later drafts" disabled={current === pages - 1} onclick={() => turnTo(current + 1)}>
-              <ChevronRightIcon />
-            </Button>
-          </div>
-        {/if}
+        <Pager bind:page={() => current, turnTo} count={drafts.length} size={PAGE} back="Earlier drafts" on="Later drafts" />
       </Card.Content>
     </Card.Root>
 
