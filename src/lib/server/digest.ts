@@ -4,7 +4,7 @@
 // The browser gets these few numbers, not every event
 import { summarize, type Event, type Summary } from '../analytics/aggregate'
 import type { Db } from './db/index'
-import { sessionsOf } from './history'
+import { sessionsOf, timed, type Timing } from './history'
 import { idleCapMs } from './settings'
 
 export type Digest = {
@@ -23,12 +23,12 @@ type AllTime = Pick<Summary, 'projects' | 'days' | 'sessions'>
 const MAX_PEOPLE = 50
 const kept = new WeakMap<Db, Map<number, { key: string; ever: AllTime }>>()
 
-function allTime(db: Db, personId: number, key: string, events: Event[], options: { idleCapMs: number; tz?: string }) {
+function allTime(db: Db, personId: number, key: string, events: Event[], options: { idleCapMs: number; tz?: string }, timing?: Timing) {
   const people = kept.get(db) ?? new Map<number, { key: string; ever: AllTime }>()
   kept.set(db, people)
   let entry = people.get(personId)
   if (entry?.key !== key) {
-    const { projects, days, sessions } = summarize(events, options)
+    const { projects, days, sessions } = timed(timing, 'ever', () => summarize(events, options))
     entry = { key, ever: { projects, days, sessions } }
   }
   people.delete(personId)
@@ -40,12 +40,13 @@ function allTime(db: Db, personId: number, key: string, events: Event[], options
 // tz is the viewer's IANA zone, days and hours are theirs; a zone that
 // doesn't exist throws a RangeError. spans (every active stretch) only when
 // asked, since only the timeline draws them
-export async function digest(db: Db, personId: number, window: { from?: number; to?: number; tz?: string; spans?: boolean }) {
+export async function digest(db: Db, personId: number, window: { from?: number; to?: number; tz?: string; spans?: boolean }, timing?: Timing) {
   const { from, to, tz } = window
-  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId), idleCapMs(db)])
+  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db)])
   const events = [...sessions.values()].flat()
-  const ever = allTime(db, personId, `${version}|${tz}|${cap}`, events, { idleCapMs: cap, tz })
-  const range = summarize(events, { from, to, idleCapMs: cap, tz })
+  const ever = allTime(db, personId, `${version}|${tz}|${cap}`, events, { idleCapMs: cap, tz }, timing)
+  const range = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, tz }))
+  timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
   const home = new Map(ever.sessions.map(s => [s.sessionId, s.project]))
   const ids = new Set([...range.sessions.map(s => s.sessionId), ...range.spans.map(s => s.sessionId)])
   const homes = Object.fromEntries([...ids].map(id => [id, home.get(id) ?? '']))

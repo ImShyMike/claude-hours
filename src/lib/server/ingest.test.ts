@@ -9,7 +9,7 @@ import { rowsOf, splitRuns } from '../analytics/runs'
 import { people, quarantine, type Db } from './db/index'
 import { testDb } from './db/testing'
 import { digest } from './digest'
-import { draftsText, eventsOf, sessionTexts } from './history'
+import { draftsText, eventsOf, serverTiming, sessionTexts, type Timing } from './history'
 import { ingest, parseBatch, type RunIn } from './ingest'
 import { setIdleCap } from './settings'
 
@@ -160,8 +160,12 @@ describe('digest', () => {
   test('follows new rows, new sessions and the idle cap', async () => {
     const { db, person } = await withPerson()
     await ingest(db, person, [run(0, [prompt(1), tool(2)])])
-    const first = await digest(db, person, {})
+    const timing: Timing = new Map()
+    const first = await digest(db, person, {}, timing)
     expect(first.range.prompts.count).toBe(1)
+    expect(serverTiming(timing)).toMatch(
+      /^runs;dur=[\d.]+, rows;dur=[\d.]+;desc="1 of 1 sessions, 1 runs", decode;dur=[\d.]+, ever;dur=[\d.]+, sum;dur=[\d.]+;desc="2 events"$/,
+    )
     expect(first.idleCapMs).toBe(5 * 60_000)
 
     await ingest(db, person, [run(2, [prompt(180_000)]), run(0, [prompt(1)], { session: 's2' })])

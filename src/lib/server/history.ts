@@ -74,11 +74,31 @@ type Loaded = { key: string; events: Event[] }
 const MAX_EVENTS = 200_000
 const cache = new WeakMap<Db, Map<number, Map<string, Loaded>>>()
 
+// Where a request's time went, for its Server-Timing header: each step's ms,
+// and a note on how much it did
+export type Timing = Map<string, { ms: number; note?: string }>
+
+export function timed<T>(timing: Timing | undefined, step: string, work: () => T): T {
+  const at = performance.now()
+  const done = () => {
+    const was = timing?.get(step)
+    timing?.set(step, { ...was, ms: (was?.ms ?? 0) + performance.now() - at })
+  }
+  const out = work()
+  // a drizzle query is a thenable, not a Promise, and runs once awaited
+  if (typeof (out as PromiseLike<unknown> | undefined)?.then === 'function') return Promise.resolve(out).finally(done) as T
+  done()
+  return out
+}
+
+export const serverTiming = (timing: Timing) =>
+  [...timing].map(([step, { ms, note }]) => `${step};dur=${ms.toFixed(1)}${note ? `;desc="${note}"` : ''}`).join(', ')
+
 const keyOf = (rows: RunRow[]) => rows.map(r => `${r.id}:${r.acked}:${r.updatedAt.getTime()}`).join(',')
 
 // A person's sessions in order. version changes whenever any of them does,
 // for caching what's worked out from them
-export async function sessionsOf(db: Db, personId: number) {
+export async function sessionsOf(db: Db, personId: number, timing?: Timing) {
   const people = cache.get(db) ?? new Map<number, Map<string, Loaded>>()
   cache.set(db, people)
   const known = people.get(personId) ?? new Map<string, Loaded>()
@@ -86,17 +106,18 @@ export async function sessionsOf(db: Db, personId: number) {
   people.delete(personId)
   people.set(personId, known)
 
-  const runRows = inOrder(await db.select().from(runs).where(eventRuns(personId)))
+  const runRows = inOrder(await timed(timing, 'runs', () => db.select().from(runs).where(eventRuns(personId))))
   const bySession = new Map<string, RunRow[]>()
   for (const run of runRows) bySession.set(run.session, [...(bySession.get(run.session) ?? []), run])
   const changed = [...bySession].filter(([session, rows]) => known.get(session)?.key !== keyOf(rows))
-  const texts = await textsOf(
-    db,
-    changed.flatMap(([, rows]) => rows),
-  )
-  for (const [session, rows] of changed) {
-    known.set(session, { key: keyOf(rows), events: tagSession([texts.get(session) ?? ''], session, { remote: true }) })
-  }
+  const reread = changed.flatMap(([, rows]) => rows)
+  const texts = await timed(timing, 'rows', () => textsOf(db, reread))
+  timing?.set('rows', { ms: timing.get('rows')!.ms, note: `${changed.length} of ${bySession.size} sessions, ${reread.length} runs` })
+  timed(timing, 'decode', () => {
+    for (const [session, rows] of changed) {
+      known.set(session, { key: keyOf(rows), events: tagSession([texts.get(session) ?? ''], session, { remote: true }) })
+    }
+  })
   // sessions deleted since
   for (const session of known.keys()) if (!bySession.has(session)) known.delete(session)
   const count = (m: Map<string, Loaded>) => [...m.values()].reduce((n, l) => n + l.events.length, 0)
