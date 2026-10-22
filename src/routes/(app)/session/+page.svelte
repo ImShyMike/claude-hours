@@ -1,7 +1,10 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left'
+  import ChevronRightIcon from '@lucide/svelte/icons/chevron-right'
   import { page } from '$app/state'
   import { summarize } from '#lib/analytics/aggregate.js'
+  import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
@@ -36,8 +39,19 @@
   const selected = $derived(drafts.find(d => d.id === selectedId))
   let replayCard = $state<HTMLElement>()
 
+  // the drafts table a page at a time, on the page with the one being
+  // replayed until another page is picked
+  const PAGE = 15
+  const pages = $derived(Math.max(1, Math.ceil(drafts.length / PAGE)))
+  const pageOf = (draft?: string) => Math.max(0, Math.floor(drafts.findIndex(d => d.id === draft) / PAGE))
+  let paged = $state<{ session: string; page: number }>()
+  const current = $derived(Math.min(pages - 1, paged?.session === id ? paged.page : pageOf(selectedId)))
+  const shown = $derived(drafts.slice(current * PAGE, (current + 1) * PAGE))
+  const turnTo = (next: number) => (paged = { session: id, page: Math.max(0, Math.min(pages - 1, next)) })
+
   async function pick(draft: string) {
     picked = { session: id, draft }
+    turnTo(pageOf(draft))
     await tick()
     replayCard?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
@@ -95,7 +109,7 @@
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {#each drafts as d (d.id)}
+            {#each shown as d (d.id)}
               <Table.Row
                 class={['cursor-pointer', d.id === selectedId && 'bg-muted font-medium']}
                 tabindex={0}
@@ -114,6 +128,17 @@
             {/each}
           </Table.Body>
         </Table.Root>
+        {#if pages > 1}
+          <div class="mt-3 flex items-center justify-end gap-2 text-sm text-muted-foreground">
+            <span class="tabular-nums">{current * PAGE + 1} to {Math.min(drafts.length, (current + 1) * PAGE)} of {drafts.length}</span>
+            <Button variant="outline" size="icon-sm" aria-label="Earlier drafts" disabled={current === 0} onclick={() => turnTo(current - 1)}>
+              <ChevronLeftIcon />
+            </Button>
+            <Button variant="outline" size="icon-sm" aria-label="Later drafts" disabled={current === pages - 1} onclick={() => turnTo(current + 1)}>
+              <ChevronRightIcon />
+            </Button>
+          </div>
+        {/if}
       </Card.Content>
     </Card.Root>
 

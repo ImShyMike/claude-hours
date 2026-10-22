@@ -62,16 +62,20 @@
     scroller.scrollLeft = axis.x(at) + labelW - offset
   }
 
-  // ctrl + scroll (a trackpad pinch sends the same) zooms around the cursor,
-  // one redraw per frame however many wheel events arrive in it; plain
-  // scrolling still scrolls the page. Non-passive, to stop the page zooming
+  // The wheel (or a trackpad pinch, which sends ctrl + wheel) zooms around
+  // the cursor, one redraw per frame however many wheel events arrive in it.
+  // Sideways scrolling still pans, and once zoom can't go further the wheel
+  // scrolls the page again. Non-passive, to stop the page scrolling or zooming
   $effect(() => {
     const el = scroller
     if (!el) return
     let wheel: { by: number; clientX: number } | undefined
     let frame = 0
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return
+      const pinch = e.ctrlKey || e.metaKey
+      if (!pinch && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))) return
+      const goal = zoom * (wheel?.by ?? 1)
+      if ((e.deltaY < 0 && goal >= maxZoom) || (e.deltaY > 0 && goal <= 1)) return
       e.preventDefault()
       wheel = { by: (wheel?.by ?? 1) * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.002)), clientX: e.clientX }
       frame ||= requestAnimationFrame(() => {
@@ -103,7 +107,7 @@
           variant="outline"
           size="icon-sm"
           aria-label="Zoom out"
-          title="Zoom out (or ctrl + scroll)"
+          title="Zoom out (or scroll)"
           disabled={zoom <= 1}
           onclick={() => setZoom(zoom / 2)}
         >
@@ -113,7 +117,7 @@
           variant="outline"
           size="icon-sm"
           aria-label="Zoom in"
-          title="Zoom in (or ctrl + scroll)"
+          title="Zoom in (or scroll)"
           disabled={zoom >= maxZoom}
           onclick={() => setZoom(zoom * 2)}
         >
