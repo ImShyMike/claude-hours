@@ -132,7 +132,8 @@
 }
 
 /* the dashboard's project colors (the 8 with the most time get p1 to p8,
-   the rest share p-other) and the calendar's heat steps */
+   the rest share p-other), the calendar's heat steps, and the session
+   page's: what was typed, deleted or pasted, Claude and tools, interrupts */
 :root {
   --p1: #2a78d6;
   --p2: #eb6834;
@@ -149,6 +150,12 @@
   --heat-3: #3987e5;
   --heat-4: #1c5cab;
   --heat-5: #0d366b;
+  --typed: #2a78d6;
+  --deleted: #eb6834;
+  --pasted: #1baf7a;
+  --neutral: #c3c2b7;
+  --neutral-2: #898781;
+  --critical: #d03b3b;
 }
 .dark {
   --p1: #3987e5;
@@ -166,6 +173,12 @@
   --heat-3: #2a78d6;
   --heat-4: #5598e7;
   --heat-5: #9ec5f4;
+  --typed: #3987e5;
+  --deleted: #d95926;
+  --pasted: #199e70;
+  --neutral: #4a4a46;
+  --neutral-2: #898781;
+  --critical: #d03b3b;
 }
 
 /* what showTip puts in the chart tooltip */

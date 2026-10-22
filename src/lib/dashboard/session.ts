@@ -1,41 +1,13 @@
-import { projectSpans, summarize, turnPieces, waitsOf, type Event, type Interval } from '../analytics/aggregate'
-import {
-  apply,
-  countGroups,
-  describe,
-  durationOf,
-  groupOf,
-  initialState,
-  pausesOf,
-  squash,
-  type State,
-  type Step,
-  type Timeline,
-} from '../analytics/replay'
-import {
-  $,
-  MIN,
-  api,
-  attachments,
-  chip,
-  clockTime,
-  compact,
-  duration,
-  esc,
-  hideTip,
-  load,
-  palette,
-  save,
-  seconds,
-  showTip,
-  withPerson,
-  type Palette,
-} from './shared'
-
-const sessionId = new URLSearchParams(location.search).get('id') ?? ''
+// The session page's drawing, worked out as shapes and strings for its
+// Svelte components to put on the page: the lanes of who was doing what,
+// the drafts, and a draft's replay
+import { projectSpans, turnPieces, waitsOf, type Event, type Interval } from '../analytics/aggregate'
+import { apply, countGroups, describe, groupOf, initialState, pausesOf, type Source, type State, type Step, type Timeline } from '../analytics/replay'
+import { axisOf } from './axis'
+import { MIN, attachments, clockTime, compact, duration, esc, seconds, type Palette } from './shared'
 
 // a draft as the main log tells it, with its replay if the sidecar has one
-type Draft = {
+export type Draft = {
   id: string
   outcome: 'sent' | 'abandoned'
   start: number
@@ -44,84 +16,12 @@ type Draft = {
   timeline?: Timeline
 }
 
-let events: Event[] = []
-let drafts: Draft[] = []
-let selected: Draft | undefined
-let zoom = Number(load('zoom', '1'))
-let collapse = load<string>('collapse', '0') === '1'
-// the drawn timeline's axis, so a ctrl + scroll can zoom around the cursor
-let laneAxis: Axis | undefined
-// where the session's time went, by project, for the Projects lane: tracks of
-// stretches that don't overlap, home project first, so a fork working in
-// another repo at the same time drops to a thin track under it
-let colors: Palette | undefined
-let projectTracks: { project: string; span: Interval }[][] = []
-
-// With gaps collapsed, a quiet stretch longer than GAP_MS is squeezed into a
-// break GAP_PX wide (less if there are many), and the busy stretches share
-// the rest of the width to scale
-const GAP_MS = 5 * MIN
-const GAP_PX = 48
-type Axis = { x: (ms: number) => number; at: (x: number) => number; segments: Interval[]; gaps: Interval[]; scale: number }
-
-function axisOf(spans: Interval[], left: number, plotW: number): Axis {
-  const sorted = [...spans].sort((a, b) => a[0] - b[0])
-  const segments: Interval[] = []
-  for (const [start, end] of sorted) {
-    const last = segments[segments.length - 1]
-    if (last && (!collapse || start - last[1] <= GAP_MS)) last[1] = Math.max(last[1], end)
-    else segments.push([start, end])
-  }
-  const gaps = segments.slice(1).map((s, i): Interval => [segments[i]![1], s[0]])
-  const gapPx = gaps.length ? Math.min(GAP_PX, (plotW * 0.3) / gaps.length) : 0
-  const busy = Math.max(
-    segments.reduce((ms, [s, e]) => ms + e - s, 0),
-    10_000,
-  )
-  const scale = (plotW - gaps.length * gapPx) / busy
-  // each segment's left edge, in px from the plot's start
-  const offs: number[] = []
-  for (let i = 0; i < segments.length; i++) offs.push(i ? offs[i - 1]! + (segments[i - 1]![1] - segments[i - 1]![0]) * scale + gapPx : 0)
-  const x = (ms: number) => {
-    for (let i = 0; i < segments.length; i++) {
-      const [s, e] = segments[i]!
-      if (ms > e && i < segments.length - 1) continue
-      // inside a gap: spread across its break
-      if (ms < s && i > 0) return left + offs[i]! - gapPx + ((ms - segments[i - 1]![1]) / (s - segments[i - 1]![1])) * gapPx
-      return left + offs[i]! + (ms - s) * scale
-    }
-    return left
-  }
-  const at = (px: number) => {
-    for (let i = segments.length - 1; i >= 0; i--) {
-      const [s] = segments[i]!
-      const from = left + offs[i]!
-      if (px >= from || i === 0) return s + (px - from) / scale
-      // inside the break before this segment
-      if (px >= from - gapPx) return segments[i - 1]![1] + ((px - from + gapPx) / gapPx) * (s - segments[i - 1]![1])
-    }
-    return segments[0]![0]
-  }
-  return { x, at, segments, gaps, scale }
-}
-
-// the mod's own thresholds: a gap this long is a pause, and one this long a
-// break that stops counting as typing time
-const PAUSE_MS = 2_000
-const BREAK_MS = 30_000
-
-// a pause shows the surface through blue stripes, tighter for a short pause
-// and wider for a break, so both read as "not typing" inside the bar
-const hatch = (id: string, gap: number) =>
-  `<pattern id="${id}" width="${gap}" height="${gap}" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="hatch-bg" width="${gap}" height="${gap}"/><line class="hatch-line" x1="0" y1="0" x2="0" y2="${gap}"/></pattern>`
-const PAUSE_PATTERNS = `<defs>${hatch('hatch-pause', 4)}${hatch('hatch-break', 8)}</defs>`
-
-const time = (e: Event) => Date.parse(e.ts)
+export const time = (e: Event) => Date.parse(e.ts)
 const num = (v: unknown) => (typeof v === 'number' ? v : 0)
 
 // --- data ---------------------------------------------------------------
 
-function buildDrafts(timelines: Timeline[]): Draft[] {
+export function buildDrafts(events: Event[], timelines: Timeline[]): Draft[] {
   const byId = new Map(timelines.map(tl => [tl.draftId, tl]))
   const out: Draft[] = []
   for (const e of events) {
@@ -139,12 +39,73 @@ function buildDrafts(timelines: Timeline[]): Draft[] {
   return out.sort((a, b) => a.start - b.start)
 }
 
+export type ProjectPiece = { project: string; span: Interval }
+
+// Where the session's time went, by project, for the Projects lane: tracks of
+// stretches that don't overlap, home project first, so a fork working in
+// another repo at the same time drops to a thin track under it
+export function projectTracks(events: Event[], idleCapMs: number, home: string): ProjectPiece[][] {
+  const byProject = [...projectSpans(events, idleCapMs)].flatMap(([project, spans]) => spans.map(span => ({ project, span })))
+  byProject.sort((a, b) => Number(b.project === home) - Number(a.project === home) || a.span[0] - b.span[0])
+  const tracks: ProjectPiece[][] = []
+  for (const piece of byProject) {
+    const track = tracks.find(t => !t.some(o => o.span[0] < piece.span[1] && piece.span[0] < o.span[1]))
+    if (track) track.push(piece)
+    else tracks.push([piece])
+  }
+  return tracks
+}
+
 // --- session timeline ---------------------------------------------------
 
+// With gaps collapsed, a quiet stretch longer than GAP_MS is squeezed into a
+// break GAP_PX wide (less if there are many)
+const GAP_MS = 5 * MIN
+const GAP_PX = 48
+// the mod's own thresholds: a gap this long is a pause, and one this long a
+// break that stops counting as typing time
+const PAUSE_MS = 2_000
+const BREAK_MS = 30_000
 const TICKS_MS = [10_000, 30_000, MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN, 60 * MIN, 120 * MIN]
 
-function drawLanes() {
-  const el = $('lanes')
+export const LANE_NAMES = ['You', 'Claude', 'Tools', 'Projects']
+export const LANES_PAD = { left: 64, right: 12, top: 22 }
+export const LANE_H = 30
+const SUB = 11
+
+// what's drawn, class names in full so Tailwind finds them
+export type Shape =
+  | { kind: 'rect'; class: string; x: number; y: number; width: number; height: number; rx?: number; fill?: string; tip?: string; draft?: string }
+  | { kind: 'line'; class: string; x1: number; x2: number; y1: number; y2: number; tip?: string }
+  | { kind: 'text'; class: string; x: number; y: number; text: string; tip?: string; start?: boolean }
+
+const YOU = 'fill-(--typed)'
+const PICKABLE = 'cursor-pointer hover:stroke-foreground hover:stroke-2'
+
+// the lanes' legend: a swatch's classes and what it means
+export const LANES_LEGEND: [string, string][] = [
+  ['bg-(--typed)', 'writing a prompt'],
+  ['shadow-[inset_0_0_0_2px_var(--typed)]', 'abandoned draft'],
+  ['bg-[repeating-linear-gradient(45deg,var(--typed)_0_2px,var(--card)_2px_4px)]', 'paused while writing'],
+  ['bg-(--typed) opacity-45', 'answering Claude'],
+  ['bg-(--neutral-2)', 'Claude working'],
+  ['bg-foreground/70', 'compacting'],
+  ['bg-(--neutral)', 'tool call'],
+  ['bg-(--critical)', 'interrupt'],
+  ['w-[3px] bg-[repeating-linear-gradient(to_bottom,var(--muted-foreground)_0_3px,transparent_3px_5px)]', 'sent mid-turn'],
+]
+
+export function lanes(opts: {
+  events: Event[]
+  drafts: Draft[]
+  tracks: ProjectPiece[][]
+  colors: Palette
+  selected?: string
+  fit: number
+  zoom: number
+  collapse: boolean
+}) {
+  const { events, drafts, tracks, colors, selected } = opts
   const turns = events.filter(e => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId)
   const compacts = events.filter(e => e.event === 'compact')
   // a tool row is written when the call ends, so it starts durationMs earlier
@@ -165,113 +126,135 @@ function drawLanes() {
   ]
   const t1 = Math.max(...spans.map(s => s[1]))
 
-  const fit = Math.max(el.parentElement!.clientWidth, 280)
-  const pad = { left: 64, right: 12, top: 22 }
-  const width = Math.max(fit, Math.round((fit - pad.left - pad.right) * zoom) + pad.left + pad.right)
+  const pad = LANES_PAD
+  const fit = Math.max(opts.fit, 280)
+  const width = Math.max(fit, Math.round((fit - pad.left - pad.right) * opts.zoom) + pad.left + pad.right)
   const plotW = width - pad.left - pad.right
-  const axis = axisOf(spans, pad.left, plotW)
-  laneAxis = axis
+  const axis = axisOf(spans, pad.left, plotW, opts.collapse ? GAP_MS : Infinity, GAP_PX)
   const x = axis.x
-  const LANE = 30
-  const SUB = 11
-  const lanes = ['You', 'Claude', 'Tools', 'Projects']
-  const laneY = (i: number) => pad.top + i * LANE
-  const extra = Math.max(0, projectTracks.length - 1) * (SUB + 3)
-  const height = pad.top + lanes.length * LANE + extra + 4
+  const laneY = (i: number) => pad.top + i * LANE_H
+  const extra = Math.max(0, tracks.length - 1) * (SUB + 3)
+  const height = pad.top + LANE_NAMES.length * LANE_H + extra + 4
+  const shapes: Shape[] = []
 
   const tick = TICKS_MS.find(t => t * axis.scale >= 80) ?? TICKS_MS[TICKS_MS.length - 1]!
-  // a collapsed gap's length sits on the time axis, so ticks keep clear of it
-  const gapLabels = axis.gaps.map(([from, to]) => (x(from) + x(to)) / 2)
-  let svg = ''
+  // a collapsed gap wide enough has its length on the time axis, so ticks
+  // keep clear of it
+  const GAP_LABEL_PX = 30
+  const gapLabels = axis.gaps.filter(([from, to]) => x(to) - x(from) >= GAP_LABEL_PX).map(([from, to]) => (x(from) + x(to)) / 2)
+  // and apart from each other, across a thin gap too
+  let lastTick = -Infinity
   for (const [from, to] of axis.segments) {
     for (let t = Math.ceil(from / tick) * tick; t <= Math.min(to, t1); t += tick) {
-      if (gapLabels.some(g => Math.abs(g - x(t)) < 56)) continue
-      svg += `<line class="gridline" x1="${x(t)}" x2="${x(t)}" y1="${pad.top - 4}" y2="${height}"/>`
+      if (x(t) - lastTick < 56 || gapLabels.some(g => Math.abs(g - x(t)) < 56)) continue
+      lastTick = x(t)
+      shapes.push({ kind: 'line', class: 'stroke-border', x1: x(t), x2: x(t), y1: pad.top - 4, y2: height })
       const label = new Date(t).toLocaleTimeString(
         undefined,
         tick < MIN ? { hour: 'numeric', minute: '2-digit', second: '2-digit' } : { hour: 'numeric', minute: '2-digit' },
       )
-      svg += `<text x="${x(t)}" y="12" text-anchor="middle">${label}</text>`
+      shapes.push({ kind: 'text', class: 'fill-muted-foreground', x: x(t), y: 12, text: label })
     }
   }
-  // the names sit in a column over the chart, outside the scroller, so they
-  // stay put when a zoomed timeline scrolls sideways
-  const labels = $('lane-labels')
-  // (below the time axis, so its ticks scroll by uncovered)
-  labels.style.top = `${pad.top - 4}px`
-  labels.style.width = `${pad.left - 4}px`
-  labels.style.height = `${height - pad.top + 4}px`
-  labels.innerHTML = lanes
-    .map((name, i) => `<span style="top:${laneY(i) - pad.top + 4}px;height:${LANE}px;line-height:${LANE}px">${name}</span>`)
-    .join('')
-  lanes.forEach((_, i) => {
-    const y = laneY(i) + LANE - 3 + (i === 3 ? extra : 0)
-    svg += `<line class="baseline" x1="${pad.left}" x2="${width - pad.right}" y1="${y}" y2="${y}"/>`
+  LANE_NAMES.forEach((_, i) => {
+    const y = laneY(i) + LANE_H - 3 + (i === 3 ? extra : 0)
+    shapes.push({ kind: 'line', class: 'stroke-muted-foreground/40', x1: pad.left, x2: width - pad.right, y1: y, y2: y })
   })
 
-  const bar = (cls: string, start: number, end: number, lane: number, attrs = '') => {
-    const x0 = x(start)
-    const w = Math.max(3, x(end) - x0)
-    return `<rect class="${cls}" x="${x0}" y="${laneY(lane) + 5}" width="${w}" height="${LANE - 12}" rx="3" ${attrs}/>`
-  }
-  const tips: string[] = []
-  const tipAttr = (html: string) => `data-tip="${tips.push(html) - 1}"`
+  const bar = (cls: string, start: number, end: number, lane: number, more: Partial<Extract<Shape, { kind: 'rect' }>> = {}): Shape => ({
+    kind: 'rect',
+    class: cls,
+    x: x(start),
+    y: laneY(lane) + 5,
+    width: Math.max(3, x(end) - x(start)),
+    height: LANE_H - 12,
+    rx: 3,
+    ...more,
+  })
 
-  // each collapsed gap: a hatched break through the lanes, its length on top
+  // each collapsed gap: a soft band through the lanes, its length on top
   for (const [from, to] of axis.gaps) {
     const x0 = x(from)
     const w = x(to) - x0
     const tip = `<strong>Nothing for ${duration(to - from)}</strong>${clockTime(from)} to ${clockTime(to)}, collapsed`
-    svg += `<rect class="gap-break" x="${x0}" y="${pad.top - 4}" width="${w}" height="${height - pad.top + 4}" ${tipAttr(tip)}/>`
-    if (w >= 30) svg += `<text class="gap-label" x="${x0 + w / 2}" y="12" text-anchor="middle">${duration(to - from)}</text>`
+    shapes.push({ kind: 'rect', class: 'fill-muted', x: x0, y: pad.top - 4, width: w, height: height - pad.top + 4, tip })
+    if (w >= GAP_LABEL_PX)
+      shapes.push({ kind: 'text', class: 'fill-muted-foreground font-semibold', x: x0 + w / 2, y: 12, text: duration(to - from) })
   }
 
-  drafts.forEach((d, i) => {
-    const cls = `span-you ${d.outcome}${d === selected ? ' selected' : ''}`
+  for (const d of drafts) {
+    const outline = d.outcome === 'abandoned' ? 'fill-transparent stroke-(--typed) stroke-2' : YOU
+    const cls = `${outline} ${PICKABLE}${d.id === selected ? ' stroke-foreground! stroke-2' : ''}`
     const when = d.line.midTurn ? '<br>sent while Claude was working' : ''
     const tip = `<strong>${d.outcome === 'sent' ? 'Prompt sent' : 'Draft abandoned'}</strong>${clockTime(d.start)}, ${seconds(d.end - d.start)} writing${when}${d.timeline ? '<br>click to replay' : ''}`
-    svg += bar(cls, d.start, d.end, 0, `data-draft="${i}" ${tipAttr(tip)}`)
-    if (!d.timeline) return
+    shapes.push(bar(cls, d.start, d.end, 0, { tip, draft: d.id }))
+    if (!d.timeline) continue
     // the pauses, hatched over the bar (denser for a break long enough to
     // stop counting as typing), each with its own tooltip
     const origin = Date.parse(d.timeline.startedAt)
     for (const p of pausesOf(d.timeline, PAUSE_MS)) {
       const start = origin + p.from
-      const kind = p.to - p.from >= BREAK_MS ? 'break' : 'pause'
-      const pauseTip = `<strong>${kind === 'break' ? 'Break' : 'Pause'}</strong>${seconds(p.to - p.from)}, from ${clockTime(start)}${kind === 'break' ? '<br>not counted as typing time' : ''}`
-      svg += `<rect class="pause-mark ${kind}" x="${x(start)}" y="${laneY(0) + 5}" width="${Math.max(2, x(origin + p.to) - x(start))}" height="${LANE - 12}" data-draft="${i}" ${tipAttr(pauseTip)}/>`
+      const brk = p.to - p.from >= BREAK_MS
+      const tip = `<strong>${brk ? 'Break' : 'Pause'}</strong>${seconds(p.to - p.from)}, from ${clockTime(start)}${brk ? '<br>not counted as typing time' : ''}`
+      shapes.push({
+        kind: 'rect',
+        class: `cursor-pointer hover:stroke-foreground ${brk ? 'fill-[url(#hatch-break)]' : 'fill-[url(#hatch-pause)]'}`,
+        x: x(start),
+        y: laneY(0) + 5,
+        width: Math.max(2, x(origin + p.to) - x(start)),
+        height: LANE_H - 12,
+        tip,
+        draft: d.id,
+      })
     }
-  })
+  }
   for (const w of waits) {
     const what = w.kind === 'question' ? `Answering ${esc(w.tool)}` : `Permission for ${esc(w.tool) || 'a tool'}`
     const tip = `<strong>${what}</strong>${seconds(w.to - w.from)}, until ${clockTime(w.to)}<br>not counted as Claude working`
-    svg += bar('span-you answer', w.from, w.to, 0, tipAttr(tip))
+    shapes.push(bar('fill-(--typed)/45', w.from, w.to, 0, { tip }))
   }
   for (const t of turns) {
     const end = time(t)
     const pieces = piecesOf.get(t)!
     const waited = end - pieces[0]![0] - num(t.durationMs)
     const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}${waited ? ` working, ${seconds(waited)} waiting on you` : ''}, ended ${clockTime(end)}`
-    for (const [s, e] of pieces) svg += bar('span-claude', s, e, 1, tipAttr(tip))
+    for (const [s, e] of pieces) shapes.push(bar('fill-(--neutral-2)', s, e, 1, { tip }))
     if (t.event === 'interrupt') {
-      svg += `<line class="interrupt" x1="${x(end)}" x2="${x(end)}" y1="${laneY(0) + 2}" y2="${laneY(2)}"/>`
+      shapes.push({ kind: 'line', class: 'stroke-(--critical) stroke-2', x1: x(end), x2: x(end), y1: laneY(0) + 2, y2: laneY(2) })
       const running = Array.isArray(t.toolsRunning) && t.toolsRunning.length ? `<br>stopped ${esc(t.toolsRunning.join(', '))} mid-run` : ''
       const shown =
         typeof t.answerChars === 'number' ? `<br>${t.answerChars ? `${compact(t.answerChars)} chars of answer shown` : 'no answer shown yet'}` : ''
-      svg += `<text class="interrupt-mark" x="${x(end) + 3}" y="${laneY(1) + 4}" ${tipAttr(`<strong>Interrupt</strong>Esc during a turn${shown}${running}`)}>✕</text>`
+      shapes.push({
+        kind: 'text',
+        class: 'fill-(--critical) font-bold',
+        x: x(end) + 3,
+        y: laneY(1) + 4,
+        text: '✕',
+        start: true,
+        tip: `<strong>Interrupt</strong>Esc during a turn${shown}${running}`,
+      })
     }
   }
   // a prompt sent while Claude worked: a dashed drop from You into the turn
   for (const e of events) {
     if (e.event !== 'prompt' || !e.midTurn) continue
     const at = x(time(e))
-    svg += `<line class="mid-turn" x1="${at}" x2="${at}" y1="${laneY(0) + 4}" y2="${laneY(2) - 4}" ${tipAttr(`<strong>Sent mid-turn</strong>${clockTime(time(e))}, ${num(e.words)} words`)}/>`
+    shapes.push({
+      kind: 'line',
+      class: 'stroke-muted-foreground stroke-2 [stroke-dasharray:3_3]',
+      x1: at,
+      x2: at,
+      y1: laneY(0) + 4,
+      y2: laneY(2) - 4,
+      tip: `<strong>Sent mid-turn</strong>${clockTime(time(e))}, ${num(e.words)} words`,
+    })
   }
   for (const t of tools) {
     const tip = `<strong>${esc(String(t.e.tool))}</strong>${seconds(t.end - t.start)} · ${esc(String(t.e.outcome ?? ''))}`
-    svg += bar('span-tool', t.start, t.end, 2, tipAttr(tip))
+    shapes.push(bar('fill-(--neutral)', t.start, t.end, 2, { tip }))
   }
-  // over the Claude lane, since an auto compaction lands mid-turn
+  // over the Claude lane, since an auto compaction lands mid-turn; a card
+  // ring keeps it apart from the turn under it
   for (const c of compacts) {
     const end = time(c)
     const before = num(c.tokensBefore)
@@ -279,85 +262,122 @@ function drawLanes() {
     const sizes = before ? `<br>${compact(before)} → ${after ? compact(after) : '?'} tokens` : ''
     const who = c.agentId ? ', a subagent' : ''
     const tip = `<strong>Compaction (${esc(String(c.trigger))}${who})</strong>${seconds(num(c.durationMs))}, ${esc(String(c.outcome))}${sizes}`
-    svg += bar(`span-compact${c.agentId || c.trigger === 'precompute' ? ' background' : ''}`, end - num(c.durationMs), end, 1, tipAttr(tip))
+    const faded = c.agentId || c.trigger === 'precompute'
+    shapes.push(bar(`stroke-card stroke-2 ${faded ? 'fill-foreground/30' : 'fill-foreground/70'}`, end - num(c.durationMs), end, 1, { tip }))
   }
 
-  projectTracks.forEach((track, k) => {
-    const y = laneY(3) + 5 + (k ? LANE - 12 + 3 + (k - 1) * (SUB + 3) : 0)
-    const h = k ? SUB : LANE - 12
+  tracks.forEach((track, k) => {
+    const y = laneY(3) + 5 + (k ? LANE_H - 12 + 3 + (k - 1) * (SUB + 3) : 0)
+    const h = k ? SUB : LANE_H - 12
     for (const { project, span } of track) {
       const tip = `<strong>${esc(project)}</strong>${clockTime(span[0])} to ${clockTime(span[1])}, ${duration(span[1] - span[0])}${k ? '<br>alongside the main thread' : ''}`
       const x0 = x(span[0])
-      svg += `<rect class="span-project" x="${x0}" y="${y}" width="${Math.max(3, x(span[1]) - x0)}" height="${h}" rx="${k ? 2 : 3}" fill="${colors!.color(project)}" ${tipAttr(tip)}/>`
+      shapes.push({
+        kind: 'rect',
+        class: '',
+        x: x0,
+        y,
+        width: Math.max(3, x(span[1]) - x0),
+        height: h,
+        rx: k ? 2 : 3,
+        fill: colors.color(project),
+        tip,
+      })
     }
   })
 
-  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Session timeline">${PAUSE_PATTERNS}${svg}</svg>`
-  el.querySelectorAll<SVGElement>('[data-tip]').forEach(node => {
-    node.addEventListener('mousemove', e => showTip(e, tips[Number(node.dataset.tip)]!))
-    node.addEventListener('mouseleave', hideTip)
-  })
-  el.querySelectorAll<SVGElement>('[data-draft]').forEach(node => {
-    node.style.cursor = 'pointer'
-    node.addEventListener('click', () => select(drafts[Number(node.dataset.draft)]!))
-  })
-}
-
-// --- drafts table -------------------------------------------------------
-
-function drawTable() {
-  const head = ['Started', 'Outcome', 'Writing', 'Typing', 'Edits', 'Fixes', 'Rewrites', 'Word del', 'Longest pause']
-  const rows = drafts.map((d, i) => {
-    const l = d.line
-    const cells = [
-      clockTime(d.start),
-      d.outcome === 'sent' ? 'sent' : `abandoned (${esc(String(l.how ?? '?'))})`,
-      seconds(d.end - d.start),
-      seconds(num(l.typingMs)),
-      String(num(l.edits)),
-      String(num(l.fixes)),
-      String(num(l.rewrites)),
-      String(num(l.wordDeletes)),
-      seconds(num(l.longestPauseMs)),
-    ]
-    const cls = `pick${d === selected ? ' selected' : ''}`
-    return `<tr class="${cls}" data-draft="${i}">${cells.map((c, j) => `<td${j > 1 ? ' class="num"' : ''}>${c}</td>`).join('')}</tr>`
-  })
-  $('drafts').innerHTML =
-    `<tr>${head.map((h, j) => `<th${j > 1 ? ' class="num"' : ''}>${h}</th>`).join('')}</tr>` +
-    (rows.join('') || `<tr><td colspan="${head.length}" class="muted">no typed drafts in this session yet</td></tr>`)
-  $('drafts')
-    .querySelectorAll<HTMLElement>('tr[data-draft]')
-    .forEach(row => row.addEventListener('click', () => select(drafts[Number(row.dataset.draft)]!)))
+  return { width, height, axis, shapes, laneY }
 }
 
 // --- replay -------------------------------------------------------------
 
-let tl: Timeline | undefined
-let clock = { length: 0, toPlay: (ms: number) => ms, toReal: (ms: number) => ms }
-let playMs = 0
-let playing = false
-let lastFrame = 0
-// the box as of `cachedAt` real ms, so playing forward only applies new steps
-let cached: State | undefined
-let cachedAt = -Infinity
+export const KINDS_LEGEND: [string, string][] = [
+  ['bg-(--typed)', 'typed (above the line)'],
+  ['bg-(--deleted)', 'deleted (below)'],
+  ['bg-(--pasted)', 'pasted or typed over'],
+  ['bg-(--neutral-2)', 'cursor move'],
+  ['bg-(--neutral)', 'already in the box'],
+]
 
-const MAX_CELLS = 6_000
-
-function stateFor(real: number) {
-  if (!tl) return undefined
-  if (!cached || real < cachedAt) {
-    cached = initialState(tl)
-    cachedAt = -Infinity
-  }
-  while (cached.applied < tl.steps.length && tl.steps[cached.applied]![0] <= real) apply(cached, tl.steps[cached.applied]!)
-  cachedAt = real
-  return cached
+const STRIP_H = 110
+const STRIP_MID = 56
+export const STRIP_PAD = 8
+const MARK: Record<string, string> = {
+  typed: 'fill-(--typed)',
+  deleted: 'fill-(--deleted)',
+  pasted: 'fill-(--pasted)',
+  move: 'fill-(--neutral-2)',
+  changed: 'fill-(--neutral-2)',
 }
 
-function drawBox(real: number) {
-  const state = stateFor(real)
-  if (!state || !tl) return
+export type Clock = { length: number; toPlay: (ms: number) => number; toReal: (ms: number) => number }
+
+// every edit over the draft's (squashed) time: typing above the line,
+// deleting below, pauses as soft bands
+export function strip(tl: Timeline, clock: Clock, fit: number) {
+  const width = Math.max(Math.max(fit, 280), tl.steps.length * 3 + 20)
+  const x = (real: number) => STRIP_PAD + (clock.toPlay(real) / Math.max(clock.length, 1)) * (width - STRIP_PAD * 2)
+  const h = (n: number) => Math.min(44, 6 + Math.log2(1 + n) * 6)
+  const shapes: Shape[] = []
+  for (const p of pausesOf(tl, 2_000)) {
+    const x0 = x(p.from)
+    const w = x(p.to) - x0
+    const tip = `<strong>Pause</strong>${seconds(p.to - p.from)}${p.to - p.from > 30_000 ? ', a break' : ''}`
+    shapes.push({ kind: 'rect', class: 'fill-muted', x: x0, y: 4, width: w, height: STRIP_H - 8, rx: 3, tip })
+    if (w > 30) shapes.push({ kind: 'text', class: 'fill-muted-foreground', x: x0 + w / 2, y: STRIP_H - 8, text: seconds(p.to - p.from) })
+  }
+  shapes.push({ kind: 'line', class: 'stroke-muted-foreground/40', x1: STRIP_PAD, x2: width - STRIP_PAD, y1: STRIP_MID, y2: STRIP_MID })
+  for (const st of tl.steps) {
+    const [, kind, , removed = 0, shape = ''] = st
+    const g = groupOf(kind)
+    const cx = x(st[0])
+    // replacing shows as both: what went in above, what came out below
+    if (kind === 'r') {
+      const up = h(shape.length)
+      shapes.push({ kind: 'rect', class: MARK.pasted!, x: cx - 1, y: STRIP_MID - up, width: 2, height: up })
+      shapes.push({ kind: 'rect', class: MARK.deleted!, x: cx - 1, y: STRIP_MID, width: 2, height: h(removed) })
+    } else if (g === 'changed') shapes.push({ kind: 'rect', class: MARK[g]!, x: cx - 1, y: 6, width: 2, height: STRIP_H - 24, rx: 1 })
+    else if (shape.length || removed) {
+      const up = shape.length ? h(shape.length) : 0
+      const down = removed ? h(removed) : 0
+      shapes.push({ kind: 'rect', class: MARK[g]!, x: cx - 1, y: STRIP_MID - up, width: 2, height: up + down, rx: 1 })
+    } else shapes.push({ kind: 'rect', class: MARK[g]!, x: cx - 1, y: STRIP_MID - 3, width: 2, height: 6, rx: 1 })
+    // a wider invisible target, so a 2px mark is easy to hover
+    shapes.push({
+      kind: 'rect',
+      class: 'fill-transparent',
+      x: cx - 4,
+      y: 0,
+      width: 8,
+      height: STRIP_H,
+      tip: `<strong>${esc(describe(st))}</strong>at ${seconds(st[0])}`,
+    })
+  }
+  return { width, height: STRIP_H, shapes }
+}
+
+// The box as of `real` ms into the draft, kept between calls so playing
+// forward only applies the new steps
+export function replayer(tl: Timeline) {
+  let cached: State | undefined
+  let cachedAt = -Infinity
+  return (real: number) => {
+    if (!cached || real < cachedAt) {
+      cached = initialState(tl)
+      cachedAt = -Infinity
+    }
+    while (cached.applied < tl.steps.length && tl.steps[cached.applied]![0] <= real) apply(cached, tl.steps[cached.applied]!)
+    cachedAt = real
+    return cached
+  }
+}
+
+const MAX_CELLS = 6_000
+const CELL: Record<Source, string> = { before: 'bg-(--neutral)', typed: 'bg-(--typed)', pasted: 'bg-(--pasted)', changed: 'bg-(--neutral)' }
+
+// The prompt box as shapes, a cell per character: it redraws every frame
+// while playing, so it's one string rather than thousands of nodes
+export function boxHtml(tl: Timeline, state: State, real: number) {
   const last: Step | undefined = tl.steps[state.applied - 1]
   const deleting = last && groupOf(last[1]) === 'deleted' && real - last[0] < 400
   const fresh = (at: number) => at >= 0 && real - at < 250
@@ -366,347 +386,54 @@ function drawBox(real: number) {
   let wordCells = 0
   // a word keeps together, but a long run (a paste) may wrap
   const flush = () => {
-    if (word) html += wordCells > 40 ? word : `<span class="w">${word}</span>`
+    if (word) html += wordCells > 40 ? word : `<span class="inline-block whitespace-nowrap">${word}</span>`
     word = ''
     wordCells = 0
   }
-  const cursor = `<span class="cur${deleting ? ' deleting' : ''}"></span>`
+  const cursor = `<span class="my-px mr-px inline-block h-4 align-top ${deleting ? 'w-[3px] bg-(--deleted)' : 'w-0.5 bg-foreground'}"></span>`
   const cells = state.cells.slice(0, MAX_CELLS)
   cells.forEach((cell, i) => {
     if (i === state.cursor) word += cursor
     if (cell.ch === 'a') {
-      word += `<span class="c k-${cell.src}${fresh(cell.at) ? ' fresh' : ''}"></span>`
+      word += `<span class="mt-[3px] mr-px mb-[3px] inline-block h-3 w-[7px] rounded-[2px] align-top ${CELL[cell.src]}${fresh(cell.at) ? ' outline-2 -outline-offset-1 outline-foreground' : ''}"></span>`
       wordCells++
     } else {
       flush()
-      html += cell.ch === '\n' ? '<br>' : '<span class="sp"></span>'
+      html += cell.ch === '\n' ? '<br>' : '<span class="inline-block h-[18px] w-2"></span>'
     }
   })
   if (state.cursor >= cells.length) word += cursor
   flush()
-  if (state.cells.length > MAX_CELLS) html += `<span class="muted" style="font-size:12px"> +${state.cells.length - MAX_CELLS} more</span>`
-  $('box').innerHTML = html
-
-  $('step').textContent = last ? `${describe(last)} · at ${seconds(last[0])}` : 'the box as the draft began'
+  if (state.cells.length > MAX_CELLS) html += `<span class="text-xs text-muted-foreground"> +${state.cells.length - MAX_CELLS} more</span>`
+  return { html, step: last ? `${describe(last)} · at ${seconds(last[0])}` : 'the box as the draft began' }
 }
 
-function drawStrip() {
-  if (!tl) return
-  const el = $('strip')
-  const fit = Math.max(el.parentElement!.clientWidth, 280)
-  const width = Math.max(fit, tl.steps.length * 3 + 20)
-  const height = 110
-  const mid = 56
-  const pad = 8
-  const x = (real: number) => pad + (clock.toPlay(real) / Math.max(clock.length, 1)) * (width - pad * 2)
-  const h = (n: number) => Math.min(44, 6 + Math.log2(1 + n) * 6)
-
-  let svg = ''
-  for (const p of pausesOf(tl, 2_000)) {
-    const x0 = x(p.from)
-    const w = x(p.to) - x0
-    svg += `<rect class="pause" data-pause="${p.to - p.from}" x="${x0}" y="4" width="${w}" height="${height - 8}" rx="3"/>`
-    if (w > 30) svg += `<text x="${x0 + w / 2}" y="${height - 8}" text-anchor="middle">${seconds(p.to - p.from)}</text>`
-  }
-  svg += `<line class="baseline" x1="${pad}" x2="${width - pad}" y1="${mid}" y2="${mid}"/>`
-  tl.steps.forEach((st, i) => {
-    const [, kind, , removed = 0, shape = ''] = st
-    const g = groupOf(kind)
-    const cx = x(st[0])
-    let y = mid - 3
-    let hh = 6
-    if (g === 'changed') {
-      y = 6
-      hh = height - 24
-    } else if (shape.length || removed) {
-      const up = shape.length ? h(shape.length) : 0
-      const down = removed ? h(removed) : 0
-      y = mid - up
-      hh = up + down
-    }
-    // replacing shows as both: what went in above, what came out below
-    if (kind === 'r') {
-      const up = h(shape.length)
-      const down = h(removed)
-      svg += `<rect class="m-pasted" x="${cx - 1}" y="${mid - up}" width="2" height="${up}"/>`
-      svg += `<rect class="m-deleted" x="${cx - 1}" y="${mid}" width="2" height="${down}"/>`
-    } else svg += `<rect class="m-${g}" x="${cx - 1}" y="${y}" width="2" height="${hh}" rx="1"/>`
-    svg += `<rect class="hit" data-step="${i}" x="${cx - 4}" y="0" width="8" height="${height}"/>`
-  })
-  svg += `<line class="playhead" id="playhead" x1="${pad}" x2="${pad}" y1="2" y2="${height - 2}"/>`
-  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Every edit over time: typing above the line, deleting below">${svg}</svg>`
-
-  const svgEl = el.querySelector('svg')!
-  el.querySelectorAll<SVGRectElement>('.pause').forEach(rect => {
-    const ms = Number(rect.dataset.pause)
-    rect.addEventListener('mousemove', e => showTip(e, `<strong>Pause</strong>${seconds(ms)}${ms > 30_000 ? ', a break' : ''}`))
-    rect.addEventListener('mouseleave', hideTip)
-  })
-  el.querySelectorAll<SVGRectElement>('.hit').forEach(hit => {
-    const st = tl!.steps[Number(hit.dataset.step)]!
-    hit.addEventListener('mousemove', e => showTip(e, `<strong>${esc(describe(st))}</strong>at ${seconds(st[0])}`))
-    hit.addEventListener('mouseleave', hideTip)
-  })
-  svgEl.addEventListener('click', e => {
-    const box = svgEl.getBoundingClientRect()
-    const frac = (e.clientX - box.left - pad) / (box.width - pad * 2)
-    seek(Math.max(0, Math.min(1, frac)) * clock.length)
-  })
-}
-
-function drawPlayhead() {
-  const line = document.getElementById('playhead') as SVGLineElement | null
-  if (!line || !tl) return
-  const svg = line.ownerSVGElement!
-  const width = Number(svg.getAttribute('width'))
-  const xp = 8 + (playMs / Math.max(clock.length, 1)) * (width - 16)
-  line.setAttribute('x1', String(xp))
-  line.setAttribute('x2', String(xp))
-}
-
-function seek(play: number) {
-  playMs = Math.max(0, Math.min(play, clock.length))
-  const real = clock.toReal(playMs)
-  drawBox(real)
-  drawPlayhead()
-  $<HTMLInputElement>('scrub').value = String(clock.length ? Math.round((playMs / clock.length) * 1000) : 0)
-  $('time').textContent = `${seconds(real)} / ${seconds(tl ? durationOf(tl) : 0)}`
-}
-
-function frame(now: number) {
-  if (!playing) return
-  const speed = Number($<HTMLSelectElement>('speed').value)
-  playMs += (now - lastFrame) * speed
-  lastFrame = now
-  if (playMs >= clock.length) {
-    seek(clock.length)
-    setPlaying(false)
-    return
-  }
-  seek(playMs)
-  requestAnimationFrame(frame)
-}
-
-function setPlaying(on: boolean) {
-  playing = on
-  $('play').textContent = on ? 'Pause' : 'Play'
-  if (on) {
-    if (playMs >= clock.length) seek(0)
-    lastFrame = performance.now()
-    requestAnimationFrame(frame)
-  }
-}
-
-function jump(dir: 1 | -1) {
-  if (!tl) return
-  const real = clock.toReal(playMs)
-  const times = tl.steps.map(st => st[0])
-  const target = dir > 0 ? times.find(t => t > real + 0.5) : [...times].reverse().find(t => t < real - 0.5)
-  seek(clock.toPlay(target ?? (dir > 0 ? durationOf(tl) : 0)))
-}
-
-function setClock() {
-  if (!tl) return
-  const real = clock.toReal(playMs)
-  const squashOn = $<HTMLInputElement>('squash').checked
-  clock = squash(tl, squashOn ? 1_500 : Infinity)
-  drawStrip()
-  seek(clock.toPlay(real))
-}
-
-function drawStats(d: Draft) {
+export function draftStats(d: Draft) {
   const l = d.line
-  const stat = (label: string, value: string, sub = '') =>
-    `<div><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`
   const groups = d.timeline ? countGroups(d.timeline) : undefined
-  $('draft-stats').innerHTML = [
-    stat('Writing', seconds(d.end - d.start), `${seconds(num(l.typingMs))} of it typing`),
-    stat('Edits', String(num(l.edits)), groups ? `${groups.move} cursor moves` : ''),
-    stat('Typed', String(num(l.typedChars)), [`${num(l.pastedChars)} pasted`, attachments(l)].filter(Boolean).join(' · ')),
-    stat('Deleted', String(num(l.deletedChars)), `${num(l.wordDeletes)} word, ${num(l.lineKills)} line`),
-    stat('Fixes / rewrites', `${num(l.fixes)} / ${num(l.rewrites)}`, `${num(l.rewrittenChars)} chars redone`),
-    stat('Pauses', String(num(l.pauses)), `${num(l.breaks)} breaks, longest ${seconds(num(l.longestPauseMs))}`),
-  ].join('')
+  return [
+    { label: 'Writing', value: seconds(d.end - d.start), sub: `${seconds(num(l.typingMs))} of it typing` },
+    { label: 'Edits', value: String(num(l.edits)), sub: groups ? `${groups.move} cursor moves` : '' },
+    { label: 'Typed', value: String(num(l.typedChars)), sub: [`${num(l.pastedChars)} pasted`, attachments(l)].filter(Boolean).join(' · ') },
+    { label: 'Deleted', value: String(num(l.deletedChars)), sub: `${num(l.wordDeletes)} word, ${num(l.lineKills)} line` },
+    { label: 'Fixes / rewrites', value: `${num(l.fixes)} / ${num(l.rewrites)}`, sub: `${num(l.rewrittenChars)} chars redone` },
+    { label: 'Pauses', value: String(num(l.pauses)), sub: `${num(l.breaks)} breaks, longest ${seconds(num(l.longestPauseMs))}` },
+  ]
 }
 
-function select(d: Draft) {
-  selected = d
-  setPlaying(false)
-  drawLanes()
-  drawTable()
-  const card = $('replay-card')
-  card.hidden = false
-  $('replay-title').textContent = `${d.outcome === 'sent' ? 'Prompt' : 'Abandoned draft'} from ${clockTime(d.start)}`
-  drawStats(d)
-  tl = d.timeline
-  cached = undefined
-  const hasReplay = !!tl
-  for (const id of ['box', 'step', 'strip', 'kinds-legend']) $(id).hidden = !hasReplay
-  ;(card.querySelector('.player') as HTMLElement).hidden = !hasReplay
-  $('replay-note').textContent = !tl
-    ? 'logged before replays existed, so stats only'
-    : tl.truncated
-      ? 'very long draft: the replay stops where the recording did'
-      : `${tl.steps.length} edits`
-  if (tl) {
-    playMs = 0
-    clock = squash(tl, $<HTMLInputElement>('squash').checked ? 1_500 : Infinity)
-    drawStrip()
-    seek(0)
-  }
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+// a row of the drafts table
+export function draftRow(d: Draft) {
+  const l = d.line
+  return [
+    clockTime(d.start),
+    d.outcome === 'sent' ? 'sent' : `abandoned (${String(l.how ?? '?')})`,
+    seconds(d.end - d.start),
+    seconds(num(l.typingMs)),
+    String(num(l.edits)),
+    String(num(l.fixes)),
+    String(num(l.rewrites)),
+    String(num(l.wordDeletes)),
+    seconds(num(l.longestPauseMs)),
+  ]
 }
-
-// --- page ---------------------------------------------------------------
-
-function legend(el: HTMLElement, keys: [cls: string, label: string][]) {
-  el.innerHTML = keys.map(([cls, label]) => `<span class="key"><span class="swatch ${cls}"></span>${label}</span>`).join('')
-}
-
-async function init() {
-  document.querySelector<HTMLAnchorElement>('a.back')!.href = withPerson('/')
-  if (!sessionId) {
-    $('empty').hidden = false
-    return
-  }
-  const [all, timelines] = await Promise.all([api<Event[]>('/api/events'), api<Timeline[]>(`/api/session/${encodeURIComponent(sessionId)}`)])
-  events = all.filter(e => e.sessionId === sessionId).sort((a, b) => time(a) - time(b))
-  if (!events.length) {
-    $('empty').hidden = false
-    return
-  }
-  drafts = buildDrafts(timelines)
-
-  // named after where most of its time went, with the rest under it
-  const split = summarize(events, { idleCapMs: Number(load('idle', '5')) * MIN }).sessions[0]?.projects ?? []
-  const project = split[0]?.project ?? events.find(e => e.project)?.project ?? 'session'
-  const first = time(events[0]!)
-  const lastAt = time(events[events.length - 1]!)
-  $('title').textContent = String(project)
-  document.title = `${project} session`
-  const sent = drafts.filter(d => d.outcome === 'sent').length
-  $('subtitle').textContent =
-    `${new Date(first).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, ${duration(lastAt - first)} long · ${sent} sent, ${drafts.length - sent} abandoned · ${sessionId.slice(0, 8)}`
-
-  // the same colors as the overview, from everyone's sessions; the chips are
-  // the Projects lane's legend too
-  const idleCapMs = Number(load('idle', '5')) * MIN
-  colors = palette(summarize(all, { idleCapMs }).projects)
-  $('projects').innerHTML = split.map(p => chip(colors!, p.project, p.ms)).join('')
-  const byProject = [...projectSpans(events, idleCapMs)].flatMap(([project, spans]) => spans.map(span => ({ project, span })))
-  byProject.sort((a, b) => Number(b.project === project) - Number(a.project === project) || a.span[0] - b.span[0])
-  projectTracks = []
-  for (const piece of byProject) {
-    const fits = (t: typeof byProject) => !t.some(o => o.span[0] < piece.span[1] && piece.span[0] < o.span[1])
-    const track = projectTracks.find(fits)
-    if (track) track.push(piece)
-    else projectTracks.push([piece])
-  }
-
-  legend($('lanes-legend'), [
-    ['k-typed', 'writing a prompt'],
-    ['k-typed hollow', 'abandoned draft'],
-    ['k-pause', 'paused while writing'],
-    ['k-typed faded', 'answering Claude'],
-    ['k-claude', 'Claude working'],
-    ['k-compact', 'compacting'],
-    ['k-before', 'tool call'],
-    ['k-critical', 'interrupt'],
-    ['k-midturn', 'sent mid-turn'],
-  ])
-  legend($('kinds-legend'), [
-    ['k-typed', 'typed (above the line)'],
-    ['k-deleted', 'deleted (below)'],
-    ['k-pasted', 'pasted or typed over'],
-    ['k-move', 'cursor move'],
-    ['k-before', 'already in the box'],
-  ])
-
-  $('content').hidden = false
-  drawLanes()
-  drawTable()
-  const withReplay = [...drafts].reverse().find(d => d.timeline)
-  if (withReplay) select(withReplay)
-}
-
-$('play').addEventListener('click', () => setPlaying(!playing))
-$('prev').addEventListener('click', () => jump(-1))
-$('next').addEventListener('click', () => jump(1))
-$<HTMLInputElement>('scrub').addEventListener('input', e => {
-  setPlaying(false)
-  seek((Number((e.target as HTMLInputElement).value) / 1000) * clock.length)
-})
-$('squash').addEventListener('change', setClock)
-const MAX_ZOOM = 256
-for (const [id, by] of [
-  ['zoom-in', 2],
-  ['zoom-out', 0.5],
-] as const) {
-  $(id).addEventListener('click', () => {
-    zoom = Math.max(1, Math.min(MAX_ZOOM, zoom * by))
-    save('zoom', String(zoom))
-    drawLanes()
-  })
-}
-$<HTMLInputElement>('collapse').checked = collapse
-$('collapse').addEventListener('change', e => {
-  collapse = (e.target as HTMLInputElement).checked
-  save('collapse', collapse ? '1' : '0')
-  drawLanes()
-})
-
-// ctrl + scroll (a trackpad pinch sends the same) zooms around the cursor:
-// the moment under it stays under it. Plain scrolling still scrolls the page.
-// One redraw per frame, however many wheel events arrive in it
-let wheel: { by: number; clientX: number } | undefined
-$('lanes-scroll').addEventListener(
-  'wheel',
-  e => {
-    if (!e.ctrlKey && !e.metaKey) return
-    e.preventDefault()
-    const pending = !!wheel
-    wheel = { by: (wheel?.by ?? 1) * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.002)), clientX: e.clientX }
-    if (pending) return
-    requestAnimationFrame(() => {
-      const { by, clientX } = wheel!
-      wheel = undefined
-      const scroller = $('lanes-scroll')
-      const offset = clientX - scroller.getBoundingClientRect().left
-      const ms = laneAxis?.at(scroller.scrollLeft + offset)
-      const next = Math.max(1, Math.min(MAX_ZOOM, zoom * by))
-      if (next === zoom || ms === undefined) return
-      zoom = next
-      save('zoom', String(zoom))
-      drawLanes()
-      scroller.scrollLeft = laneAxis!.x(ms) - offset
-    })
-  },
-  { passive: false },
-)
-addEventListener('keydown', e => {
-  if (!tl || (e.target as HTMLElement).matches('input, select, textarea')) return
-  if (e.key === ' ') {
-    e.preventDefault()
-    setPlaying(!playing)
-  } else if (e.key === 'ArrowLeft') jump(-1)
-  else if (e.key === 'ArrowRight') jump(1)
-})
-
-// a soft edge on the label column once the timeline scrolls under it
-$('lanes-scroll').addEventListener('scroll', e => {
-  $('lane-labels').classList.toggle('scrolled', (e.target as HTMLElement).scrollLeft > 0)
-})
-
-let lastWidth = 0
-new ResizeObserver(([entry]) => {
-  const width = Math.round(entry!.contentRect.width)
-  if (width === lastWidth || !events.length) return
-  lastWidth = width
-  drawLanes()
-  if (tl) {
-    drawStrip()
-    seek(playMs)
-  }
-}).observe(document.querySelector('main')!)
-
-init()
+export const DRAFT_HEAD = ['Started', 'Outcome', 'Writing', 'Typing', 'Edits', 'Fixes', 'Rewrites', 'Word del', 'Longest pause']

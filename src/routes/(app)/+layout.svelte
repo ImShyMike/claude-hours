@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../layout.css'
+  import { goto } from '$app/navigation'
   import { page } from '$app/state'
   import { Button } from '#lib/components/ui/button/index.js'
   import ChartTip from '#lib/dashboard/ui/ChartTip.svelte'
@@ -16,8 +17,15 @@
     { href: '/settings', route: '/(app)/settings', label: 'Settings' },
     ...(data.admin ? [{ href: '/admin', route: '/(app)/admin', label: 'Admin' }] : []),
   ])
+  // without a page load; the JSON content type gets it past SvelteKit's
+  // check on cross-site form posts, which a bodyless POST would trip
+  async function logout() {
+    await fetch('/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json' } })
+    await goto('/', { invalidateAll: true })
+  }
+
   // the dashboard pages get the room their charts want
-  const wide = $derived(page.route.id === '/(app)' || page.route.id === '/(app)/timeline')
+  const wide = $derived(['/(app)', '/(app)/timeline', '/(app)/session'].includes(page.route.id ?? ''))
 </script>
 
 <header class="border-b">
@@ -33,9 +41,7 @@
           aria-current={page.route.id === link.route ? 'page' : undefined}>{link.label}</Button
         >
       {/each}
-      <form method="post" action="/auth/logout">
-        <Button type="submit" variant="ghost" size="sm">Log out</Button>
-      </form>
+      <Button variant="ghost" size="sm" onclick={logout}>Log out</Button>
     {/if}
   </nav>
 </header>

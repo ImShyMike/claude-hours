@@ -1,4 +1,5 @@
-// Bits both pages use: lookups, storage, formatting and the tooltip
+// Bits the dashboard pages share: lookups, storage, formatting and the tooltip
+import { invalidateAll } from '$app/navigation'
 
 export const MIN = 60_000
 
@@ -17,10 +18,6 @@ export const save = (key: string, value: string) => {
   } catch {}
 }
 
-// ?theme=dark|light pins the theme, handy for screenshots
-const theme = new URLSearchParams(location.search).get('theme')
-if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme
-
 // On the hub, an admin looking at someone else's dashboard carries ?person=
 // from page to page and into every API call. It's read each time, since the
 // overview and timeline move between each other without a reload
@@ -29,12 +26,14 @@ export const withPerson = (path: string) => {
   return person ? `${path}${path.includes('?') ? '&' : '?'}person=${encodeURIComponent(person)}` : path
 }
 
-// The hub answers 401 until you log in (or once the session runs out), and
-// comes back here after
+// The hub answers 401 once the session runs out (or just after logging out,
+// to a fetch already on its way). The pages ask the server again rather than
+// leave: the overview turns into its welcome, and the pages that need a
+// login send you to it from there
 export async function api<T>(path: string): Promise<T> {
   const res = await fetch(withPerson(path))
   if (res.status === 401) {
-    location.href = `/auth/login?next=${encodeURIComponent(location.pathname + location.search)}`
+    await invalidateAll()
     throw new Error('log in first')
   }
   return res.json() as Promise<T>
@@ -120,7 +119,3 @@ export function palette(ranked: { project: string }[]): Palette {
   const color = (project: string) => (slot.has(project) ? `var(--p${slot.get(project)})` : 'var(--p-other)')
   return { color, group, order: [...order, OTHER] }
 }
-
-// with ms, its time after the name: terra (1h 02m)
-export const chip = (colors: Palette, project: string, ms?: number) =>
-  `<span class="chip"><span class="swatch" style="background:${colors.color(project)}"></span>${esc(project)}${ms ? ` <span class="muted">(${duration(ms)})</span>` : ''}</span>`
