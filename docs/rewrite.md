@@ -73,7 +73,7 @@ Content-Type: application/json
 ```
 
 - A row that isn't a JSON object with an `event` (events) or a `draftId`
-  (drafts) goes to a quarantine table and still counts toward `acked`, so one
+  (drafts) goes to the `_quarantine` table and still counts toward `acked`, so one
   bad row never blocks a run. A field whose value doesn't fit its column's
   type is kept in the row's `extra` instead.
 - `400`: bad body, or an `X-Protocol` the hub doesn't speak (the answer lists
@@ -83,10 +83,12 @@ Content-Type: application/json
 
 ### Storing
 
-A `runs` row per run (person, session, stream, start, the header's fields,
-`acked`), then one table per event type with a typed column per known field
-plus an `extra jsonb` for anything else, keyed by run and `n`. Draft timelines
-get a table of their own. Reading a session back rebuilds its rows exactly as
+A `_runs` row per run (person, session, stream, start, the header's fields,
+`acked`), then one table per event type (`_prompts`, `_tool_calls`, ...) with
+a typed column per known field plus an `extra jsonb` for anything else, keyed
+by run and `n`. Draft timelines get a table of their own (`_draft_timelines`),
+and refused rows go to `_quarantine`. Everything the mod sends is in a table
+with a leading `_`, so it sorts apart from the accounts. Reading a session back rebuilds its rows exactly as
 the mod wrote them, so the hub decodes them with the same code the old
 dashboard used.
 

@@ -1,6 +1,7 @@
 // The hub's accounts: people (from Hack Club Auth), their browser sessions,
 // the devices the mod syncs from, and data deletion requests. Then what the
-// mod sends: runs, a table per event type, draft timelines and quarantine.
+// mod sends: runs, a table per event type, draft timelines and quarantine,
+// each named with a leading _ so they sort apart from the accounts.
 //
 // Every secret is stored as its sha256 (hex): a session cookie, a device
 // token, a device code. The table alone lets no one in.
@@ -104,7 +105,7 @@ export const deletionRequests = pgTable(
 // session with start 0. acked is how many of its rows the hub holds, always
 // rows 0 to acked - 1 (see the sync protocol in docs/rewrite.md)
 export const runs = pgTable(
-  'runs',
+  '_runs',
   {
     id: id(),
     personId: personRef(),
@@ -121,7 +122,7 @@ export const runs = pgTable(
     createdAt: createdAt(),
     updatedAt: at('updated_at').notNull().defaultNow(),
   },
-  t => [uniqueIndex('runs_key').on(t.personId, t.session, t.stream, t.start)],
+  t => [uniqueIndex('_runs_key').on(t.personId, t.session, t.stream, t.start)],
 )
 
 // Every row of a run, by its n. Its own fields go in typed columns named like
@@ -168,9 +169,9 @@ const turnColumns = () => ({
   toolsRunning: jsonb('tools_running'),
 })
 
-export const sessionStarts = eventTable('session_starts', { surface: text('surface'), isInteractive: boolean('is_interactive') })
-export const sessionEnds = eventTable('session_ends', { reason: text('reason') })
-export const prompts = eventTable('prompts', {
+export const sessionStarts = eventTable('_session_starts', { surface: text('surface'), isInteractive: boolean('is_interactive') })
+export const sessionEnds = eventTable('_session_ends', { reason: text('reason') })
+export const prompts = eventTable('_prompts', {
   words: integer('words'),
   chars: integer('chars'),
   origin: text('origin'),
@@ -182,10 +183,10 @@ export const prompts = eventTable('prompts', {
   documents: integer('documents'),
   ...draftColumns(),
 })
-export const abandonedDrafts = eventTable('abandoned_drafts', { ...draftColumns(), how: text('how'), endedAt: ms('ended_at') })
-export const turnEnds = eventTable('turn_ends', turnColumns())
-export const interrupts = eventTable('interrupts', turnColumns())
-export const compacts = eventTable('compacts', {
+export const abandonedDrafts = eventTable('_abandoned_drafts', { ...draftColumns(), how: text('how'), endedAt: ms('ended_at') })
+export const turnEnds = eventTable('_turn_ends', turnColumns())
+export const interrupts = eventTable('_interrupts', turnColumns())
+export const compacts = eventTable('_compacts', {
   trigger: text('trigger'),
   agentId: text('agent_id'),
   messages: integer('messages'),
@@ -195,7 +196,7 @@ export const compacts = eventTable('compacts', {
   usage: jsonb('usage'),
   durationMs: ms('duration_ms'),
 })
-export const toolCalls = eventTable('tool_calls', {
+export const toolCalls = eventTable('_tool_calls', {
   tool: text('tool'),
   agentId: text('agent_id'),
   file: text('file'),
@@ -205,10 +206,10 @@ export const toolCalls = eventTable('tool_calls', {
   outcome: text('outcome'),
   durationMs: ms('duration_ms'),
 })
-export const fileChanges = eventTable('file_changes', { tool: text('tool'), agentId: text('agent_id'), path: text('path'), via: text('via') })
-export const cwdChanges = eventTable('cwd_changes', { cwd: text('cwd'), root: text('root'), rootName: text('root_name') })
+export const fileChanges = eventTable('_file_changes', { tool: text('tool'), agentId: text('agent_id'), path: text('path'), via: text('via') })
+export const cwdChanges = eventTable('_cwd_changes', { cwd: text('cwd'), root: text('root'), rootName: text('root_name') })
 // an event type the hub doesn't know yet: everything but t/at is in extra
-export const otherEvents = eventTable('other_events', { event: text('event').notNull() })
+export const otherEvents = eventTable('_other_events', { event: text('event').notNull() })
 
 // which table each event goes to; anything else goes to otherEvents
 export const eventTables = {
@@ -226,7 +227,7 @@ export const eventTables = {
 
 // a draft's edit timeline, the drafts sidecar's rows (shapes only, no text)
 export const draftTimelines = pgTable(
-  'draft_timelines',
+  '_draft_timelines',
   {
     ...runRow(),
     v: integer('v'),
@@ -245,7 +246,7 @@ export const draftTimelines = pgTable(
 
 // rows that couldn't be read as an event or a timeline at all, kept to look at
 export const quarantine = pgTable(
-  'quarantine',
+  '_quarantine',
   {
     id: id(),
     personId: personRef(),
@@ -257,7 +258,7 @@ export const quarantine = pgTable(
     reason: text('reason').notNull(),
     receivedAt: at('received_at').notNull().defaultNow(),
   },
-  t => [index('quarantine_person_idx').on(t.personId)],
+  t => [index('_quarantine_person_idx').on(t.personId)],
 )
 
 export type Person = typeof people.$inferSelect
