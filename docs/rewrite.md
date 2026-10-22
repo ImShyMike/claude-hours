@@ -133,8 +133,12 @@ has. A 401 says to log in again, once. Files from the old byte-offset protocol
 
 ## Deploying
 
-- Run `bun run db:migrate` (with `DATABASE_URL` set) before
-  starting a new version. The app doesn't migrate on its own.
+- The `Dockerfile` builds with bun and runs on node. Each start runs
+  `scripts/migrate.js` first (drizzle-orm's migrator, no drizzle-kit), so a
+  new database gets its tables and a deploy brings an old one up to date. It
+  sets `PORT=3000`, `BODY_SIZE_LIMIT=4M` and the `x-forwarded-*` headers
+  below. Without the image, run `bun run db:migrate` (with `DATABASE_URL`
+  set) before starting a new version; the app doesn't migrate on its own.
 - `vite build` needs no secrets. `DATABASE_URL`, `HCA_CLIENT_ID` and
   `HCA_CLIENT_SECRET` are checked when the server starts, and it refuses to
   boot without them.
