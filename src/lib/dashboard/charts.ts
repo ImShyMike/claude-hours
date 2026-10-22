@@ -1,4 +1,4 @@
-// The overview's charts, drawn by Chart.js. Colors come from the CSS tokens,
+// The overview's charts, drawn by Chart.js. Colors come from the shadcn tokens,
 // read at draw time, so a theme flip only needs a redraw
 import {
   BarController,
@@ -39,7 +39,7 @@ function canvas(el: HTMLElement, height: number) {
 }
 
 function theme() {
-  Chart.defaults.color = token('--muted')
+  Chart.defaults.color = token('--muted-foreground')
   Chart.defaults.font.family = getComputedStyle(document.body).fontFamily
   Chart.defaults.font.size = 11
 }
@@ -68,7 +68,7 @@ export function stackedColumns(el: HTMLElement, labels: string[], series: Series
   const top = Math.max(step, Math.ceil(Math.max(...totals, 0) / step) * step)
   // the highest segment with time in each column gets the rounded top
   const topmost = labels.map((_, i) => series.findLastIndex(s => s.values[i]! > 0))
-  const surface = token('--surface')
+  const surface = token('--card')
   const chart = new Chart(canvas(el, 200), {
     type: 'bar',
     data: {
@@ -98,14 +98,14 @@ export function stackedColumns(el: HTMLElement, labels: string[], series: Series
         x: {
           stacked: true,
           grid: { display: false },
-          border: { color: token('--axis') },
+          border: { color: token('--border') },
           ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: maxTicks },
         },
         y: {
           stacked: true,
           min: 0,
           max: top,
-          grid: { color: token('--grid') },
+          grid: { color: token('--border') },
           border: { display: false },
           ticks: { stepSize: step, callback: (v: string | number) => tickLabel(Number(v)) },
         },
@@ -123,9 +123,9 @@ export function calendar(el: HTMLElement, weeks: number, months: string[], cells
   theme()
   const width = Math.max(el.clientWidth, 200)
   const step = Math.min(22, (width - 30) / weeks)
-  const ink = token('--ink')
+  const ink = token('--foreground')
   const heat = [0, 1, 2, 3, 4, 5].map(k => token(`--heat-${k}`))
-  new Chart(canvas(el, step * 7 + 22), {
+  const chart = new Chart(canvas(el, step * 7 + 22), {
     type: 'matrix',
     data: {
       datasets: [
@@ -174,4 +174,5 @@ export function calendar(el: HTMLElement, weeks: number, months: string[], cells
     },
   })
   el.onmouseleave = hideTip
+  return chart
 }

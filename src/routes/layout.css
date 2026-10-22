@@ -41,6 +41,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -125,5 +126,58 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/* the dashboard's project colors (the 8 with the most time get p1 to p8,
+   the rest share p-other) and the calendar's heat steps */
+:root {
+  --p1: #2a78d6;
+  --p2: #eb6834;
+  --p3: #1baf7a;
+  --p4: #eda100;
+  --p5: #e87ba4;
+  --p6: #008300;
+  --p7: #6250d6;
+  --p8: #e34948;
+  --p-other: #c3c2b7;
+  --heat-0: oklch(0.97 0 0);
+  --heat-1: #cde2fb;
+  --heat-2: #86b6ef;
+  --heat-3: #3987e5;
+  --heat-4: #1c5cab;
+  --heat-5: #0d366b;
+}
+.dark {
+  --p1: #3987e5;
+  --p2: #d95926;
+  --p3: #199e70;
+  --p4: #c98500;
+  --p5: #d55181;
+  --p6: #008300;
+  --p7: #9085e9;
+  --p8: #e66767;
+  --p-other: #5c5c57;
+  --heat-0: oklch(0.269 0 0);
+  --heat-1: #104281;
+  --heat-2: #1c5cab;
+  --heat-3: #2a78d6;
+  --heat-4: #5598e7;
+  --heat-5: #9ec5f4;
+}
+
+/* what showTip puts in the chart tooltip */
+@layer components {
+  .chart-tip strong {
+    @apply block font-medium;
+  }
+  .chart-tip .tip-row {
+    @apply flex items-center gap-1.5;
+  }
+  .chart-tip .swatch {
+    @apply inline-block size-2.5 shrink-0 rounded-sm;
+  }
+  .chart-tip .muted {
+    @apply text-muted-foreground;
   }
 }

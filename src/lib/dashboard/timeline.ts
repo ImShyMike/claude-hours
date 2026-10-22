@@ -1,54 +1,30 @@
-import { summarize, type Event, type Summary } from '../analytics/aggregate'
-import {
-  $,
-  MIN,
-  api,
-  duration,
-  esc,
-  hideTip,
-  load,
-  palette,
-  projectLegend,
-  rangeWindow,
-  save,
-  showTip,
-  withPerson,
-  type Palette,
-  type Range,
-} from './shared'
+// The timeline's rows: a row per day, each session's active spans as bars
+// placed in lanes, newest day first with quiet stretches folded into one line
+import type { Summary } from '../analytics/aggregate'
+import { MIN } from './shared'
 
-const REFRESH_MS = 30_000
 // a lane's main bar, and the thin bar under it for a subagent elsewhere
 const MAIN_H = 20
 const SUB_H = 12
 const GAP = 3
 const LANE_GAP = 8
-const MAX_ZOOM = 48
-
-let range = load<Range>('range', '7')
-const idleMin = Number(load('idle', '5'))
-let zoom = 1
-// the hours of the day the axis shows: all of them, or with `fit` just the
-// ones anything happened in, so the bars get room
-let fit = load('fit', '1') === '1'
-let hours = { from: 0, to: 24 }
+export const MAX_ZOOM = 48
 const HOUR = 60 * MIN
-let events: Event[] | undefined
 
-type Piece = Summary['spans'][number]
-
-const labelW = () => (innerWidth < 560 ? 88 : 112)
+export type Piece = Summary['spans'][number]
+export type Bar = { piece: Piece; top: number; height: number }
+export type Row = { kind: 'day'; day: number; activeMs: number; bars: Bar[]; height: number } | { kind: 'quiet'; day: number; days: number }
+export type Hours = { from: number; to: number }
 
 const startOfDay = (ms: number) => {
   const d = new Date(ms)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
-const nextDay = (ms: number) => {
+export const nextDay = (ms: number) => {
   const d = new Date(ms)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
 }
-const longDay = (ms: number) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
-const hm = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+export const hm = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
 // a span cut at local midnights, each piece in its own day's row
 function* byDay(span: Piece): Generator<[number, Piece]> {
@@ -100,11 +76,6 @@ function lanesOf(bySession: Map<string, Piece[]>, home: (id: string) => string):
   return lanes
 }
 
-const laneH = (lane: Lane) => MAIN_H + lane.subs * (SUB_H + GAP)
-
-// every bar drawn, by index, for the tooltip and the table
-let pieces: Piece[] = []
-
 // a day's active time: each session's pieces once however many projects
 // shared them, summed over sessions, the way the overview counts it
 function activeMs(bySession: Map<string, Piece[]>) {
@@ -119,45 +90,47 @@ function activeMs(bySession: Map<string, Piece[]>) {
   return ms
 }
 
-function dayRow(day: number, bySession: Map<string, Piece[]>, colors: Palette, home: (id: string) => string) {
-  const end = nextDay(day)
-  const pct = (ms: number) => (((ms - day) / HOUR - hours.from) / (hours.to - hours.from)) * 100
-  const lanes = lanesOf(bySession, home)
+function dayRow(day: number, bySession: Map<string, Piece[]>, home: (id: string) => string): Row {
+  const bars: Bar[] = []
   let top = 0
-  let bars = ''
-  for (const lane of lanes) {
+  for (const lane of lanesOf(bySession, home)) {
     for (const s of lane.sessions) {
       s.tracks.forEach((track, k) => {
         const y = top + (k ? MAIN_H + GAP + (k - 1) * (SUB_H + GAP) : 0)
-        const h = k ? SUB_H : MAIN_H
-        for (const piece of track) {
-          const i = pieces.push(piece) - 1
-          bars += `<a class="tl-bar" data-i="${i}" data-session="${esc(piece.sessionId)}" href="${withPerson(`/session?id=${encodeURIComponent(piece.sessionId)}`)}" style="left:${pct(piece.from)}%;width:${pct(piece.to) - pct(piece.from)}%;top:${y}px;height:${h}px;background:${colors.color(piece.project)}" aria-label="${esc(piece.project)}, ${hm(piece.from)} to ${hm(piece.to)}"></a>`
-        }
+        for (const piece of track) bars.push({ piece, top: y, height: k ? SUB_H : MAIN_H })
       })
     }
-    top += laneH(lane) + LANE_GAP
+    top += MAIN_H + lane.subs * (SUB_H + GAP) + LANE_GAP
   }
-  const now = Date.now()
-  if (now >= day && now < end && pct(now) <= 100) bars += `<span class="tl-now" style="left:${pct(now)}%" title="now"></span>`
-  return `<div class="tl-row">
-    <div class="tl-label"><span>${longDay(day)}</span><span class="muted">${duration(activeMs(bySession))}</span></div>
-    <div class="tl-track" style="height:${Math.max(top - LANE_GAP, MAIN_H)}px">${bars}</div>
-  </div>`
+  return { kind: 'day', day, activeMs: activeMs(bySession), bars, height: Math.max(top - LANE_GAP, MAIN_H) }
 }
 
-function render() {
-  if (!events) return
-  const w = rangeWindow(range)
-  // all time: each project's color and each session's home
-  const ever = summarize(events, { idleCapMs: idleMin * MIN })
-  const colors = palette(ever.projects)
-  const homes = new Map(ever.sessions.map(s => [s.sessionId, s.project]))
-  const home = (id: string) => homes.get(id) ?? ''
+// the hours of the day the axis shows: all of them, or with `fit` just the
+// ones anything happened in, so the bars get room
+function hoursOf(days: Map<number, Map<string, Piece[]>>, fit: boolean): Hours {
+  if (!fit) return { from: 0, to: 24 }
+  let lo = 24
+  let hi = 0
+  for (const bySession of days.values()) {
+    for (const list of bySession.values()) {
+      for (const p of list) {
+        const day = startOfDay(p.from)
+        lo = Math.min(lo, (p.from - day) / HOUR)
+        hi = Math.max(hi, (p.to - day) / HOUR)
+      }
+    }
+  }
+  // whole hours, and never fewer than 3 of them
+  const from = Math.floor(lo)
+  const to = Math.max(Math.ceil(hi), from + 3)
+  return to > 24 ? { from: 21, to: 24 } : { from, to }
+}
 
-  const lo = w.from ?? -Infinity
-  const hi = w.to ?? Infinity
-  const inRange = ever.spans.flatMap(s => (s.to > lo && s.from < hi ? [{ ...s, from: Math.max(s.from, lo), to: Math.min(s.to, hi) }] : []))
+// the spans in a window as day rows, newest first
+export function timelineRows(spans: Piece[], window: { from?: number; to?: number }, home: (id: string) => string, fit: boolean) {
+  const lo = window.from ?? -Infinity
+  const hi = window.to ?? Infinity
+  const inRange = spans.flatMap(s => (s.to > lo && s.from < hi ? [{ ...s, from: Math.max(s.from, lo), to: Math.min(s.to, hi) }] : []))
   const days = new Map<number, Map<string, Piece[]>>()
   for (const span of inRange) {
     for (const [day, piece] of byDay(span)) {
@@ -166,162 +139,31 @@ function render() {
       days.set(day, bySession)
     }
   }
-
-  $('empty').hidden = days.size > 0
-  $('content').hidden = days.size === 0
-  if (!days.size) return
-
-  $('legend').innerHTML = projectLegend(
-    colors,
-    inRange.map(s => s.project),
-  )
-  hours = { from: 0, to: 24 }
-  if (fit) {
-    let lo = 24
-    let hi = 0
-    for (const bySession of days.values()) {
-      for (const list of bySession.values()) {
-        for (const p of list) {
-          const day = startOfDay(p.from)
-          lo = Math.min(lo, (p.from - day) / HOUR)
-          hi = Math.max(hi, (p.to - day) / HOUR)
-        }
-      }
-    }
-    // whole hours, and never fewer than 3 of them
-    const from = Math.floor(lo)
-    const to = Math.max(Math.ceil(hi), from + 3)
-    hours = to > 24 ? { from: 21, to: 24 } : { from, to }
-  }
-  pieces = []
-  let rows = ''
-  // newest first, with a quiet stretch shown as one line
+  const rows: Row[] = []
   const order = [...days.keys()].sort((a, b) => b - a)
   order.forEach((day, k) => {
-    rows += dayRow(day, days.get(day)!, colors, home)
+    rows.push(dayRow(day, days.get(day)!, home))
     const older = order[k + 1]
     if (older === undefined) return
     let quiet = 0
     for (let at = nextDay(older); at < day; at = nextDay(at)) quiet++
-    if (quiet) rows += `<div class="tl-quiet"><span class="tl-label muted">${quiet} quiet day${quiet === 1 ? '' : 's'}</span></div>`
+    if (quiet) rows.push({ kind: 'quiet', day: nextDay(older), days: quiet })
   })
-  $('timeline').innerHTML = `<div class="tl-axis"><div class="tl-label"></div><div class="tl-track" id="axis"></div></div>${rows}`
-  layout()
-  wire(home)
+  return { rows, hours: hoursOf(days, fit), projects: inRange.map(s => s.project) }
 }
 
-function wire(home: (id: string) => string) {
-  const lit = (session: string, on: boolean) =>
-    document.querySelectorAll<HTMLElement>(`.tl-bar[data-session="${CSS.escape(session)}"]`).forEach(b => b.classList.toggle('lit', on))
-  document.querySelectorAll<HTMLAnchorElement>('.tl-bar').forEach(bar => {
-    const p = pieces[Number(bar.dataset.i)]!
-    const from = home(p.sessionId)
-    const tip = `<strong>${esc(p.project)}</strong>${hm(p.from)} to ${hm(p.to)} · ${duration(p.to - p.from)}<span class="muted">session ${esc(p.sessionId.slice(0, 8))}${from && from !== p.project ? `, started in ${esc(from)}` : ''}</span>`
-    bar.addEventListener('mouseenter', () => lit(p.sessionId, true))
-    bar.addEventListener('mousemove', e => showTip(e, tip))
-    bar.addEventListener('mouseleave', () => {
-      lit(p.sessionId, false)
-      hideTip()
-    })
-  })
-}
+// where a moment of a day sits on the track, in percent
+export const pct = (hours: Hours, day: number, ms: number) => (((ms - day) / HOUR - hours.from) / (hours.to - hours.from)) * 100
 
-// --- zoom: the rows stretch, the bars are in percent so only widths move ---
-
-const scroller = () => $('scroll')
-const trackW = () => (scroller().clientWidth - labelW()) * zoom
-
-function layout() {
-  const el = $('timeline')
-  if (!el.firstElementChild) return
-  el.style.width = `${labelW() + trackW()}px`
-  el.style.setProperty('--label-w', `${labelW()}px`)
-  // hour ticks thin out until there's room for them
+// hour ticks thin out until there's room for them
+export function ticks(hours: Hours, trackW: number) {
   const span = hours.to - hours.from
-  const every = [0.25, 0.5, 1, 2, 3, 6].find(h => (trackW() / span) * h >= 56) ?? 6
-  let ticks = ''
+  const every = [0.25, 0.5, 1, 2, 3, 6].find(h => (trackW / span) * h >= 56) ?? 6
+  const out: { left: number; label: string }[] = []
   for (let h = Math.ceil(hours.from / every) * every; h < hours.to; h += every) {
     const at = new Date(2000, 0, 1, 0, h * 60)
     const label = at.toLocaleTimeString(undefined, at.getMinutes() ? { hour: 'numeric', minute: '2-digit' } : { hour: 'numeric' })
-    ticks += `<span style="left:${((h - hours.from) / span) * 100}%">${label}</span>`
+    out.push({ left: ((h - hours.from) / span) * 100, label })
   }
-  $('axis').innerHTML = ticks
-  el.style.setProperty('--hour', `${trackW() / span}px`)
+  return out
 }
-
-function setZoom(next: number, anchor = (scroller().clientWidth + labelW()) / 2) {
-  const before = trackW()
-  const at = (scroller().scrollLeft + anchor - labelW()) / before
-  zoom = Math.min(MAX_ZOOM, Math.max(1, next))
-  layout()
-  scroller().scrollLeft = at * trackW() - (anchor - labelW())
-}
-
-let wheel = 0
-let wheelX = 0
-let frame = 0
-scroller().addEventListener(
-  'wheel',
-  e => {
-    if (!e.ctrlKey) return
-    e.preventDefault()
-    wheel += e.deltaY
-    wheelX = e.clientX - scroller().getBoundingClientRect().left
-    frame ||= requestAnimationFrame(() => {
-      setZoom(zoom * Math.exp(-wheel * 0.002), Math.max(labelW(), wheelX))
-      wheel = 0
-      frame = 0
-    })
-  },
-  { passive: false },
-)
-$('zoom-in').addEventListener('click', () => setZoom(zoom * 2))
-const fitBox = $<HTMLInputElement>('fit')
-fitBox.checked = fit
-fitBox.addEventListener('change', () => {
-  fit = fitBox.checked
-  save('fit', fit ? '1' : '0')
-  render()
-})
-$('zoom-out').addEventListener('click', () => setZoom(zoom / 2))
-
-// --- wiring ---------------------------------------------------------------
-
-async function refresh() {
-  try {
-    events = await api<Event[]>('/api/events')
-  } catch (err) {
-    console.error('could not load events', err)
-    events ??= []
-  }
-  render()
-}
-
-function syncControls() {
-  document.querySelectorAll<HTMLButtonElement>('[data-range]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.range === range)))
-}
-
-document.querySelectorAll<HTMLButtonElement>('[data-range]').forEach(b =>
-  b.addEventListener('click', () => {
-    range = b.dataset.range as Range
-    save('range', range)
-    syncControls()
-    render()
-  }),
-)
-document.querySelectorAll<HTMLAnchorElement>('nav a:not([data-own])').forEach(a => (a.href = withPerson(a.getAttribute('href')!)))
-
-// laying out can bring in a scrollbar, which resizes what's watched, so wait
-let lastWidth = 0
-let resizeTimer: ReturnType<typeof setTimeout> | undefined
-new ResizeObserver(([entry]) => {
-  const width = Math.round(entry!.contentRect.width)
-  if (width === lastWidth) return
-  lastWidth = width
-  clearTimeout(resizeTimer)
-  resizeTimer = setTimeout(layout, 50)
-}).observe(scroller())
-
-syncControls()
-refresh()
-setInterval(refresh, REFRESH_MS)

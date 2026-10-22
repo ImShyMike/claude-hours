@@ -280,8 +280,8 @@ draft lasted; an empty starting box and `truncated: false` are left out.
 
 ## Layout
 
-- `src/routes/(dash)/`: the dashboard (overview, timeline, session), drawn in the browser by `src/lib/dashboard/`
-- `src/routes/(app)/`: settings, admin and the device approval page (Tailwind and shadcn-svelte)
+- `src/routes/(app)/`: the overview and timeline, settings, admin and the device approval page (Tailwind and shadcn-svelte); the dashboard's pieces are in `src/lib/dashboard/ui/`
+- `src/routes/(dash)/`: the session page, still in the old dashboard's own CSS, drawn in the browser by `src/lib/dashboard/session.ts`
 - `src/routes/api/`: what the dashboard reads; `src/routes/v1/`: what the mod talks to
 - `src/lib/server/`: sessions, Hack Club Auth, the device flow, deletion requests
 - `src/lib/server/ingest.ts` and `history.ts`: storing what the mod sends, and reading it back as session files

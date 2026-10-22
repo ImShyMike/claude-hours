@@ -118,15 +118,6 @@ export function palette(ranked: { project: string }[]): Palette {
   return { color, group, order: [...order, OTHER] }
 }
 
-// a legend for the projects in view, in palette order with Other last
-export function projectLegend(colors: Palette, projects: string[]) {
-  const shown = new Set(projects.map(colors.group))
-  return colors.order
-    .filter(p => shown.has(p))
-    .map(p => `<span class="key"><span class="swatch" style="background:${colors.color(p)}"></span>${esc(p)}</span>`)
-    .join('')
-}
-
 // with ms, its time after the name: terra (1h 02m)
 export const chip = (colors: Palette, project: string, ms?: number) =>
   `<span class="chip"><span class="swatch" style="background:${colors.color(project)}"></span>${esc(project)}${ms ? ` <span class="muted">(${duration(ms)})</span>` : ''}</span>`

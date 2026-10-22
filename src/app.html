@@ -4,9 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="text-scale" content="scale" />
+    <script>
+      // dark with the system, or as ?theme=dark|light pins it (handy for screenshots)
+      ;(() => {
+        const pinned = new URLSearchParams(location.search).get('theme')
+        const dark = matchMedia('(prefers-color-scheme: dark)')
+        const apply = () => document.documentElement.classList.toggle('dark', pinned ? pinned === 'dark' : dark.matches)
+        apply()
+        if (!pinned) dark.addEventListener('change', apply)
+      })()
+    </script>
     %sveltekit.head%
   </head>
-  <!-- every link is a whole page load: the dashboard pages run their scripts once per load -->
+  <!-- every link is a whole page load: the session page runs its script once per load -->
   <body data-sveltekit-reload>
     <div style="display: contents">%sveltekit.body%</div>
   </body>

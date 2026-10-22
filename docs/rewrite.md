@@ -4,7 +4,9 @@ The hub (SvelteKit with shadcn-svelte, Drizzle on stock Postgres) is the whole
 repo now, next to the mod in `mod/`. It replaced the old Bun server, its
 `public/` dashboard and its token script, which are still on `main`. The
 parsing they used was carried over into `src/lib/analytics/`, and the
-dashboard's pages into `src/lib/dashboard/` and `src/routes/(dash)/`.
+dashboard's pages into `src/lib/dashboard/`: the overview and timeline
+as shadcn-svelte pages in `src/routes/(app)/`, the session page as it was
+in `src/routes/(dash)/`.
 [old-dashboard.md](old-dashboard.md) describes those pages.
 
 ## Running it
