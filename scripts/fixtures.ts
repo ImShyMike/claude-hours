@@ -2,9 +2,9 @@
 // the dashboard has something to draw while the real log is still tiny.
 // Deterministic: the same seed gives the same file (relative to today).
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import type { Event } from '../src/aggregate'
-import { encodeSession } from '../src/eventlog'
-import { encodeSteps } from '../src/replay'
+import type { Event } from '../src/lib/analytics/aggregate'
+import { encodeSession } from '../src/lib/analytics/eventlog'
+import { encodeSteps } from '../src/lib/analytics/replay'
 
 const DAYS = 45
 const PROJECTS = ['terra', 'vxm', 'hackathon-site', 'scrapbook', 'claude-hours']

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="text-scale" content="scale" />
+    %sveltekit.head%
+  </head>
+  <!-- every link is a whole page load: the dashboard pages run their scripts once per load -->
+  <body data-sveltekit-reload>
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

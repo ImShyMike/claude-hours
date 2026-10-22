@@ -8,5 +8,5 @@ export default {
   arrowParens: 'avoid',
   plugins: ['prettier-plugin-svelte', 'prettier-plugin-tailwindcss'],
   overrides: [{ files: '*.svelte', options: { parser: 'svelte' } }],
-  tailwindStylesheet: './apps/web/src/routes/layout.css',
+  tailwindStylesheet: './src/routes/layout.css',
 }

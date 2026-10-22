@@ -1,8 +1,8 @@
-# Local Postgres for the hub (apps/web). 5434 so it won't fight the Postgres instances
+# Local Postgres for the hub. 5434 so it won't fight the Postgres instances
 # already on 5432 and 5433
 services:
   postgres:
-    image: postgres:17
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: claude_hours
       POSTGRES_PASSWORD: claude_hours
