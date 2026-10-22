@@ -28,8 +28,10 @@ running at the same time get lanes of their own, and a subagent working in
 another repo while the main thread works shows as a thin bar under its
 session. Hover a bar for its time and session (the session's other bars light
 up), click to open it. Zoom with the + and - buttons or ctrl + scroll. Quiet
-days fold into one line. "Fit to active hours" (on by default) crops the axis
-to the hours anything happened in, so the bars get more room.
+days fold into one line. The hours shown are all day, "Active" (the default:
+from the first active hour to the last, so the bars get more room) or
+"Squash gaps": only the hours anything happened in, each quiet stretch of two
+hours or more squeezed into a hatched break with its length over it.
 On a day the clocks change (23 or 25 hours) the bars are placed right but the
 hour ticks assume 24 equal hours, so they can sit up to an hour off.
 

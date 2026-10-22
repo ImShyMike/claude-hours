@@ -1,7 +1,8 @@
 // The timeline's rows: a row per day, each session's active spans as bars
 // placed in lanes, newest day first with quiet stretches folded into one line
-import type { Summary } from '../analytics/aggregate'
-import { MIN } from './shared'
+import type { Interval, Summary } from '../analytics/aggregate'
+import { axisOf, type Axis } from './axis'
+import { MIN, duration } from './shared'
 
 // a lane's main bar, and the thin bar under it for a subagent elsewhere
 const MAIN_H = 20
@@ -14,7 +15,9 @@ const HOUR = 60 * MIN
 export type Piece = Summary['spans'][number]
 export type Bar = { piece: Piece; top: number; height: number }
 export type Row = { kind: 'day'; day: number; activeMs: number; bars: Bar[]; height: number } | { kind: 'quiet'; day: number; days: number }
-export type Hours = { from: number; to: number }
+// the hours of the day the axis shows: all of them, just the stretch anything
+// happened in, or only the hours anything happened in, the quiet ones squashed
+export type Hours = 'all' | 'fit' | 'squash'
 
 const startOfDay = (ms: number) => {
   const d = new Date(ms)
@@ -105,29 +108,42 @@ function dayRow(day: number, bySession: Map<string, Piece[]>, home: (id: string)
   return { kind: 'day', day, activeMs: activeMs(bySession), bars, height: Math.max(top - LANE_GAP, MAIN_H) }
 }
 
-// the hours of the day the axis shows: all of them, or with `fit` just the
-// ones anything happened in, so the bars get room
-function hoursOf(days: Map<number, Map<string, Piece[]>>, fit: boolean): Hours {
-  if (!fit) return { from: 0, to: 24 }
-  let lo = 24
-  let hi = 0
+// every piece's stretch of its day, in ms from midnight
+function dayOffsets(days: Map<number, Map<string, Piece[]>>): Interval[] {
+  const out: Interval[] = []
   for (const bySession of days.values()) {
     for (const list of bySession.values()) {
       for (const p of list) {
         const day = startOfDay(p.from)
-        lo = Math.min(lo, (p.from - day) / HOUR)
-        hi = Math.max(hi, (p.to - day) / HOUR)
+        out.push([p.from - day, p.to - day])
       }
     }
   }
-  // whole hours, and never fewer than 3 of them
-  const from = Math.floor(lo)
-  const to = Math.max(Math.ceil(hi), from + 3)
-  return to > 24 ? { from: 21, to: 24 } : { from, to }
+  return out
+}
+
+// the axis across a row, in percent of the track so zoom only stretches it
+function axisFor(days: Map<number, Map<string, Piece[]>>, hours: Hours): Axis {
+  const spans = dayOffsets(days)
+  if (hours === 'all' || !spans.length) return axisOf([[0, 24 * HOUR]], 0, 100, Infinity, 0)
+  if (hours === 'fit') {
+    // whole hours, and never fewer than 3 of them
+    const from = Math.floor(Math.min(...spans.map(s => s[0])) / HOUR)
+    const to = Math.max(Math.ceil(Math.max(...spans.map(s => s[1])) / HOUR), from + 3)
+    const [lo, hi] = to > 24 ? [21, 24] : [from, to]
+    return axisOf([[lo * HOUR, hi * HOUR]], 0, 100, Infinity, 0)
+  }
+  // the hours anything happened in; one quiet hour between stays, longer
+  // quiet stretches become breaks
+  const busy = spans.map(([from, to]): Interval => [
+    Math.floor(from / HOUR) * HOUR,
+    Math.max(Math.ceil(to / HOUR), Math.floor(from / HOUR) + 1) * HOUR,
+  ])
+  return axisOf(busy, 0, 100, HOUR, 4, HOUR)
 }
 
 // the spans in a window as day rows, newest first
-export function timelineRows(spans: Piece[], window: { from?: number; to?: number }, home: (id: string) => string, fit: boolean) {
+export function timelineRows(spans: Piece[], window: { from?: number; to?: number }, home: (id: string) => string, hours: Hours) {
   const lo = window.from ?? -Infinity
   const hi = window.to ?? Infinity
   const inRange = spans.flatMap(s => (s.to > lo && s.from < hi ? [{ ...s, from: Math.max(s.from, lo), to: Math.min(s.to, hi) }] : []))
@@ -149,21 +165,33 @@ export function timelineRows(spans: Piece[], window: { from?: number; to?: numbe
     for (let at = nextDay(older); at < day; at = nextDay(at)) quiet++
     if (quiet) rows.push({ kind: 'quiet', day: nextDay(older), days: quiet })
   })
-  return { rows, hours: hoursOf(days, fit), projects: inRange.map(s => s.project) }
+  return { rows, axis: axisFor(days, hours), projects: inRange.map(s => s.project) }
 }
 
 // where a moment of a day sits on the track, in percent
-export const pct = (hours: Hours, day: number, ms: number) => (((ms - day) / HOUR - hours.from) / (hours.to - hours.from)) * 100
+export const pct = (axis: Axis, day: number, ms: number) => axis.x(ms - day)
 
-// hour ticks thin out until there's room for them
-export function ticks(hours: Hours, trackW: number) {
-  const span = hours.to - hours.from
-  const every = [0.25, 0.5, 1, 2, 3, 6].find(h => (trackW / span) * h >= 56) ?? 6
-  const out: { left: number; label: string }[] = []
-  for (let h = Math.ceil(hours.from / every) * every; h < hours.to; h += every) {
-    const at = new Date(2000, 0, 1, 0, h * 60)
-    const label = at.toLocaleTimeString(undefined, at.getMinutes() ? { hour: 'numeric', minute: '2-digit' } : { hour: 'numeric' })
-    out.push({ left: ((h - hours.from) / span) * 100, label })
+const tickLabel = (h: number) => {
+  const at = new Date(2000, 0, 1, 0, h * 60)
+  return at.toLocaleTimeString(undefined, at.getMinutes() ? { hour: 'numeric', minute: '2-digit' } : { hour: 'numeric' })
+}
+
+// What's drawn across the track at a width: a hairline every hour, hour
+// labels thinned out until there's room for them, and each squashed stretch
+// as a break with its length over it
+export function guides(axis: Axis, trackW: number) {
+  const pxPerHour = (axis.scale * HOUR * trackW) / 100
+  const every = [0.25, 0.5, 1, 2, 3, 6].find(h => pxPerHour * h >= 56) ?? 6
+  const breaks = axis.gaps.map(([from, to]) => ({ left: axis.x(from), width: axis.x(to) - axis.x(from), label: duration(to - from) }))
+  // labels keep clear of a break's own label
+  const clear = (left: number) => breaks.every(b => (Math.abs(b.left + b.width / 2 - left) * trackW) / 100 >= 40)
+  const lines: number[] = []
+  const ticks: { left: number; label: string }[] = []
+  for (const [from, to] of axis.segments) {
+    for (let h = Math.ceil(from / HOUR); h * HOUR <= to; h++) lines.push(axis.x(h * HOUR))
+    for (let h = Math.ceil(from / HOUR / every) * every; h * HOUR < to; h += every) {
+      if (clear(axis.x(h * HOUR))) ticks.push({ left: axis.x(h * HOUR), label: tickLabel(h) })
+    }
   }
-  return out
+  return { lines, ticks, breaks }
 }

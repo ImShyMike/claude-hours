@@ -5,27 +5,26 @@
   import { dayKey, summarize } from '#lib/analytics/aggregate.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
-  import { Checkbox } from '#lib/components/ui/checkbox/index.js'
-  import { Label } from '#lib/components/ui/label/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
+  import * as ToggleGroup from '#lib/components/ui/toggle-group/index.js'
   import { liveEvents, stored } from '#lib/dashboard/live.svelte.js'
   import { longDay } from '#lib/dashboard/overview.js'
   import { MIN, duration, esc, hideTip, palette, rangeWindow, showTip, withPerson, type Range } from '#lib/dashboard/shared.js'
-  import { MAX_ZOOM, hm, nextDay, pct, ticks, timelineRows, type Piece } from '#lib/dashboard/timeline.js'
+  import { MAX_ZOOM, guides, hm, nextDay, pct, timelineRows, type Hours, type Piece } from '#lib/dashboard/timeline.js'
   import Legend from '#lib/dashboard/ui/Legend.svelte'
   import RangePicker from '#lib/dashboard/ui/RangePicker.svelte'
 
   const live = liveEvents()
   const range = stored<Range>('range', '7')
   const idle = stored('idle', '5')
-  const fit = stored<'0' | '1'>('fit', '1')
+  const hours = stored<Hours>('hours', 'fit')
 
   // all time: each project's color and each session's home
   const ever = $derived(live.events && summarize(live.events, { idleCapMs: Number(idle.value) * MIN }))
   const colors = $derived(palette(ever?.projects ?? []))
   const homes = $derived(new Map(ever?.sessions.map(s => [s.sessionId, s.project])))
   const home = (id: string) => homes.get(id) ?? ''
-  const tl = $derived(ever && timelineRows(ever.spans, rangeWindow(range.value), home, fit.value === '1'))
+  const tl = $derived(ever && timelineRows(ever.spans, rangeWindow(range.value), home, hours.value))
 
   let innerWidth = $state(1024)
   let scroller = $state<HTMLElement>()
@@ -34,7 +33,7 @@
   // the rows stretch with zoom, the bars are in percent so only widths move
   const labelW = $derived(innerWidth < 560 ? 88 : 112)
   const trackW = $derived(Math.max(0, (scrollW - labelW) * zoom))
-  const span = $derived(tl ? tl.hours.to - tl.hours.from : 24)
+  const g = $derived(tl && guides(tl.axis, trackW))
 
   // the session under the pointer, lit up wherever its bars are
   let lit = $state<string>()
@@ -109,10 +108,18 @@
         <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
           <div class="flex-[1_1_20rem]"><Legend {colors} projects={tl.projects} /></div>
           <div class="flex items-center gap-3">
-            <div class="flex items-center gap-2">
-              <Checkbox id="fit" bind:checked={() => fit.value === '1', on => (fit.value = on ? '1' : '0')} />
-              <Label for="fit" class="font-normal text-muted-foreground">Fit to active hours</Label>
-            </div>
+            <!-- a click on the one already picked would clear it, so that's ignored -->
+            <ToggleGroup.Root
+              type="single"
+              variant="outline"
+              size="sm"
+              aria-label="Hours shown"
+              bind:value={() => hours.value, (next: string) => next && (hours.value = next as Hours)}
+            >
+              <ToggleGroup.Item value="all" title="Every hour of the day">All day</ToggleGroup.Item>
+              <ToggleGroup.Item value="fit" title="From the first active hour to the last">Active</ToggleGroup.Item>
+              <ToggleGroup.Item value="squash" title="Only the hours anything happened in, quiet stretches squashed">Squash gaps</ToggleGroup.Item>
+            </ToggleGroup.Root>
             <div class="flex gap-1" role="group" aria-label="Zoom">
               <Button
                 variant="outline"
@@ -142,9 +149,15 @@
             <div class="flex">
               <div class="sticky left-0 z-20 shrink-0 bg-card" style:width="{labelW}px"></div>
               <div class="relative h-5 flex-1">
-                {#each ticks(tl.hours, trackW) as t (t.left)}
+                {#each g!.ticks as t (t.left)}
                   <span class="absolute top-0.5 border-l pl-1 whitespace-nowrap text-muted-foreground tabular-nums" style:left="{t.left}%"
                     >{t.label}</span
+                  >
+                {/each}
+                {#each g!.breaks as b (b.left)}
+                  <span
+                    class="absolute top-0.5 -translate-x-1/2 font-medium whitespace-nowrap text-muted-foreground tabular-nums"
+                    style:left="{b.left + b.width / 2}%">{b.label}</span
                   >
                 {/each}
               </div>
@@ -166,13 +179,18 @@
                     <span>{longDay(dayKey(row.day))}</span>
                     <span class="text-muted-foreground">{duration(row.activeMs)}</span>
                   </div>
-                  <!-- a hairline every hour -->
-                  <div
-                    class="relative my-1.5 flex-1"
-                    style:height="{row.height}px"
-                    style:background-image="linear-gradient(to right, var(--border) 1px, transparent 1px)"
-                    style:background-size="{trackW / span}px 100%"
-                  >
+                  <div class="relative my-1.5 flex-1" style:height="{row.height}px">
+                    <!-- a hairline every hour, and each squashed stretch as a hatched break -->
+                    {#each g!.lines as left (left)}
+                      <span class="absolute inset-y-0 w-px bg-border" style:left="{left}%"></span>
+                    {/each}
+                    {#each g!.breaks as b (b.left)}
+                      <span
+                        class="absolute -inset-y-1.5 bg-[repeating-linear-gradient(135deg,var(--border)_0_1px,transparent_1px_6px)]"
+                        style:left="{b.left}%"
+                        style:width="{b.width}%"
+                      ></span>
+                    {/each}
                     {#each row.bars as { piece, top, height }, i (i)}
                       <a
                         class={[
@@ -182,10 +200,9 @@
                             : 'shadow-[0_0_0_1px_var(--card)]',
                         ]}
                         href={withPerson(`/session?id=${encodeURIComponent(piece.sessionId)}`)}
-                        data-sveltekit-reload
                         aria-label="{piece.project}, {hm(piece.from)} to {hm(piece.to)}"
-                        style:left="{pct(tl.hours, row.day, piece.from)}%"
-                        style:width="{pct(tl.hours, row.day, piece.to) - pct(tl.hours, row.day, piece.from)}%"
+                        style:left="{pct(tl.axis, row.day, piece.from)}%"
+                        style:width="{pct(tl.axis, row.day, piece.to) - pct(tl.axis, row.day, piece.from)}%"
                         style:top="{top}px"
                         style:height="{height}px"
                         style:background={colors.color(piece.project)}
@@ -197,10 +214,10 @@
                         }}
                       ></a>
                     {/each}
-                    {#if now >= row.day && now < nextDay(row.day) && pct(tl.hours, row.day, now) <= 100}
+                    {#if now >= row.day && now < nextDay(row.day) && pct(tl.axis, row.day, now) >= 0 && pct(tl.axis, row.day, now) <= 100}
                       <span
                         class="absolute -top-1.5 -bottom-1.5 border-l-2 border-muted-foreground"
-                        style:left="{pct(tl.hours, row.day, now)}%"
+                        style:left="{pct(tl.axis, row.day, now)}%"
                         title="now"
                       ></span>
                     {/if}
