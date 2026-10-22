@@ -1,4 +1,3 @@
-import { json } from '@sveltejs/kit'
 import { oauthError, readJson } from '#lib/server/api.js'
 import { db } from '#lib/server/db/client.js'
 import { pollDeviceCode } from '#lib/server/devices.js'
@@ -11,5 +10,5 @@ export const POST: RequestHandler = async ({ request }) => {
   if (typeof body?.device_code !== 'string') return oauthError('invalid_request')
   const result = await pollDeviceCode(db, body.device_code)
   if ('error' in result) return oauthError(result.error)
-  return json({ access_token: result.token, token_type: 'Bearer' })
+  return Response.json({ access_token: result.token, token_type: 'Bearer' })
 }

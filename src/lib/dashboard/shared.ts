@@ -1,5 +1,5 @@
 // Bits the dashboard pages share: lookups, storage, formatting and the tooltip
-import { invalidateAll } from '$app/navigation'
+import { refreshAll } from '$app/navigation'
 
 export const MIN = 60_000
 
@@ -33,7 +33,7 @@ export const withPerson = (path: string) => {
 export async function api<T>(path: string): Promise<T> {
   const res = await fetch(withPerson(path))
   if (res.status === 401) {
-    await invalidateAll()
+    await refreshAll()
     throw new Error('log in first')
   }
   // an error's body isn't the answer, so nothing keeps it as one

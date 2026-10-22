@@ -22,7 +22,7 @@
   // check on cross-site form posts, which a bodyless POST would trip
   async function logout() {
     await fetch('/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json' } })
-    await goto('/', { invalidateAll: true })
+    await goto('/', { refreshAll: true })
   }
 
   // the dashboard pages get the room their charts want

@@ -1,5 +1,4 @@
 import { gunzipSync } from 'node:zlib'
-import { json } from '@sveltejs/kit'
 import { bearerOf, unauthorized } from '#lib/server/api.js'
 import { db } from '#lib/server/db/client.js'
 import { authenticateDevice } from '#lib/server/devices.js'
@@ -12,7 +11,7 @@ export const POST: RequestHandler = async ({ request }) => {
   const device = token ? await authenticateDevice(db, token) : null
   if (!device) return unauthorized()
   if (!PROTOCOLS.includes(Number(request.headers.get('x-protocol'))))
-    return json({ error: 'unknown protocol, see protocols', protocols: PROTOCOLS }, { status: 400 })
+    return Response.json({ error: 'unknown protocol, see protocols', protocols: PROTOCOLS }, { status: 400 })
 
   let raw = Buffer.from(await request.arrayBuffer())
   if (request.headers.get('content-encoding') === 'gzip') {
@@ -20,17 +19,17 @@ export const POST: RequestHandler = async ({ request }) => {
       // the limit stops a small body from unpacking into a huge one
       raw = gunzipSync(raw, { maxOutputLength: MAX_BYTES })
     } catch {
-      return json({ error: `not gzip, or over ${MAX_BYTES} bytes unpacked` }, { status: 413 })
+      return Response.json({ error: `not gzip, or over ${MAX_BYTES} bytes unpacked` }, { status: 413 })
     }
   }
-  if (raw.length > MAX_BYTES) return json({ error: `over ${MAX_BYTES} bytes` }, { status: 413 })
+  if (raw.length > MAX_BYTES) return Response.json({ error: `over ${MAX_BYTES} bytes` }, { status: 413 })
   let body: unknown
   try {
     body = JSON.parse(raw.toString('utf8'))
   } catch {
-    return json({ error: 'not JSON' }, { status: 400 })
+    return Response.json({ error: 'not JSON' }, { status: 400 })
   }
   const batch = parseBatch(body)
-  if ('error' in batch) return json({ error: batch.error }, { status: batch.status })
-  return json(await ingest(db, device.person.id, batch.runs))
+  if ('error' in batch) return Response.json({ error: batch.error }, { status: batch.status })
+  return Response.json(await ingest(db, device.person.id, batch.runs))
 }

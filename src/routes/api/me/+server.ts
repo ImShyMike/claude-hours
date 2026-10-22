@@ -1,4 +1,3 @@
-import { json } from '@sveltejs/kit'
 import { asc } from 'drizzle-orm'
 import { people } from '#lib/server/db/index.js'
 import { db } from '#lib/server/db/client.js'
@@ -8,11 +7,11 @@ import type { RequestHandler } from './$types'
 // who's looking and at whom; an admin also gets everyone, for the picker
 export const GET: RequestHandler = async ({ locals, url }) => {
   const viewing = await viewerOf(db, locals, url)
-  if (!viewing || !locals.person) return json({ error: 'log in first' }, { status: 401 })
+  if (!viewing || !locals.person) return Response.json({ error: 'log in first' }, { status: 401 })
   const everyone = locals.admin
     ? await db.select({ id: people.id, name: people.name, email: people.email }).from(people).orderBy(asc(people.name))
     : undefined
-  return json({
+  return Response.json({
     person: viewing.id,
     name: viewing.name ?? viewing.email ?? `#${viewing.id}`,
     me: locals.person.id,
