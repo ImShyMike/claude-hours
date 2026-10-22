@@ -31,7 +31,9 @@ up), click to open it. Zoom with the + and - buttons or ctrl + scroll. Quiet
 days fold into one line. The hours shown are all day, "Active" (the default:
 from the first active hour to the last, so the bars get more room) or
 "Squash gaps": only the hours anything happened in, each quiet stretch of two
-hours or more squeezed into a hatched break with its length over it.
+hours or more squeezed into a hatched break with its length over it (hover
+it for the hours). It's the same chart the session page draws its lanes on:
+the same axis, ticks, breaks, bars and zoom.
 On a day the clocks change (23 or 25 hours) the bars are placed right but the
 hour ticks assume 24 equal hours, so they can sit up to an hour off.
 
@@ -41,10 +43,10 @@ Click a session's start time in the Sessions table, or a bar on the
 timeline, to open `/session?id=<sessionId>`:
 
 - **Session timeline:** lanes for you writing prompts (hollow when the draft
-  was abandoned), Claude's turns and tool calls, with interrupts marked. Zoom
-  with the + and - buttons, or ctrl + scroll (or pinch) to zoom around the
-  cursor. "Collapse gaps" squeezes every quiet stretch over 5 minutes into a
-  narrow band labelled with how long it was.
+  was abandoned), Claude's turns and tool calls, with interrupts marked, on
+  the timeline page's chart. Zoom with the + and - buttons, or ctrl + scroll
+  (or pinch) to zoom around the cursor. "Collapse gaps" squeezes every quiet
+  stretch over 5 minutes into a hatched break labelled with how long it was.
 - **Drafts:** every typed draft with its writing time, edits, fixes, rewrites,
   word deletes and longest pause. Click one to replay it.
 - **Replay:** the prompt box rebuilt from hook-analytics' edit timeline, drawn

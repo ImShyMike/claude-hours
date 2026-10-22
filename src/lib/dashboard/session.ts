@@ -1,9 +1,9 @@
-// The session page's drawing, worked out as shapes and strings for its
-// Svelte components to put on the page: the lanes of who was doing what,
-// the drafts, and a draft's replay
+// The session page's drawing, worked out as rows, shapes and strings for
+// its Svelte components to put on the page: the lanes of who was doing
+// what, the drafts, and a draft's replay
 import { projectSpans, turnPieces, waitsOf, type Event, type Interval } from '../analytics/aggregate'
 import { apply, countGroups, describe, groupOf, initialState, pausesOf, type Source, type State, type Step, type Timeline } from '../analytics/replay'
-import { axisOf } from './axis'
+import { ROW, type Bar, type Mark, type Row } from './rows'
 import { MIN, attachments, clockTime, compact, duration, esc, seconds, type Palette } from './shared'
 
 // a draft as the main log tells it, with its replay if the sidecar has one
@@ -58,36 +58,31 @@ export function projectTracks(events: Event[], idleCapMs: number, home: string):
 
 // --- session timeline ---------------------------------------------------
 
-// With gaps collapsed, a quiet stretch longer than GAP_MS is squeezed into a
-// break GAP_PX wide (less if there are many)
-const GAP_MS = 5 * MIN
-const GAP_PX = 48
+// With gaps collapsed, a quiet stretch longer than this is squashed into a break
+export const GAP_MS = 5 * MIN
 // the mod's own thresholds: a gap this long is a pause, and one this long a
 // break that stops counting as typing time
 const PAUSE_MS = 2_000
 const BREAK_MS = 30_000
-const TICKS_MS = [10_000, 30_000, MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN, 60 * MIN, 120 * MIN]
 
-export const LANE_NAMES = ['You', 'Claude', 'Tools', 'Projects']
-export const LANES_PAD = { left: 64, right: 12, top: 22 }
-export const LANE_H = 30
-const SUB = 11
-
-// what's drawn, class names in full so Tailwind finds them
+// what's drawn on the replay strip, class names in full so Tailwind finds them
 export type Shape =
-  | { kind: 'rect'; class: string; x: number; y: number; width: number; height: number; rx?: number; fill?: string; tip?: string; draft?: string }
+  | { kind: 'rect'; class: string; x: number; y: number; width: number; height: number; rx?: number; tip?: string }
   | { kind: 'line'; class: string; x1: number; x2: number; y1: number; y2: number; tip?: string }
-  | { kind: 'text'; class: string; x: number; y: number; text: string; tip?: string; start?: boolean }
+  | { kind: 'text'; class: string; x: number; y: number; text: string; tip?: string }
 
-const YOU = 'fill-(--typed)'
-const PICKABLE = 'cursor-pointer hover:stroke-foreground hover:stroke-2'
+const SENT = 'bg-(--typed)'
+const ABANDONED = 'border-2 border-(--typed)'
+const PAUSE = 'bg-[repeating-linear-gradient(45deg,var(--typed)_0_2px,var(--card)_2px_4px)]'
+const BREAK = 'bg-[repeating-linear-gradient(45deg,var(--typed)_0_2px,var(--card)_2px_8px)]'
+const MID_TURN = 'border-l-2 border-dashed border-muted-foreground'
 
 // the lanes' legend: a swatch's classes and what it means
 export const LANES_LEGEND: [string, string][] = [
-  ['bg-(--typed)', 'writing a prompt'],
-  ['shadow-[inset_0_0_0_2px_var(--typed)]', 'abandoned draft'],
-  ['bg-[repeating-linear-gradient(45deg,var(--typed)_0_2px,var(--card)_2px_4px)]', 'paused while writing'],
-  ['bg-(--typed) opacity-45', 'answering Claude'],
+  [SENT, 'writing a prompt'],
+  [ABANDONED, 'abandoned draft'],
+  [PAUSE, 'paused while writing'],
+  ['bg-(--typed)/45', 'answering Claude'],
   ['bg-(--neutral-2)', 'Claude working'],
   ['bg-foreground/70', 'compacting'],
   ['bg-(--neutral)', 'tool call'],
@@ -95,17 +90,18 @@ export const LANES_LEGEND: [string, string][] = [
   ['w-[3px] bg-[repeating-linear-gradient(to_bottom,var(--muted-foreground)_0_3px,transparent_3px_5px)]', 'sent mid-turn'],
 ]
 
-export function lanes(opts: {
+// The session as rows for the time-rows chart: what you did, what Claude
+// did, its tool calls, and the projects the time went to. `spans` is every
+// moment drawn, so a collapsed gap is only ever an empty one
+export function laneRows(opts: {
   events: Event[]
   drafts: Draft[]
   tracks: ProjectPiece[][]
   colors: Palette
   selected?: string
-  fit: number
-  zoom: number
-  collapse: boolean
-}) {
-  const { events, drafts, tracks, colors, selected } = opts
+  onpick: (draft: string) => void
+}): { rows: Row[]; spans: Interval[] } {
+  const { events, drafts, tracks, colors, selected, onpick } = opts
   const turns = events.filter(e => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId)
   const compacts = events.filter(e => e.event === 'compact')
   // a tool row is written when the call ends, so it starts durationMs earlier
@@ -115,7 +111,6 @@ export function lanes(opts: {
   // You lane, and the turn around it is drawn in pieces on either side
   const waits = waitsOf(events)
   const piecesOf = new Map(turns.map(t => [t, turnPieces(time(t), num(t.durationMs), waits)]))
-  // everything drawn, so collapsed gaps are only ever empty ones
   const spans: Interval[] = [
     ...events.map((e): Interval => [time(e), time(e)]),
     ...drafts.map((d): Interval => [d.start, d.end]),
@@ -124,136 +119,57 @@ export function lanes(opts: {
     ...tools.map((t): Interval => [t.start, t.end]),
     ...waits.map((w): Interval => [w.from, w.to]),
   ]
-  const t1 = Math.max(...spans.map(s => s[1]))
 
-  const pad = LANES_PAD
-  const fit = Math.max(opts.fit, 280)
-  const width = Math.max(fit, Math.round((fit - pad.left - pad.right) * opts.zoom) + pad.left + pad.right)
-  const plotW = width - pad.left - pad.right
-  const axis = axisOf(spans, pad.left, plotW, opts.collapse ? GAP_MS : Infinity, GAP_PX)
-  const x = axis.x
-  const laneY = (i: number) => pad.top + i * LANE_H
-  const extra = Math.max(0, tracks.length - 1) * (SUB + 3)
-  const height = pad.top + LANE_NAMES.length * LANE_H + extra + 4
-  const shapes: Shape[] = []
-
-  const tick = TICKS_MS.find(t => t * axis.scale >= 80) ?? TICKS_MS[TICKS_MS.length - 1]!
-  // a collapsed gap wide enough has its length on the time axis, so ticks
-  // keep clear of it
-  const GAP_LABEL_PX = 30
-  const gapLabels = axis.gaps.filter(([from, to]) => x(to) - x(from) >= GAP_LABEL_PX).map(([from, to]) => (x(from) + x(to)) / 2)
-  // and apart from each other, across a thin gap too
-  let lastTick = -Infinity
-  for (const [from, to] of axis.segments) {
-    for (let t = Math.ceil(from / tick) * tick; t <= Math.min(to, t1); t += tick) {
-      if (x(t) - lastTick < 56 || gapLabels.some(g => Math.abs(g - x(t)) < 56)) continue
-      lastTick = x(t)
-      shapes.push({ kind: 'line', class: 'stroke-border', x1: x(t), x2: x(t), y1: pad.top - 4, y2: height })
-      const label = new Date(t).toLocaleTimeString(
-        undefined,
-        tick < MIN ? { hour: 'numeric', minute: '2-digit', second: '2-digit' } : { hour: 'numeric', minute: '2-digit' },
-      )
-      shapes.push({ kind: 'text', class: 'fill-muted-foreground', x: x(t), y: 12, text: label })
-    }
-  }
-  LANE_NAMES.forEach((_, i) => {
-    const y = laneY(i) + LANE_H - 3 + (i === 3 ? extra : 0)
-    shapes.push({ kind: 'line', class: 'stroke-muted-foreground/40', x1: pad.left, x2: width - pad.right, y1: y, y2: y })
-  })
-
-  const bar = (cls: string, start: number, end: number, lane: number, more: Partial<Extract<Shape, { kind: 'rect' }>> = {}): Shape => ({
-    kind: 'rect',
-    class: cls,
-    x: x(start),
-    y: laneY(lane) + 5,
-    width: Math.max(3, x(end) - x(start)),
-    height: LANE_H - 12,
-    rx: 3,
-    ...more,
-  })
-
-  // each collapsed gap: a soft band through the lanes, its length on top
-  for (const [from, to] of axis.gaps) {
-    const x0 = x(from)
-    const w = x(to) - x0
-    const tip = `<strong>Nothing for ${duration(to - from)}</strong>${clockTime(from)} to ${clockTime(to)}, collapsed`
-    shapes.push({ kind: 'rect', class: 'fill-muted', x: x0, y: pad.top - 4, width: w, height: height - pad.top + 4, tip })
-    if (w >= GAP_LABEL_PX)
-      shapes.push({ kind: 'text', class: 'fill-muted-foreground font-semibold', x: x0 + w / 2, y: 12, text: duration(to - from) })
-  }
+  const bar = (cls: string, from: number, to: number, more: Partial<Bar> = {}): Bar => ({ from, to, top: 0, height: ROW.main, class: cls, ...more })
+  const you: Bar[] = []
+  const claude: Bar[] = []
+  const youMarks: Mark[] = []
+  const claudeMarks: Mark[] = []
 
   for (const d of drafts) {
-    const outline = d.outcome === 'abandoned' ? 'fill-transparent stroke-(--typed) stroke-2' : YOU
-    const cls = `${outline} ${PICKABLE}${d.id === selected ? ' stroke-foreground! stroke-2' : ''}`
     const when = d.line.midTurn ? '<br>sent while Claude was working' : ''
     const tip = `<strong>${d.outcome === 'sent' ? 'Prompt sent' : 'Draft abandoned'}</strong>${clockTime(d.start)}, ${seconds(d.end - d.start)} writing${when}${d.timeline ? '<br>click to replay' : ''}`
-    shapes.push(bar(cls, d.start, d.end, 0, { tip, draft: d.id }))
+    const pick = { onclick: () => onpick(d.id), group: d.id }
+    you.push(bar(d.outcome === 'abandoned' ? ABANDONED : SENT, d.start, d.end, { tip, selected: d.id === selected, ...pick }))
     if (!d.timeline) continue
-    // the pauses, hatched over the bar (denser for a break long enough to
+    // the pauses, hatched over the bar (wider for a break long enough to
     // stop counting as typing), each with its own tooltip
     const origin = Date.parse(d.timeline.startedAt)
     for (const p of pausesOf(d.timeline, PAUSE_MS)) {
       const start = origin + p.from
       const brk = p.to - p.from >= BREAK_MS
       const tip = `<strong>${brk ? 'Break' : 'Pause'}</strong>${seconds(p.to - p.from)}, from ${clockTime(start)}${brk ? '<br>not counted as typing time' : ''}`
-      shapes.push({
-        kind: 'rect',
-        class: `cursor-pointer hover:stroke-foreground ${brk ? 'fill-[url(#hatch-break)]' : 'fill-[url(#hatch-pause)]'}`,
-        x: x(start),
-        y: laneY(0) + 5,
-        width: Math.max(2, x(origin + p.to) - x(start)),
-        height: LANE_H - 12,
-        tip,
-        draft: d.id,
-      })
+      you.push(bar(brk ? BREAK : PAUSE, start, origin + p.to, { tip, plain: true, ...pick }))
     }
   }
   for (const w of waits) {
     const what = w.kind === 'question' ? `Answering ${esc(w.tool)}` : `Permission for ${esc(w.tool) || 'a tool'}`
     const tip = `<strong>${what}</strong>${seconds(w.to - w.from)}, until ${clockTime(w.to)}<br>not counted as Claude working`
-    shapes.push(bar('fill-(--typed)/45', w.from, w.to, 0, { tip }))
+    you.push(bar('bg-(--typed)/45', w.from, w.to, { tip }))
   }
   for (const t of turns) {
     const end = time(t)
     const pieces = piecesOf.get(t)!
     const waited = end - pieces[0]![0] - num(t.durationMs)
     const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}${waited ? ` working, ${seconds(waited)} waiting on you` : ''}, ended ${clockTime(end)}`
-    for (const [s, e] of pieces) shapes.push(bar('fill-(--neutral-2)', s, e, 1, { tip }))
-    if (t.event === 'interrupt') {
-      shapes.push({ kind: 'line', class: 'stroke-(--critical) stroke-2', x1: x(end), x2: x(end), y1: laneY(0) + 2, y2: laneY(2) })
-      const running = Array.isArray(t.toolsRunning) && t.toolsRunning.length ? `<br>stopped ${esc(t.toolsRunning.join(', '))} mid-run` : ''
-      const shown =
-        typeof t.answerChars === 'number' ? `<br>${t.answerChars ? `${compact(t.answerChars)} chars of answer shown` : 'no answer shown yet'}` : ''
-      shapes.push({
-        kind: 'text',
-        class: 'fill-(--critical) font-bold',
-        x: x(end) + 3,
-        y: laneY(1) + 4,
-        text: '✕',
-        start: true,
-        tip: `<strong>Interrupt</strong>Esc during a turn${shown}${running}`,
-      })
-    }
+    for (const [s, e] of pieces) claude.push(bar('bg-(--neutral-2)', s, e, { tip }))
+    if (t.event !== 'interrupt') continue
+    // a red line down from You into the turn it stopped
+    const running = Array.isArray(t.toolsRunning) && t.toolsRunning.length ? `<br>stopped ${esc(t.toolsRunning.join(', '))} mid-run` : ''
+    const shown =
+      typeof t.answerChars === 'number' ? `<br>${t.answerChars ? `${compact(t.answerChars)} chars of answer shown` : 'no answer shown yet'}` : ''
+    const mark = { at: end, class: 'border-l-2 border-(--critical)', tip: `<strong>Interrupt</strong>Esc during a turn${shown}${running}` }
+    youMarks.push(mark)
+    claudeMarks.push({ ...mark, glyph: '✕', glyphClass: 'text-(--critical)' })
   }
   // a prompt sent while Claude worked: a dashed drop from You into the turn
   for (const e of events) {
     if (e.event !== 'prompt' || !e.midTurn) continue
-    const at = x(time(e))
-    shapes.push({
-      kind: 'line',
-      class: 'stroke-muted-foreground stroke-2 [stroke-dasharray:3_3]',
-      x1: at,
-      x2: at,
-      y1: laneY(0) + 4,
-      y2: laneY(2) - 4,
-      tip: `<strong>Sent mid-turn</strong>${clockTime(time(e))}, ${num(e.words)} words`,
-    })
+    const mark = { at: time(e), class: MID_TURN, tip: `<strong>Sent mid-turn</strong>${clockTime(time(e))}, ${num(e.words)} words` }
+    youMarks.push(mark)
+    claudeMarks.push(mark)
   }
-  for (const t of tools) {
-    const tip = `<strong>${esc(String(t.e.tool))}</strong>${seconds(t.end - t.start)} · ${esc(String(t.e.outcome ?? ''))}`
-    shapes.push(bar('fill-(--neutral)', t.start, t.end, 2, { tip }))
-  }
-  // over the Claude lane, since an auto compaction lands mid-turn; a card
+  // over the Claude lane, since an auto compaction lands mid-turn; its card
   // ring keeps it apart from the turn under it
   for (const c of compacts) {
     const end = time(c)
@@ -263,30 +179,30 @@ export function lanes(opts: {
     const who = c.agentId ? ', a subagent' : ''
     const tip = `<strong>Compaction (${esc(String(c.trigger))}${who})</strong>${seconds(num(c.durationMs))}, ${esc(String(c.outcome))}${sizes}`
     const faded = c.agentId || c.trigger === 'precompute'
-    shapes.push(bar(`stroke-card stroke-2 ${faded ? 'fill-foreground/30' : 'fill-foreground/70'}`, end - num(c.durationMs), end, 1, { tip }))
+    claude.push(bar(faded ? 'bg-foreground/30' : 'bg-foreground/70', end - num(c.durationMs), end, { tip }))
   }
-
-  tracks.forEach((track, k) => {
-    const y = laneY(3) + 5 + (k ? LANE_H - 12 + 3 + (k - 1) * (SUB + 3) : 0)
-    const h = k ? SUB : LANE_H - 12
-    for (const { project, span } of track) {
-      const tip = `<strong>${esc(project)}</strong>${clockTime(span[0])} to ${clockTime(span[1])}, ${duration(span[1] - span[0])}${k ? '<br>alongside the main thread' : ''}`
-      const x0 = x(span[0])
-      shapes.push({
-        kind: 'rect',
-        class: '',
-        x: x0,
-        y,
-        width: Math.max(3, x(span[1]) - x0),
-        height: h,
-        rx: k ? 2 : 3,
-        fill: colors.color(project),
-        tip,
-      })
-    }
-  })
-
-  return { width, height, axis, shapes, laneY }
+  const toolBars = tools.map(t =>
+    bar('bg-(--neutral)', t.start, t.end, {
+      tip: `<strong>${esc(String(t.e.tool))}</strong>${seconds(t.end - t.start)} · ${esc(String(t.e.outcome ?? ''))}`,
+    }),
+  )
+  const projects = tracks.flatMap((track, k) =>
+    track.map(({ project, span }) => ({
+      from: span[0],
+      to: span[1],
+      top: k ? ROW.main + ROW.gap + (k - 1) * (ROW.sub + ROW.gap) : 0,
+      height: k ? ROW.sub : ROW.main,
+      color: colors.color(project),
+      tip: `<strong>${esc(project)}</strong>${clockTime(span[0])} to ${clockTime(span[1])}, ${duration(span[1] - span[0])}${k ? '<br>alongside the main thread' : ''}`,
+    })),
+  )
+  const rows: Row[] = [
+    { key: 'you', label: 'You', height: ROW.main, bars: you, marks: youMarks },
+    { key: 'claude', label: 'Claude', height: ROW.main, bars: claude, marks: claudeMarks },
+    { key: 'tools', label: 'Tools', height: ROW.main, bars: toolBars },
+    { key: 'projects', label: 'Projects', height: ROW.main + Math.max(0, tracks.length - 1) * (ROW.sub + ROW.gap), bars: projects },
+  ]
+  return { rows, spans }
 }
 
 // --- replay -------------------------------------------------------------

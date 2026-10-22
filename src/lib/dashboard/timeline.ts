@@ -1,25 +1,19 @@
 // The timeline's rows: a row per day, each session's active spans as bars
 // placed in lanes, newest day first with quiet stretches folded into one line
-import type { Interval, Summary } from '../analytics/aggregate'
-import { axisOf, type Axis } from './axis'
-import { MIN, duration } from './shared'
+import { dayKey, type Interval, type Summary } from '../analytics/aggregate'
+import { longDay } from './overview'
+import { ROW, type Bar, type Row } from './rows'
+import { MIN, duration, esc } from './shared'
 
-// a lane's main bar, and the thin bar under it for a subagent elsewhere
-const MAIN_H = 20
-const SUB_H = 12
-const GAP = 3
-const LANE_GAP = 8
 export const MAX_ZOOM = 48
 const HOUR = 60 * MIN
 
 export type Piece = Summary['spans'][number]
-export type Bar = { piece: Piece; top: number; height: number }
-export type Row = { kind: 'day'; day: number; activeMs: number; bars: Bar[]; height: number } | { kind: 'quiet'; day: number; days: number }
 // the hours of the day the axis shows: all of them, just the stretch anything
 // happened in, or only the hours anything happened in, the quiet ones squashed
 export type Hours = 'all' | 'fit' | 'squash'
 
-const startOfDay = (ms: number) => {
+export const startOfDay = (ms: number) => {
   const d = new Date(ms)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
@@ -93,19 +87,37 @@ function activeMs(bySession: Map<string, Piece[]>) {
   return ms
 }
 
-function dayRow(day: number, bySession: Map<string, Piece[]>, home: (id: string) => string): Row {
+type Look = { color: (project: string) => string; home: (id: string) => string; link: (id: string) => string }
+
+function tip(p: Piece, from: string) {
+  return `<strong>${esc(p.project)}</strong>${hm(p.from)} to ${hm(p.to)} · ${duration(p.to - p.from)}<span class="muted">session ${esc(p.sessionId.slice(0, 8))}${from && from !== p.project ? `, started in ${esc(from)}` : ''}</span>`
+}
+
+// a day's lanes as bars, in ms from its midnight so every day shares the axis
+function dayRow(day: number, bySession: Map<string, Piece[]>, look: Look): Row {
   const bars: Bar[] = []
   let top = 0
-  for (const lane of lanesOf(bySession, home)) {
+  for (const lane of lanesOf(bySession, look.home)) {
     for (const s of lane.sessions) {
       s.tracks.forEach((track, k) => {
-        const y = top + (k ? MAIN_H + GAP + (k - 1) * (SUB_H + GAP) : 0)
-        for (const piece of track) bars.push({ piece, top: y, height: k ? SUB_H : MAIN_H })
+        const y = top + (k ? ROW.main + ROW.gap + (k - 1) * (ROW.sub + ROW.gap) : 0)
+        for (const piece of track)
+          bars.push({
+            from: piece.from - day,
+            to: piece.to - day,
+            top: y,
+            height: k ? ROW.sub : ROW.main,
+            color: look.color(piece.project),
+            tip: tip(piece, look.home(piece.sessionId)),
+            label: `${piece.project}, ${hm(piece.from)} to ${hm(piece.to)}`,
+            href: look.link(piece.sessionId),
+            group: piece.sessionId,
+          })
       })
     }
-    top += MAIN_H + lane.subs * (SUB_H + GAP) + LANE_GAP
+    top += ROW.main + lane.subs * (ROW.sub + ROW.gap) + ROW.lane
   }
-  return { kind: 'day', day, activeMs: activeMs(bySession), bars, height: Math.max(top - LANE_GAP, MAIN_H) }
+  return { key: String(day), label: longDay(dayKey(day)), sub: duration(activeMs(bySession)), bars, height: Math.max(top - ROW.lane, ROW.main) }
 }
 
 // every piece's stretch of its day, in ms from midnight
@@ -122,16 +134,17 @@ function dayOffsets(days: Map<number, Map<string, Piece[]>>): Interval[] {
   return out
 }
 
-// the axis across a row, in percent of the track so zoom only stretches it
-function axisFor(days: Map<number, Map<string, Piece[]>>, hours: Hours): Axis {
+// what the axis spans, in ms from midnight, and how long a quiet stretch
+// has to be to squash
+function axisFor(days: Map<number, Map<string, Piece[]>>, hours: Hours): { spans: Interval[]; gapMs: number; minMs?: number } {
   const spans = dayOffsets(days)
-  if (hours === 'all' || !spans.length) return axisOf([[0, 24 * HOUR]], 0, 100, Infinity, 0)
+  if (hours === 'all' || !spans.length) return { spans: [[0, 24 * HOUR]], gapMs: Infinity }
   if (hours === 'fit') {
     // whole hours, and never fewer than 3 of them
     const from = Math.floor(Math.min(...spans.map(s => s[0])) / HOUR)
     const to = Math.max(Math.ceil(Math.max(...spans.map(s => s[1])) / HOUR), from + 3)
     const [lo, hi] = to > 24 ? [21, 24] : [from, to]
-    return axisOf([[lo * HOUR, hi * HOUR]], 0, 100, Infinity, 0)
+    return { spans: [[lo * HOUR, hi * HOUR]], gapMs: Infinity }
   }
   // the hours anything happened in; one quiet hour between stays, longer
   // quiet stretches become breaks
@@ -139,11 +152,11 @@ function axisFor(days: Map<number, Map<string, Piece[]>>, hours: Hours): Axis {
     Math.floor(from / HOUR) * HOUR,
     Math.max(Math.ceil(to / HOUR), Math.floor(from / HOUR) + 1) * HOUR,
   ])
-  return axisOf(busy, 0, 100, HOUR, 4, HOUR)
+  return { spans: busy, gapMs: HOUR, minMs: HOUR }
 }
 
 // the spans in a window as day rows, newest first
-export function timelineRows(spans: Piece[], window: { from?: number; to?: number }, home: (id: string) => string, hours: Hours) {
+export function timelineRows(spans: Piece[], window: { from?: number; to?: number }, look: Look, hours: Hours) {
   const lo = window.from ?? -Infinity
   const hi = window.to ?? Infinity
   const inRange = spans.flatMap(s => (s.to > lo && s.from < hi ? [{ ...s, from: Math.max(s.from, lo), to: Math.min(s.to, hi) }] : []))
@@ -158,40 +171,12 @@ export function timelineRows(spans: Piece[], window: { from?: number; to?: numbe
   const rows: Row[] = []
   const order = [...days.keys()].sort((a, b) => b - a)
   order.forEach((day, k) => {
-    rows.push(dayRow(day, days.get(day)!, home))
+    rows.push(dayRow(day, days.get(day)!, look))
     const older = order[k + 1]
     if (older === undefined) return
     let quiet = 0
     for (let at = nextDay(older); at < day; at = nextDay(at)) quiet++
-    if (quiet) rows.push({ kind: 'quiet', day: nextDay(older), days: quiet })
+    if (quiet) rows.push({ key: `quiet-${day}`, label: `${quiet} quiet day${quiet === 1 ? '' : 's'}`, height: 0, bars: [], quiet: true })
   })
-  return { rows, axis: axisFor(days, hours), projects: inRange.map(s => s.project) }
-}
-
-// where a moment of a day sits on the track, in percent
-export const pct = (axis: Axis, day: number, ms: number) => axis.x(ms - day)
-
-const tickLabel = (h: number) => {
-  const at = new Date(2000, 0, 1, 0, h * 60)
-  return at.toLocaleTimeString(undefined, at.getMinutes() ? { hour: 'numeric', minute: '2-digit' } : { hour: 'numeric' })
-}
-
-// What's drawn across the track at a width: a hairline every hour, hour
-// labels thinned out until there's room for them, and each squashed stretch
-// as a break with its length over it
-export function guides(axis: Axis, trackW: number) {
-  const pxPerHour = (axis.scale * HOUR * trackW) / 100
-  const every = [0.25, 0.5, 1, 2, 3, 6].find(h => pxPerHour * h >= 56) ?? 6
-  const breaks = axis.gaps.map(([from, to]) => ({ left: axis.x(from), width: axis.x(to) - axis.x(from), label: duration(to - from) }))
-  // labels keep clear of a break's own label
-  const clear = (left: number) => breaks.every(b => (Math.abs(b.left + b.width / 2 - left) * trackW) / 100 >= 40)
-  const lines: number[] = []
-  const ticks: { left: number; label: string }[] = []
-  for (const [from, to] of axis.segments) {
-    for (let h = Math.ceil(from / HOUR); h * HOUR <= to; h++) lines.push(axis.x(h * HOUR))
-    for (let h = Math.ceil(from / HOUR / every) * every; h * HOUR < to; h += every) {
-      if (clear(axis.x(h * HOUR))) ticks.push({ left: axis.x(h * HOUR), label: tickLabel(h) })
-    }
-  }
-  return { lines, ticks, breaks }
+  return { rows, ...axisFor(days, hours), projects: inRange.map(s => s.project) }
 }
