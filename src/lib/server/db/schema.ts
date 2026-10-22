@@ -1,12 +1,13 @@
 // The hub's accounts: people (from Hack Club Auth), their browser sessions,
-// the devices the mod syncs from, and data deletion requests. Event tables
-// come once the sync protocol settles.
+// the devices the mod syncs from, and data deletion requests. Then what the
+// mod sends: runs, a table per event type, draft timelines and quarantine.
 //
 // Every secret is stored as its sha256 (hex): a session cookie, a device
 // token, a device code. The table alone lets no one in.
 
 import { sql } from 'drizzle-orm'
-import { bigint, boolean, check, index, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core'
+import { bigint, boolean, check, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core'
+import type { PgColumnBuilderBase } from 'drizzle-orm/pg-core'
 
 const id = () => bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity()
 const personRef = (name = 'person_id') =>
@@ -96,6 +97,167 @@ export const deletionRequests = pgTable(
       .where(sql`${t.status} = 'pending'`),
     check('deletion_requests_status', sql`${t.status} in ('pending', 'approved', 'rejected')`),
   ],
+)
+
+// One run of a session's file: from a header (a new session, or a resume) to
+// the next, keyed by the header's start. The drafts sidecar is one run per
+// session with start 0. acked is how many of its rows the hub holds, always
+// rows 0 to acked - 1 (see the sync protocol in docs/rewrite.md)
+export const runs = pgTable(
+  'runs',
+  {
+    id: id(),
+    personId: personRef(),
+    session: text('session').notNull(),
+    stream: text('stream', { enum: ['events', 'drafts'] }).notNull(),
+    start: bigint('start', { mode: 'number' }).notNull(),
+    // the header's fields, events runs only
+    v: integer('v'),
+    cwd: text('cwd'),
+    root: text('root'),
+    rootName: text('root_name'),
+    headerExtra: jsonb('header_extra').$type<Record<string, unknown>>(),
+    acked: integer('acked').notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: at('updated_at').notNull().defaultNow(),
+  },
+  t => [uniqueIndex('runs_key').on(t.personId, t.session, t.stream, t.start)],
+)
+
+// Every row of a run, by its n. Its own fields go in typed columns named like
+// the JSON field; a field the table doesn't know, or a value that doesn't fit
+// its column (a null, say), goes in extra, so a row always comes back exactly
+// as the mod wrote it. A row has t (ms since the run's start) or at (epoch ms)
+const ms = (name: string) => bigint(name, { mode: 'number' })
+const runRow = () => ({
+  runId: bigint('run_id', { mode: 'number' })
+    .notNull()
+    .references(() => runs.id, { onDelete: 'cascade' }),
+  n: integer('n').notNull(),
+})
+const eventTable = <C extends Record<string, PgColumnBuilderBase>>(name: string, columns: C) =>
+  pgTable(name, { ...runRow(), t: ms('t'), at: ms('at'), ...columns, extra: jsonb('extra').$type<Record<string, unknown>>() }, t => [
+    primaryKey({ columns: [t.runId, t.n] }),
+  ])
+
+const draftColumns = () => ({
+  composeMs: ms('compose_ms'),
+  typingMs: ms('typing_ms'),
+  edits: integer('edits'),
+  typedChars: integer('typed_chars'),
+  pastedChars: integer('pasted_chars'),
+  deletedChars: integer('deleted_chars'),
+  fixes: integer('fixes'),
+  rewrites: integer('rewrites'),
+  rewrittenChars: integer('rewritten_chars'),
+  pauses: integer('pauses'),
+  breaks: integer('breaks'),
+  longestPauseMs: ms('longest_pause_ms'),
+  wordDeletes: integer('word_deletes'),
+  lineKills: integer('line_kills'),
+  draftId: text('draft_id'),
+})
+const turnColumns = () => ({
+  turnId: text('turn_id'),
+  agentId: text('agent_id'),
+  reason: text('reason'),
+  durationMs: ms('duration_ms'),
+  usage: jsonb('usage'),
+  waits: jsonb('waits'),
+  answerChars: integer('answer_chars'),
+  toolsRunning: jsonb('tools_running'),
+})
+
+export const sessionStarts = eventTable('session_starts', { surface: text('surface'), isInteractive: boolean('is_interactive') })
+export const sessionEnds = eventTable('session_ends', { reason: text('reason') })
+export const prompts = eventTable('prompts', {
+  words: integer('words'),
+  chars: integer('chars'),
+  origin: text('origin'),
+  command: text('command'),
+  isMeta: boolean('is_meta'),
+  midTurn: boolean('mid_turn'),
+  images: integer('images'),
+  audio: integer('audio'),
+  documents: integer('documents'),
+  ...draftColumns(),
+})
+export const abandonedDrafts = eventTable('abandoned_drafts', { ...draftColumns(), how: text('how'), endedAt: ms('ended_at') })
+export const turnEnds = eventTable('turn_ends', turnColumns())
+export const interrupts = eventTable('interrupts', turnColumns())
+export const compacts = eventTable('compacts', {
+  trigger: text('trigger'),
+  agentId: text('agent_id'),
+  messages: integer('messages'),
+  outcome: text('outcome'),
+  tokensBefore: integer('tokens_before'),
+  tokensAfter: integer('tokens_after'),
+  usage: jsonb('usage'),
+  durationMs: ms('duration_ms'),
+})
+export const toolCalls = eventTable('tool_calls', {
+  tool: text('tool'),
+  agentId: text('agent_id'),
+  file: text('file'),
+  repo: text('repo'),
+  repoName: text('repo_name'),
+  commandChars: integer('command_chars'),
+  outcome: text('outcome'),
+  durationMs: ms('duration_ms'),
+})
+export const fileChanges = eventTable('file_changes', { tool: text('tool'), agentId: text('agent_id'), path: text('path'), via: text('via') })
+export const cwdChanges = eventTable('cwd_changes', { cwd: text('cwd'), root: text('root'), rootName: text('root_name') })
+// an event type the hub doesn't know yet: everything but t/at is in extra
+export const otherEvents = eventTable('other_events', { event: text('event').notNull() })
+
+// which table each event goes to; anything else goes to otherEvents
+export const eventTables = {
+  session_start: sessionStarts,
+  session_end: sessionEnds,
+  prompt: prompts,
+  draft_abandoned: abandonedDrafts,
+  turn_end: turnEnds,
+  interrupt: interrupts,
+  compact: compacts,
+  tool: toolCalls,
+  file_changed: fileChanges,
+  cwd_changed: cwdChanges,
+}
+
+// a draft's edit timeline, the drafts sidecar's rows (shapes only, no text)
+export const draftTimelines = pgTable(
+  'draft_timelines',
+  {
+    ...runRow(),
+    v: integer('v'),
+    draftId: text('draft_id'),
+    outcome: text('outcome'),
+    startedAt: ms('started_at'),
+    durationMs: ms('duration_ms'),
+    initialShape: text('initial_shape'),
+    initialCursor: integer('initial_cursor'),
+    steps: text('steps'),
+    truncated: boolean('truncated'),
+    extra: jsonb('extra').$type<Record<string, unknown>>(),
+  },
+  t => [primaryKey({ columns: [t.runId, t.n] })],
+)
+
+// rows that couldn't be read as an event or a timeline at all, kept to look at
+export const quarantine = pgTable(
+  'quarantine',
+  {
+    id: id(),
+    personId: personRef(),
+    session: text('session').notNull(),
+    stream: text('stream').notNull(),
+    start: bigint('start', { mode: 'number' }).notNull(),
+    n: integer('n').notNull(),
+    row: jsonb('row'),
+    reason: text('reason').notNull(),
+    receivedAt: at('received_at').notNull().defaultNow(),
+  },
+  t => [index('quarantine_person_idx').on(t.personId)],
 )
 
 export type Person = typeof people.$inferSelect
