@@ -2,6 +2,7 @@
   import '../layout.css'
   import { goto } from '$app/navigation'
   import { page } from '$app/state'
+  import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import ChartTip from '#lib/dashboard/ui/ChartTip.svelte'
   import type { LayoutProps } from './$types'
@@ -41,7 +42,24 @@
           aria-current={page.route.id === link.route ? 'page' : undefined}>{link.label}</Button
         >
       {/each}
-      <Button variant="ghost" size="sm" onclick={logout}>Log out</Button>
+      <!-- asked first, since the dashboard is one stray click from gone -->
+      <AlertDialog.Root>
+        <AlertDialog.Trigger>
+          {#snippet child({ props })}<Button {...props} variant="ghost" size="sm">Log out</Button>{/snippet}
+        </AlertDialog.Trigger>
+        <AlertDialog.Content>
+          <AlertDialog.Header>
+            <AlertDialog.Title>Log out?</AlertDialog.Title>
+            <AlertDialog.Description
+              >You'll need to log in with Hack Club again to see your dashboard. Your devices stay connected.</AlertDialog.Description
+            >
+          </AlertDialog.Header>
+          <AlertDialog.Footer>
+            <AlertDialog.Cancel>Stay</AlertDialog.Cancel>
+            <AlertDialog.Action onclick={logout}>Log out</AlertDialog.Action>
+          </AlertDialog.Footer>
+        </AlertDialog.Content>
+      </AlertDialog.Root>
     {/if}
   </nav>
 </header>
