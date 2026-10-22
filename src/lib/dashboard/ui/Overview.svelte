@@ -70,6 +70,23 @@
     return [
       { label: 'Typo fixes', value: per(w.fixes), sub: `${w.fixes} in all, 3 chars or fewer` },
       { label: 'Rewrites', value: per(w.rewrites), sub: `${w.rewrites} in all, ${compact(w.rewrittenChars)} chars redone` },
+      {
+        label: 'Deleted',
+        value: per(w.deletedChars),
+        sub: `chars${w.typedChars ? `, ${Math.round((w.deletedChars / w.typedChars) * 100)}% of what you typed` : ''}`,
+      },
+      {
+        label: 'Word deletes',
+        value: per(w.wordDeletes),
+        sub: `ctrl+w or alt+backspace${w.lineKills ? `, plus ${plural(w.lineKills, 'line')} at once` : ''}`,
+      },
+      {
+        label: 'Pastes',
+        value: `${Math.round((w.pastes / w.measured) * 100)}%`,
+        sub: [w.pastes ? `of prompts, ${compact(Math.round(w.pasteChars / w.pastes))} chars each` : 'of prompts', attachments(w)]
+          .filter(Boolean)
+          .join(' · '),
+      },
       { label: 'Thinking pauses', value: per(w.pauses), sub: '2 to 30 seconds' },
       { label: 'Breaks', value: per(w.breaks), sub: 'pauses over 30 seconds' },
       { label: 'Longest pause', value: seconds(w.longestPauseMs), sub: `over ${plural(w.measured, 'draft')}` },

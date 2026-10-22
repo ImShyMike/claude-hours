@@ -58,6 +58,14 @@ export type Summary = {
     pauses: number
     breaks: number
     longestPauseMs: number
+    // of those drafts: the ones with a paste in, and those pastes' chars
+    pastes: number
+    pasteChars: number
+    // chars deleted, words deleted at once (ctrl+w, alt+backspace) and lines
+    // (ctrl+u, ctrl+k)
+    deletedChars: number
+    wordDeletes: number
+    lineKills: number
   }
   turns: number
   interrupts: number
@@ -553,6 +561,11 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     pauses: 0,
     breaks: 0,
     longestPauseMs: 0,
+    pastes: 0,
+    pasteChars: 0,
+    deletedChars: 0,
+    wordDeletes: 0,
+    lineKills: 0,
   }
   const countTyping = (e: Event) => {
     writing.typingMs += Number(e.typingMs) || 0
@@ -566,6 +579,12 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     writing.pauses += Number(e.pauses) || 0
     writing.breaks += Number(e.breaks) || 0
     writing.longestPauseMs = Math.max(writing.longestPauseMs, Number(e.longestPauseMs) || 0)
+    const pasted = Number(e.pastedChars) || 0
+    if (pasted > 0) writing.pastes++
+    writing.pasteChars += pasted
+    writing.deletedChars += Number(e.deletedChars) || 0
+    writing.wordDeletes += Number(e.wordDeletes) || 0
+    writing.lineKills += Number(e.lineKills) || 0
   }
 
   for (const e of windowed) {

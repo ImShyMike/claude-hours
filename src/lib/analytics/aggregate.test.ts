@@ -314,13 +314,13 @@ test('an abandoned draft is placed by its own end, not its late line', () => {
   expect(s.writing).toMatchObject({ abandoned: 1, abandonedMs: 1 * MIN, typingMs: 1 * MIN, sent: 0 })
 })
 
-test('fixes, rewrites and pauses add up over drafts that have them', () => {
+test('fixes, rewrites, pauses, pastes and deletes add up over drafts that have them', () => {
   const fields = { origin: 'composer', typingMs: MIN, fixes: 2, rewrites: 1, rewrittenChars: 12, pauses: 3, breaks: 0, longestPauseMs: 9_000 }
   const events = [
-    at('2026-10-19T12:00:00Z', 'prompt', fields),
-    at('2026-10-19T12:05:00Z', 'draft_abandoned', { ...fields, endedAt: '2026-10-19T12:04:00Z', breaks: 1, longestPauseMs: 50_000 }),
-    // from before these fields existed
-    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', typingMs: MIN }),
+    at('2026-10-19T12:00:00Z', 'prompt', { ...fields, pastedChars: 500, deletedChars: 20, wordDeletes: 2, lineKills: 1 }),
+    at('2026-10-19T12:05:00Z', 'draft_abandoned', { ...fields, endedAt: '2026-10-19T12:04:00Z', breaks: 1, longestPauseMs: 50_000, deletedChars: 5 }),
+    // from before these fields existed: its paste counts in pastedChars, not in pastes
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', typingMs: MIN, pastedChars: 40 }),
   ]
   const { writing } = summarize(events, { idleCapMs: 5 * MIN })
   expect(writing).toMatchObject({
@@ -333,6 +333,12 @@ test('fixes, rewrites and pauses add up over drafts that have them', () => {
     pauses: 6,
     breaks: 1,
     longestPauseMs: 50_000,
+    pastedChars: 540,
+    pastes: 1,
+    pasteChars: 500,
+    deletedChars: 25,
+    wordDeletes: 2,
+    lineKills: 1,
   })
 })
 
