@@ -233,8 +233,9 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   `interrupt` without an `agentId`) is a span covering its full `durationMs`,
   so a long Bash call or a long think counts even though it logs nothing in
   the middle.
-- Moments and spans closer together than the **idle cap** (2 to 15 min, picked
-  on the dashboard) merge into active time. Longer gaps are idle.
+- Moments and spans closer together than the **idle cap** (2 to 15 min, one
+  for everyone, set by an admin on the hub's `/admin`; 5 until then) merge
+  into active time. Longer gaps are idle.
 - Waiting on you isn't Claude working: a main-thread `AskUserQuestion` or
   `ExitPlanMode` call, or a permission dialog (the turn's `waits`). Claude
   Code already leaves these out of the turn's `durationMs`, so a turn with one

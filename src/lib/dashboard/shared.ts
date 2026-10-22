@@ -36,6 +36,8 @@ export async function api<T>(path: string): Promise<T> {
     await invalidateAll()
     throw new Error('log in first')
   }
+  // an error's body isn't the answer, so nothing keeps it as one
+  if (!res.ok) throw new Error(`${path} answered ${res.status}`)
   return res.json() as Promise<T>
 }
 

@@ -1,5 +1,6 @@
-// Turns the raw hook-analytics lines into dashboard numbers. Pure, and it runs
-// in the browser so days are the viewer's local days, not UTC ones.
+// Turns the raw hook-analytics lines into dashboard numbers. Pure; the hub
+// runs it with the viewer's time zone, so days are their local days, not UTC
+// ones (the session page still runs it in the browser, on one session).
 
 export type Event = {
   ts: string
@@ -17,6 +18,8 @@ export type Options = {
   to?: number
   // idle gaps up to this long between activity count as active time
   idleCapMs: number
+  // the IANA time zone days and hours are counted in; omit for this machine's
+  tz?: string
 }
 
 export type Interval = [start: number, end: number]
@@ -199,21 +202,88 @@ export function turnPieces(end: number, workMs: number, waits: Wait[]): Interval
   return pieces.reverse()
 }
 
-// YYYY-MM-DD in local time
-export function dayKey(ms: number) {
-  const d = new Date(ms)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+// Where days and hours start: this machine's clock, or a named time zone's
+// (the hub sums for a browser elsewhere)
+type Clock = {
+  dayKey: (ms: number) => string
+  nextMidnight: (ms: number) => number
+  nextHour: (ms: number) => number
+  hourOf: (ms: number) => number
 }
 
-function nextMidnight(ms: number) {
-  const d = new Date(ms)
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
+const pad = (n: number) => String(n).padStart(2, '0')
+
+const local: Clock = {
+  dayKey: ms => {
+    const d = new Date(ms)
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  },
+  nextMidnight: ms => {
+    const d = new Date(ms)
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
+  },
+  nextHour: ms => {
+    const d = new Date(ms)
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 1).getTime()
+  },
+  hourOf: ms => new Date(ms).getHours(),
 }
 
-function nextHour(ms: number) {
-  const d = new Date(ms)
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() + 1).getTime()
+// one formatter per zone, since making one costs far more than using it
+const zones = new Map<string, Clock>()
+
+function zoneClock(tz: string): Clock {
+  const known = zones.get(tz)
+  if (known) return known
+  // throws a RangeError for a zone that doesn't exist
+  const format = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+  })
+  const partsOf = (ms: number) => {
+    const p: Record<string, number> = {}
+    for (const { type, value } of format.formatToParts(ms)) if (type !== 'literal') p[type] = Number(value)
+    return p as Record<'year' | 'month' | 'day' | 'hour' | 'minute' | 'second', number>
+  }
+  // how far the zone's wall clock is ahead of UTC at a moment
+  const offsetAt = (ms: number) => {
+    const p = partsOf(ms)
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - (ms - (((ms % 1000) + 1000) % 1000))
+  }
+  const clock: Clock = {
+    dayKey: ms => {
+      const p = partsOf(ms)
+      return `${p.year}-${pad(p.month)}-${pad(p.day)}`
+    },
+    // the wall clock's next midnight, checked against the offset there, so a
+    // day the clocks change is 23 or 25 hours long
+    nextMidnight: ms => {
+      const p = partsOf(ms)
+      const wall = Date.UTC(p.year, p.month - 1, p.day + 1)
+      const guess = wall - offsetAt(ms)
+      return wall - offsetAt(guess)
+    },
+    // to the next whole hour on the wall clock, which works for zones offset by :30 or :45 too
+    nextHour: ms => {
+      const p = partsOf(ms)
+      return ms + (60 - p.minute) * 60_000 - p.second * 1000 - (((ms % 1000) + 1000) % 1000)
+    },
+    hourOf: ms => partsOf(ms).hour,
+  }
+  zones.set(tz, clock)
+  return clock
 }
+
+export const clockOf = (tz?: string): Clock => (tz ? zoneClock(tz) : local)
+
+// YYYY-MM-DD in local time, or in tz
+export const dayKey = (ms: number, tz?: string) => clockOf(tz).dayKey(ms)
 
 // Each event is a moment of activity and each main-thread turn is a span, so a
 // long Bash call or a long think counts in full, around any wait on the person.
@@ -319,21 +389,21 @@ function clip([start, end]: Interval, from: number, to: number): Interval | unde
   return e > s ? [s, e] : undefined
 }
 
-// splits an interval at local midnights
-function* byDay([start, end]: Interval): Generator<[string, number]> {
+// splits an interval at the clock's midnights
+function* byDay([start, end]: Interval, clock: Clock): Generator<[string, number]> {
   let at = start
   while (at < end) {
-    const cut = Math.min(end, nextMidnight(at))
-    yield [dayKey(at), cut - at]
+    const cut = Math.min(end, clock.nextMidnight(at))
+    yield [clock.dayKey(at), cut - at]
     at = cut
   }
 }
 
-function* byHour([start, end]: Interval): Generator<[number, number]> {
+function* byHour([start, end]: Interval, clock: Clock): Generator<[number, number]> {
   let at = start
   while (at < end) {
-    const cut = Math.min(end, nextHour(at))
-    yield [new Date(at).getHours(), cut - at]
+    const cut = Math.min(end, clock.nextHour(at))
+    yield [clock.hourOf(at), cut - at]
     at = cut
   }
 }
@@ -357,15 +427,16 @@ function* shares(byProject: [string, Interval[]][]): Generator<[string, Interval
   }
 }
 
-function dayRange(from: number, to: number) {
+function dayRange(from: number, to: number, clock: Clock) {
   const days: string[] = []
-  for (let at = from; at < to; at = nextMidnight(at)) days.push(dayKey(at))
+  for (let at = from; at < to; at = clock.nextMidnight(at)) days.push(clock.dayKey(at))
   return days
 }
 
 const inc = <K>(map: Map<K, number>, key: K, by = 1) => map.set(key, (map.get(key) ?? 0) + by)
 
-export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summary {
+export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): Summary {
+  const clock = clockOf(tz)
   const valid = all.filter(e => e && typeof e.ts === 'string' && !Number.isNaN(time(e)) && e.sessionId)
   // a turn's span starts before its own line, so the default window does too.
   // A loop, not Math.min(...xs), which overflows the stack on a big log
@@ -414,18 +485,18 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
     }
     sessionProjects.set(sessionId, mine)
     for (const [project, interval, share] of shares(inside)) {
-      for (const [day, ms] of byDay(interval)) {
+      for (const [day, ms] of byDay(interval, clock)) {
         const split = dayProjects.get(day) ?? {}
         split[project] = (split[project] ?? 0) + ms * share
         dayProjects.set(day, split)
       }
-      for (const [hour, ms] of byHour(interval)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share
+      for (const [hour, ms] of byHour(interval, clock)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share
     }
     for (const interval of mergeWithin([...byProject.values()].flat(), 0)) {
       const k = kept(interval)
       if (!k) continue
-      for (const [day, ms] of byDay(k)) inc(dayMs, day, ms)
-      for (const [hour, ms] of byHour(k)) hours[hour]! += ms
+      for (const [day, ms] of byDay(k, clock)) inc(dayMs, day, ms)
+      for (const [hour, ms] of byHour(k, clock)) hours[hour]! += ms
       totalMs += k[1] - k[0]
       inc(sessionMs, sessionId, k[1] - k[0])
     }
@@ -504,7 +575,7 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
         writing.images += Number(e.images) || 0
         writing.audio += Number(e.audio) || 0
         writing.documents += Number(e.documents) || 0
-        inc(dayPrompts, dayKey(at))
+        inc(dayPrompts, clock.dayKey(at))
         if (typeof e.typingMs === 'number') {
           writing.sent++
           countTyping(e)
@@ -551,7 +622,12 @@ export function summarize(all: Event[], { from, to, idleCapMs }: Options): Summa
   return {
     totalMs,
     days: valid.length
-      ? dayRange(lo, hi).map(day => ({ day, ms: dayMs.get(day) ?? 0, prompts: dayPrompts.get(day) ?? 0, projects: dayProjects.get(day) ?? {} }))
+      ? dayRange(lo, hi, clock).map(day => ({
+          day,
+          ms: dayMs.get(day) ?? 0,
+          prompts: dayPrompts.get(day) ?? 0,
+          projects: dayProjects.get(day) ?? {},
+        }))
       : [],
     hours,
     hourProjects,

@@ -1,2 +1,2 @@
-// the dashboard is drawn from /api/events in the browser
+// the dashboard is drawn in the browser, from /api/summary
 export const ssr = false

@@ -342,3 +342,42 @@ test('languageOf', () => {
   expect(languageOf('/a/Dockerfile')).toBe('Docker')
   expect(languageOf('/a/noext')).toBe('Other')
 })
+
+test('a named zone counts days and hours like that zone would locally, clock changes too', () => {
+  // a prompt every 20 minutes for a week around the end of daylight time
+  // (Nov 1) and one around its start (Mar 8), each its own session
+  const events: Event[] = []
+  for (const [start, id] of [
+    ['2026-10-29T00:00:00Z', 'fall'],
+    ['2026-03-05T00:00:00Z', 'spring'],
+  ] as const) {
+    for (let k = 0; k < 7 * 72; k++) events.push(at(new Date(Date.parse(start) + k * 20 * MIN).toISOString(), 'prompt', { sessionId: id }))
+  }
+  const opts = { idleCapMs: 30 * MIN }
+  expect(summarize(events, { ...opts, tz: 'America/New_York' })).toEqual(summarize(events, opts))
+  const fall = { from: Date.parse('2026-10-31T04:00:00Z'), to: Date.parse('2026-11-03T05:00:00Z') }
+  const days = summarize(events, { ...opts, ...fall, tz: 'America/New_York' }).days
+  expect(days.map(d => [d.day, d.ms / 3_600_000])).toEqual([
+    ['2026-10-31', 24],
+    ['2026-11-01', 25],
+    ['2026-11-02', 24],
+  ])
+})
+
+test('a zone off by half an hour splits days and hours on its own clock', () => {
+  // 23:30 to 00:30 in India
+  const events = [at('2026-10-19T18:00:00Z', 'prompt'), at('2026-10-19T19:00:00Z', 'turn_end', { durationMs: 60 * MIN })]
+  const s = summarize(events, { idleCapMs: 5 * MIN, tz: 'Asia/Kolkata' })
+  expect(s.days.map(d => [d.day, d.ms / MIN])).toEqual([
+    ['2026-10-19', 30],
+    ['2026-10-20', 30],
+  ])
+  expect(s.hours[23]).toBe(30 * MIN)
+  expect(s.hours[0]).toBe(30 * MIN)
+  expect(dayKey(Date.parse('2026-10-19T18:29:00Z'), 'Asia/Kolkata')).toBe('2026-10-19')
+  expect(dayKey(Date.parse('2026-10-19T18:30:00Z'), 'Asia/Kolkata')).toBe('2026-10-20')
+})
+
+test('a zone that does not exist throws', () => {
+  expect(() => summarize([at('2026-10-19T18:00:00Z', 'prompt')], { idleCapMs: MIN, tz: 'Mars/Olympus' })).toThrow(RangeError)
+})

@@ -1,15 +1,14 @@
 <script lang="ts">
-  import { dayKey, summarize, type Summary } from '#lib/analytics/aggregate.js'
+  import { dayKey, type Summary } from '#lib/analytics/aggregate.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
-  import { liveEvents, stored, whoIsLooking } from '../live.svelte'
+  import { liveDigest, stored, whoIsLooking } from '../live.svelte'
   import { HEAT_LABELS, hourLabel, longDay, series, shortDay, tipLines, toolName } from '../overview'
   import { MIN, attachments, compact, duration, esc, hideTip, palette, rangeWindow, seconds, showTip, withPerson, type Range } from '../shared'
   import BarList from './BarList.svelte'
   import Calendar from './Calendar.svelte'
   import Columns from './Columns.svelte'
-  import IdlePicker from './IdlePicker.svelte'
   import Legend from './Legend.svelte'
   import PersonPicker from './PersonPicker.svelte'
   import ProjectChip from './ProjectChip.svelte'
@@ -17,16 +16,14 @@
   import Stat from './Stat.svelte'
 
   // the overview of someone logged in; the page shows a welcome otherwise
-  const live = liveEvents()
   const who = whoIsLooking()
   const range = stored<Range>('range', '7')
-  const idle = stored('idle', '5')
+  const live = liveDigest(() => range.value)
 
   const period = $derived(rangeWindow(range.value))
-  const idleCapMs = $derived(Number(idle.value) * MIN)
-  const s = $derived(live.events && summarize(live.events, { from: period.from, to: period.to, idleCapMs }))
+  const s = $derived(live.value?.range)
   // all time picks each project's color and fills the calendar
-  const ever = $derived(live.events && summarize(live.events, { idleCapMs }))
+  const ever = $derived(live.value)
   const colors = $derived(palette(ever?.projects ?? []))
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
@@ -85,7 +82,6 @@
     <div class="flex flex-wrap items-center gap-2">
       <PersonPicker me={who.me} />
       <RangePicker bind:range={range.value} />
-      <IdlePicker bind:idle={idle.value} />
     </div>
   </div>
 

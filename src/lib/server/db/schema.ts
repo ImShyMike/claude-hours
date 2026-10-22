@@ -1,7 +1,8 @@
 // The hub's accounts: people (from Hack Club Auth), their browser sessions,
-// the devices the mod syncs from, and data deletion requests. Then what the
-// mod sends: runs, a table per event type, draft timelines and quarantine,
-// each named with a leading _ so they sort apart from the accounts.
+// the devices the mod syncs from, data deletion requests and the hub's
+// settings. Then what the mod sends: runs, a table per event type, draft
+// timelines and quarantine, each named with a leading _ so they sort apart
+// from the accounts.
 //
 // Every secret is stored as its sha256 (hex): a session cookie, a device
 // token, a device code. The table alone lets no one in.
@@ -99,6 +100,14 @@ export const deletionRequests = pgTable(
     check('deletion_requests_status', sql`${t.status} in ('pending', 'approved', 'rejected')`),
   ],
 )
+
+// Hub-wide settings an admin changes on /admin, one row per key (the idle
+// cap, so far); a key with no row has its default in settings.ts
+export const settings = pgTable('settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedAt: at('updated_at').notNull().defaultNow(),
+})
 
 // One run of a session's file: from a header (a new session, or a resume) to
 // the next, keyed by the header's start. The drafts sidecar is one run per

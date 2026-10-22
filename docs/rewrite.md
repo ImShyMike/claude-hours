@@ -128,8 +128,14 @@ has. A 401 says to log in again, once. Files from the old byte-offset protocol
 - The startup sweep sends session by session, not one batch across them.
 - The mod doesn't gzip (its fetch takes a string body); the hub takes gzip
   from anyone else.
-- The dashboard still sums in the browser, like the old one, so it gets every
-  event of the person it shows. Server-side summaries are the next step.
+- The hub sums, not the browser: `/api/summary?from&to&tz` answers the
+  range's summary (days and hours in the viewer's zone) and what all time
+  decides (project colors, the calendar, each session's home), and
+  `/api/session/:id` one session's events and draft timelines. Each session's
+  decoded events are kept in memory until one of its runs moves (`acked`,
+  `updated_at`), so a refresh re-reads only the session being worked in. The
+  idle cap is one hub-wide setting (the `settings` table, set on `/admin`),
+  where the old dashboard let each viewer pick theirs.
 
 ## Deploying
 
@@ -174,8 +180,9 @@ has. A 401 says to log in again, once. Files from the old byte-offset protocol
       (round trip checked on the fixtures and on real data)
 - [x] `scripts/import.ts` for old session files
 - [x] Dashboard: overview, timeline and session pages, ported from `main`;
-      `/api/events` and `/api/session/:id` answer exactly what the old server
-      did for the same files; an admin picks whose to see
+      summed on the hub (`/api/summary`, `/api/session/:id`), equal to what
+      the old dashboard summed from the same files; an admin picks whose to
+      see
 - [x] The mod: `/hook-analytics login | status | logout`, after-turn sync and
       the startup sweep on protocol v1
 - [x] The mod's requests (captured from its own code under the test engine)

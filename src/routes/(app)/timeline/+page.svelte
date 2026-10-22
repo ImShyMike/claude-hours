@@ -1,30 +1,28 @@
 <script lang="ts">
-  import { summarize } from '#lib/analytics/aggregate.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as ToggleGroup from '#lib/components/ui/toggle-group/index.js'
-  import { liveEvents, stored } from '#lib/dashboard/live.svelte.js'
-  import { MIN, duration, palette, rangeWindow, withPerson, type Range } from '#lib/dashboard/shared.js'
+  import { liveDigest, stored } from '#lib/dashboard/live.svelte.js'
+  import { duration, palette, rangeWindow, withPerson, type Range } from '#lib/dashboard/shared.js'
   import { MAX_ZOOM, hm, startOfDay, timelineRows, type Hours } from '#lib/dashboard/timeline.js'
   import Legend from '#lib/dashboard/ui/Legend.svelte'
   import RangePicker from '#lib/dashboard/ui/RangePicker.svelte'
   import TimeRows from '#lib/dashboard/ui/TimeRows.svelte'
 
-  const live = liveEvents()
   const range = stored<Range>('range', '7')
-  const idle = stored('idle', '5')
   const hours = stored<Hours>('hours', 'fit')
+  const live = liveDigest(() => range.value, true)
 
-  // all time: each project's color and each session's home
-  const ever = $derived(live.events && summarize(live.events, { idleCapMs: Number(idle.value) * MIN }))
-  const colors = $derived(palette(ever?.projects ?? []))
-  const homes = $derived(new Map(ever?.sessions.map(s => [s.sessionId, s.project])))
+  // all time decides each project's color and each session's home
+  const d = $derived(live.value)
+  const colors = $derived(palette(d?.projects ?? []))
   const look = $derived({
     color: colors.color,
-    home: (id: string) => homes.get(id) ?? '',
+    home: (id: string) => d?.homes[id] ?? '',
     link: (id: string) => withPerson(`/session?id=${encodeURIComponent(id)}`),
   })
-  const tl = $derived(ever && timelineRows(ever.spans, rangeWindow(range.value), look, hours.value))
+  // the hub already cut the spans to the range
+  const tl = $derived(d && timelineRows(d.range.spans, {}, look, hours.value))
 
   // the rows are in ms from each day's midnight; any midnight reads the same on the clock
   const DAY0 = new Date(2000, 0, 1).getTime()

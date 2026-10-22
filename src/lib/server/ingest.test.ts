@@ -3,12 +3,15 @@ import { mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, test } from 'vitest'
+import { summarize } from '../analytics/aggregate'
 import { loadEvents, sessionParts } from '../analytics/load'
 import { rowsOf, splitRuns } from '../analytics/runs'
 import { people, quarantine, type Db } from './db/index'
 import { testDb } from './db/testing'
+import { digest } from './digest'
 import { draftsText, eventsOf, sessionTexts } from './history'
 import { ingest, parseBatch, type RunIn } from './ingest'
+import { setIdleCap } from './settings'
 
 async function withPerson() {
   const db = await testDb()
@@ -49,7 +52,20 @@ async function expectRoundTrip(dir: string) {
   }
   const events = await eventsOf(db, person)
   expect(events.length).toBeGreaterThan(sessions.length)
-  expect(events).toEqual(await loadEvents(dir, { remote: true }))
+  const local = await loadEvents(dir, { remote: true })
+  expect(events).toEqual(local)
+
+  // and the hub's summary is the one the browser worked out from them, in
+  // another zone than this machine's too
+  for (const tz of [undefined, 'Asia/Kolkata']) {
+    const ever = summarize(local, { idleCapMs: 5 * 60_000, tz })
+    const from = ever.sessions.at(-1)!.start
+    const to = from + 3 * 24 * 3600_000
+    const got = await digest(db, person, { from, to, tz, spans: true })
+    expect(got.range).toEqual(summarize(local, { from, to, idleCapMs: 5 * 60_000, tz }))
+    expect(got.days).toEqual(ever.days)
+    expect(got.projects).toEqual(ever.projects)
+  }
 }
 
 describe('round trip', () => {
@@ -135,6 +151,35 @@ describe('acks', () => {
     await ingest(db, person, [run(0, [tool(1)])])
     await ingest(db, bo!.id, [run(0, [tool(1), tool(2)])])
     expect(splitRuns((await sessionTexts(db, person)).get('s1')!)[0]!.rows).toHaveLength(1)
+  })
+})
+
+describe('digest', () => {
+  const prompt = (t: number) => ({ t, event: 'prompt', words: 3 })
+
+  test('follows new rows, new sessions and the idle cap', async () => {
+    const { db, person } = await withPerson()
+    await ingest(db, person, [run(0, [prompt(1), tool(2)])])
+    const first = await digest(db, person, {})
+    expect(first.range.prompts.count).toBe(1)
+    expect(first.idleCapMs).toBe(5 * 60_000)
+
+    await ingest(db, person, [run(2, [prompt(180_000)]), run(0, [prompt(1)], { session: 's2' })])
+    const second = await digest(db, person, {})
+    expect(second.range.prompts.count).toBe(3)
+    expect(second.range.sessions.map(s => s.sessionId).sort()).toEqual(['s1', 's2'])
+
+    // the 3 minutes between s1's prompts count under the 5 min cap, not under 2
+    expect(await setIdleCap(db, 7)).toBe(false)
+    expect(await setIdleCap(db, 2)).toBe(true)
+    const third = await digest(db, person, {})
+    expect(third.idleCapMs).toBe(2 * 60_000)
+    expect(third.range.totalMs).toBeLessThan(second.range.totalMs)
+  })
+
+  test('a time zone that does not exist is a RangeError', async () => {
+    const { db, person } = await withPerson()
+    await expect(digest(db, person, { tz: 'Mars/Olympus' })).rejects.toThrow(RangeError)
   })
 })
 

@@ -2,47 +2,31 @@
   import { tick } from 'svelte'
   import { page } from '$app/state'
   import { summarize } from '#lib/analytics/aggregate.js'
-  import type { Timeline } from '#lib/analytics/replay.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
-  import { liveEvents, stored } from '#lib/dashboard/live.svelte.js'
+  import { liveSession } from '#lib/dashboard/live.svelte.js'
   import { DRAFT_HEAD, buildDrafts, draftRow, projectTracks, time } from '#lib/dashboard/session.js'
-  import { MIN, api, duration, palette } from '#lib/dashboard/shared.js'
+  import { duration, palette } from '#lib/dashboard/shared.js'
   import ProjectChip from '#lib/dashboard/ui/ProjectChip.svelte'
   import Lanes from '#lib/dashboard/ui/session/Lanes.svelte'
   import Replay from '#lib/dashboard/ui/session/Replay.svelte'
 
-  const live = liveEvents()
-  const idle = stored('idle', '5')
   // going from one session to another keeps this page mounted, so everything
-  // below follows the id
+  // below follows the id. Its events and the drafts' replays come together,
+  // so a live session's new drafts get theirs
   const id = $derived(page.url.searchParams.get('id') ?? '')
-  const idleCapMs = $derived(Number(idle.value) * MIN)
+  const live = liveSession(() => id)
+  const idleCapMs = $derived(live.value?.idleCapMs ?? 0)
 
-  // the drafts' replays, fetched again whenever the events refresh, so a
-  // live session's new drafts get theirs
-  let fetched = $state<{ id: string; timelines: Timeline[] }>()
-  $effect(() => {
-    const want = id
-    if (!want || !live.events) return
-    let stale = false
-    api<Timeline[]>(`/api/session/${encodeURIComponent(want)}`)
-      .then(timelines => {
-        if (!stale) fetched = { id: want, timelines }
-      })
-      .catch(err => console.error('could not load the replays', err))
-    return () => (stale = true)
-  })
-
-  const events = $derived((live.events ?? []).filter(e => e.sessionId === id).sort((a, b) => time(a) - time(b)))
-  const ready = $derived(!!live.events && (!events.length || fetched?.id === id))
-  const drafts = $derived(fetched?.id === id ? buildDrafts(events, fetched.timelines) : [])
+  const events = $derived([...(live.value?.events ?? [])].sort((a, b) => time(a) - time(b)))
+  const ready = $derived(!!live.value)
+  const drafts = $derived(live.value ? buildDrafts(events, live.value.timelines) : [])
   // named after where most of its time went, with the rest under it
   const split = $derived(summarize(events, { idleCapMs }).sessions[0]?.projects ?? [])
   const project = $derived(split[0]?.project ?? events.find(e => e.project)?.project ?? 'session')
   // the same colors as the overview, from all of the person's sessions
-  const colors = $derived(palette(live.events ? summarize(live.events, { idleCapMs }).projects : []))
+  const colors = $derived(palette(live.value?.projects ?? []))
   const tracks = $derived(projectTracks(events, idleCapMs, String(project)))
 
   // the draft being replayed, by id so a refresh keeps it; until one's

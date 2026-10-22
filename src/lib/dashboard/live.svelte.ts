@@ -1,33 +1,44 @@
-// What the dashboard pages work from: the person's events, fetched now and
+// What the dashboard pages work from: the hub's summaries, fetched now and
 // every 30 s, who's looking, and a tick for redrawing charts on a theme flip
 import { page } from '$app/state'
 import type { Event } from '../analytics/aggregate'
-import { api, load, save, type Me } from './shared'
+import type { Timeline } from '../analytics/replay'
+import type { Digest } from '../server/digest'
+import { api, load, rangeWindow, save, type Me, type Range } from './shared'
+
+export type { Digest }
+export type SessionDigest = { events: Event[]; projects: Digest['projects']; idleCapMs: number; timelines: Timeline[] }
 
 const REFRESH_MS = 30_000
 
-// The last answers by ?person, so moving between the overview and the
-// timeline shows what's already here while it refreshes
-const eventsCache = new Map<string, Event[]>()
+// the viewer's time zone, which the hub counts days and hours in
+export const tz = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+
+// The last answers by ?person and key, so moving between the overview and
+// the timeline shows what's already here while it refreshes
+const answers = new Map<string, unknown>()
 const meCache = new Map<string, Me>()
 
-// undefined until the first fetch, so nothing claims the log is empty early;
-// refetched when an admin switches whose dashboard it is
-export function liveEvents() {
-  const live = $state<{ events?: Event[] }>({})
+// What the hub answers for a key, fetched now and every 30 s. undefined
+// until the first answer, so nothing claims the log is empty early; asked
+// again when the key changes or an admin switches whose dashboard it is.
+// path is worked out on every fetch, so a range ending now moves with now
+function polled<T>(key: () => string | undefined, path: (key: string) => string) {
+  const live = $state<{ value?: T }>({})
   $effect(() => {
-    const person = page.url.searchParams.get('person') ?? ''
+    const want = key()
+    if (want === undefined) return
+    const cached = `${page.url.searchParams.get('person') ?? ''} ${want}`
     let stale = false
-    live.events = eventsCache.get(person)
+    live.value = answers.get(cached) as T | undefined
     const refresh = async () => {
       try {
-        const events = await api<Event[]>('/api/events')
+        const value = await api<T>(path(want))
         if (stale) return
-        eventsCache.set(person, events)
-        live.events = events
+        answers.set(cached, value)
+        live.value = value
       } catch (err) {
-        console.error('could not load events', err)
-        if (!stale) live.events ??= []
+        console.error(`could not load ${want}`, err)
       }
     }
     refresh()
@@ -38,6 +49,29 @@ export function liveEvents() {
     }
   })
   return live
+}
+
+// the hub's summary of a range, with what all time decides; spans for the timeline
+export function liveDigest(range: () => Range, spans = false) {
+  return polled<Digest>(
+    () => `digest ${range()}${spans ? ' spans' : ''}`,
+    () => {
+      const { from, to } = rangeWindow(range())
+      const q = new URLSearchParams({ tz: tz() })
+      if (from !== undefined) q.set('from', String(from))
+      if (to !== undefined) q.set('to', String(to))
+      if (spans) q.set('spans', '')
+      return `/api/summary?${q}`
+    },
+  )
+}
+
+// one session's events and draft timelines
+export function liveSession(id: () => string) {
+  return polled<SessionDigest>(
+    () => id() || undefined,
+    id => `/api/session/${encodeURIComponent(id)}?tz=${encodeURIComponent(tz())}`,
+  )
 }
 
 export function whoIsLooking() {
