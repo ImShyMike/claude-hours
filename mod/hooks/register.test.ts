@@ -74,15 +74,18 @@ const setup = (on: On) => {
       }
     }
     let stdout = cmd === 'find' ? findOutput : ''
-    // the upload's reads: a session file as one stream from a byte offset,
-    // and the sweep's list of finished sessions
-    if (cmd === 'sh' && e.argv[2]?.includes('tail -c')) {
-      const path = e.argv[4]!
-      const all = new TextEncoder().encode((files.get(`${path}.gz`) ?? '') + (files.get(path) ?? ''))
-      const from = Number(e.argv[5])
-      stdout = new TextDecoder().decode(all.subarray(from, from + Number(e.argv[6])))
+    // the upload's reads: a session file as one stream from a line on, then
+    // at most so many lines and bytes; and the sweep's list of finished sessions
+    if (cmd === 'sh' && e.argv[2]?.includes('tail -n')) {
+      const [path, from, most, bytes] = e.argv.slice(4) as [string, string, string, string]
+      const lines = ((files.get(`${path}.gz`) ?? '') + (files.get(path) ?? '')).split(/(?<=\n)/)
+      const all = new TextEncoder().encode(lines.slice(Number(from), Number(from) + Number(most)).join(''))
+      stdout = new TextDecoder().decode(all.subarray(0, Number(bytes)))
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
+    // the config, written where only its owner can read it
+    if (cmd === 'sh' && e.argv[2]?.includes('umask 077')) files.set(e.argv[4]!, e.init?.stdin ?? '')
+    if (cmd === 'uname') stdout = 'miggys-laptop\n'
     let exitCode = 0
     if (cmd === 'git' && e.argv[3] === 'remote') {
       stdout = remotes[e.argv[2]!] ?? ''
@@ -109,6 +112,7 @@ const setup = (on: On) => {
     return { value: undefined }
   })
   on('prompt.submit', (_, e) => ({ text: e.text }))
+  on('command.register', (_, e) => ({ value: { command: e.name } }))
   return {
     runs,
     lines,
@@ -862,29 +866,68 @@ test('a session ending gzips its files behind the last row', async ($, on) => {
   expect(runs.findIndex(argv => argv[0] === 'sh')).toBeGreaterThan(runs.findLastIndex(argv => argv[0] === 'tee'))
 })
 
-// A hub that keeps each file's bytes and answers like the real one: append
-// what's past its length, 409 with its length when the offset is ahead
+
+// A hub that follows the real one's rules (src/lib/server/ingest.ts in
+// claude-hours): each run holds a contiguous prefix of its rows, a send that
+// starts past it is a gap, and a new events run needs its header
 const hub = (on: On, { down = false } = {}) => {
-  const stored = new Map<string, Uint8Array>()
-  const posts: { url: string; auth?: string }[] = []
-  on('clock.sleep', () => new Promise(() => {}))
+  const stored = new Map<string, unknown[]>()
+  const requests: { path: string; method: string; headers: Record<string, string>; body?: any }[] = []
+  const state = { token: 'tok', pending: 0, denied: false }
+  // the upload's 10 s timeout never fires; the login's poll waits no time
+  on('clock.sleep', (_, e) => (e.ms === 10_000 ? new Promise(() => {}) : { value: undefined }))
   on('http.fetch', (_, e) => {
-    posts.push({ url: e.url, auth: e.init?.headers?.authorization })
-    if (down) return { value: { status: 503, ok: false, headers: {}, text: 'down' } }
     const url = new URL(e.url)
-    const key = url.pathname
-    const offset = Number(url.searchParams.get('offset'))
-    const have = stored.get(key) ?? new Uint8Array()
-    const body = new TextEncoder().encode(e.init?.body ?? '')
-    if (offset > have.length) return { value: { status: 409, ok: false, headers: {}, text: JSON.stringify({ length: have.length }) } }
-    const next = new Uint8Array([...have, ...body.subarray(have.length - offset)])
-    stored.set(key, next)
-    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ length: next.length }) } }
+    const headers = e.init?.headers ?? {}
+    const body = e.init?.body ? JSON.parse(e.init.body) : undefined
+    requests.push({ path: url.pathname, method: e.init?.method ?? 'GET', headers, body })
+    const reply = (status: number, value: unknown) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(value) } })
+    if (down) return { value: { status: 503, ok: false, headers: {}, text: 'down' } }
+    // SvelteKit's origin check: anything but GET that could be a form needs a JSON type
+    if (e.init?.method && e.init.method !== 'GET' && headers['content-type'] !== 'application/json') return reply(403, { message: 'cross-site form' })
+    if (url.pathname === '/v1/hello') return reply(200, { protocols: [1] })
+    if (url.pathname === '/v1/device/code')
+      return reply(200, { device_code: 'dc', user_code: 'ABCD-EFGH', verification_uri: 'https://elsewhere.test/device', expires_in: 600, interval: 5 })
+    if (url.pathname === '/v1/device/token') {
+      if (state.pending-- > 0) return reply(400, { error: 'authorization_pending' })
+      return state.denied ? reply(400, { error: 'access_denied' }) : reply(200, { access_token: (state.token = 'hct_new'), token_type: 'Bearer' })
+    }
+    if (headers.authorization !== `Bearer ${state.token}`) return reply(401, { error: 'invalid_token' })
+    if (url.pathname === '/v1/me') return reply(200, e.init?.method === 'DELETE' ? {} : { name: 'Miggy', email: 'miggy@example.com' })
+    const runs: Record<string, { status: string; acked: number }> = {}
+    for (const r of body.runs) {
+      const key = `${r.session}/${r.stream}/${r.run}`
+      let held = stored.get(key)
+      if (!held) {
+        if (r.stream === 'events' && (r.header?.event !== 'session' || r.header.start !== r.run)) {
+          runs[key] = { status: 'invalid', acked: 0 }
+          continue
+        }
+        stored.set(key, (held = []))
+      }
+      if (r.from > held.length) runs[key] = { status: 'gap', acked: held.length }
+      else {
+        held.push(...r.rows.slice(held.length - r.from))
+        runs[key] = { status: 'ok', acked: held.length }
+      }
+    }
+    return reply(200, { runs, quarantined: 0 })
   })
-  return { stored, posts }
+  const posts = () => requests.filter(r => r.path === '/v1/events')
+  return { stored, requests, posts, state }
 }
 
-const text = (stored: Map<string, Uint8Array>, key: string) => new TextDecoder().decode(stored.get(key))
+// a file's runs the way the hub keys them: by the header's start, rows in order
+const runsIn = (text: string) => {
+  const out = new Map<number, unknown[]>()
+  let run: number | undefined
+  for (const line of text.split('\n').filter(Boolean)) {
+    const row = JSON.parse(line)
+    if (row.event === 'session') out.set((run = row.start), [])
+    else if (run !== undefined) out.get(run)!.push(row)
+  }
+  return out
+}
 
 // uploads run behind the hook, so give them a moment (the test runner has
 // timers; the mod's own types don't list them)
@@ -893,24 +936,40 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await new Promise<void>(r => setTimeout(() => r(), 5))
 }
 
-const CONFIG = '/home/test/.claude/analytics/config.json'
+const DIR = '/home/test/.claude/analytics'
+const CONFIG = `${DIR}/config.json`
 const SERVER = { server: { url: 'https://hub.test/', token: 'tok' } }
-const EVENTS = '/home/test/.claude/analytics/events/sess-1.jsonl'
-const SENT = '/home/test/.claude/analytics/sent/sess-1.json'
+const EVENTS = `${DIR}/events/sess-1.jsonl`
+const DRAFTS = `${DIR}/drafts/sess-1.jsonl`
+const SENT = `${DIR}/sent/sess-1.json`
 
 const endTurn = ($: { turn: { complete: (e: never) => Promise<unknown> } }) =>
   $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false } as never)
 
+const logged = (on: On) => {
+  const logs: string[] = []
+  const toasts: string[] = []
+  on('ui.log', (_, e) => {
+    logs.push(String((e as { text?: unknown }).text ?? e))
+    return { value: undefined }
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(String((e as { text?: unknown }).text ?? e))
+    return { value: undefined }
+  })
+  return { logs, toasts }
+}
+
 test('with no server in the config nothing is sent', async ($, on) => {
   setup(on)
-  const { posts } = hub(on)
+  const { requests } = hub(on)
   on('turn.complete', () => ({ text: '' }))
   await endTurn($)
   await settle()
-  expect(posts).toEqual([])
+  expect(requests).toEqual([])
 })
 
-test('a turn sends the session file past what the server has, and remembers its answer', async ($, on) => {
+test('a turn sends each run past what the hub holds, and remembers how far it got', async ($, on) => {
   const { files } = setup(on)
   const { stored, posts } = hub(on)
   on('turn.complete', () => ({ text: '' }))
@@ -918,33 +977,64 @@ test('a turn sends the session file past what the server has, and remembers its 
 
   await endTurn($)
   await settle()
-  expect(posts[0]).toEqual({ url: 'https://hub.test/v1/sessions/sess-1/events?offset=0', auth: 'Bearer tok' })
-  expect(text(stored, '/v1/sessions/sess-1/events')).toBe(files.get(EVENTS))
-  const first = JSON.parse(files.get(SENT)!).events
-  expect(first).toBe(new TextEncoder().encode(files.get(EVENTS)!).length)
+  const [first] = posts()
+  expect(first!.headers).toMatchObject({ authorization: 'Bearer tok', 'x-protocol': '1', 'content-type': 'application/json' })
+  expect(first!.headers['user-agent']).toStartWith('hook-analytics/')
+  const [start, rows] = [...runsIn(files.get(EVENTS)!)][0]!
+  expect(first!.body.runs).toEqual([{ session: 'sess-1', stream: 'events', run: start, header: expect.objectContaining({ event: 'session', start }), from: 0, rows }])
+  expect(stored.get(`sess-1/events/${start}`)).toEqual(rows)
+  expect(JSON.parse(files.get(SENT)!)).toMatchObject({ v: 2, url: 'https://hub.test', events: { lines: files.get(EVENTS)!.split('\n').length - 1, run: start, acked: rows!.length } })
 
-  // the next turn sends only the new rows
+  // the next turn sends only the new rows, numbered on from there
   await endTurn($)
   await settle()
-  expect(posts.at(-1)!.url).toEndWith(`offset=${first}`)
-  expect(text(stored, '/v1/sessions/sess-1/events')).toBe(files.get(EVENTS))
+  const last = posts().at(-1)!.body.runs[0]
+  expect(last.from).toBe(rows!.length)
+  expect(stored.get(`sess-1/events/${start}`)).toEqual(runsIn(files.get(EVENTS)!).get(start))
 })
 
-test('a server ahead of the mod answers 409, and the mod resends from there', async ($, on) => {
+test('a resume starts a new run, and rows before any header belong to none', async ($, on) => {
+  const { files } = setup(on)
+  const { stored } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  files.set(EVENTS, ['{"t":1,"event":"orphan"}', '{"v":1,"event":"session","start":100,"cwd":"/p"}', '{"t":1,"event":"prompt"}', '{"v":1,"event":"session","start":200,"cwd":"/p"}', '{"t":2,"event":"prompt"}', ''].join('\n'))
+
+  await endTurn($)
+  await settle()
+  expect(stored.get('sess-1/events/100')).toEqual([{ t: 1, event: 'prompt' }])
+  expect(stored.get('sess-1/events/200')![0]).toEqual({ t: 2, event: 'prompt' })
+  expect([...stored.keys()].filter(k => k.includes('/events/'))).toEqual(['sess-1/events/100', 'sess-1/events/200'])
+})
+
+test('draft timelines go as run 0, a row per line', async ($, on) => {
+  const { files } = setup(on)
+  const { stored } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  files.set(DRAFTS, '{"v":1,"draftId":"a","outcome":"sent"}\n{"v":1,"draftId":"b","outcome":"sent"}\n')
+  await endTurn($)
+  await settle()
+  expect(stored.get('sess-1/drafts/0')).toEqual([
+    { v: 1, draftId: 'a', outcome: 'sent' },
+    { v: 1, draftId: 'b', outcome: 'sent' },
+  ])
+})
+
+test('a hub that lost rows answers with a gap, and the mod starts that stream over', async ($, on) => {
   const { files } = setup(on)
   const { stored, posts } = hub(on)
   on('turn.complete', () => ({ text: '' }))
   files.set(CONFIG, JSON.stringify(SERVER))
   await endTurn($)
   await settle()
-  const first = JSON.parse(files.get(SENT)!).events
-  // the hub loses its copy, so the mod's offset is past what it holds
   stored.clear()
-  posts.length = 0
+  const before = posts().length
   await endTurn($)
   await settle()
-  expect(posts.map(p => new URL(p.url).searchParams.get('offset'))).toEqual([String(first), '0'])
-  expect(text(stored, '/v1/sessions/sess-1/events')).toBe(files.get(EVENTS))
+  expect(posts().slice(before).map(p => p.body.runs[0].from)).toEqual([JSON.parse(files.get(SENT)!).events.acked - 1, 0])
+  const [start, rows] = [...runsIn(files.get(EVENTS)!)][0]!
+  expect(stored.get(`sess-1/events/${start}`)).toEqual(rows)
 })
 
 test('only whole lines go up', async ($, on) => {
@@ -952,23 +1042,41 @@ test('only whole lines go up', async ($, on) => {
   const { stored } = hub(on)
   on('turn.complete', () => ({ text: '' }))
   files.set(CONFIG, JSON.stringify(SERVER))
-  await endTurn($)
-  // a row half written when the upload reads
-  files.set(EVENTS, `${files.get(EVENTS)}{"t":5,"ev`)
+  // a timeline half written when the upload reads
+  files.set(DRAFTS, '{"v":1,"draftId":"a"}\n{"v":1,"draf')
   await endTurn($)
   await settle()
-  expect(text(stored, '/v1/sessions/sess-1/events')).toEndWith('}\n')
+  expect(stored.get('sess-1/drafts/0')).toEqual([{ v: 1, draftId: 'a' }])
+  expect(JSON.parse(files.get(SENT)!).drafts).toEqual({ lines: 1, acked: 1 })
+  // once it's whole it goes too, numbered after the first
+  files.set(DRAFTS, '{"v":1,"draftId":"a"}\n{"v":1,"draftId":"b"}\n')
+  await endTurn($)
+  await settle()
+  expect(stored.get('sess-1/drafts/0')).toEqual([
+    { v: 1, draftId: 'a' },
+    { v: 1, draftId: 'b' },
+  ])
 })
 
-test('a server that is down is mentioned once, not every turn', async ($, on) => {
-  const logs: string[] = []
+test('a long stream goes up a request at a time', async ($, on) => {
+  const { files } = setup(on)
+  const { stored, posts } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  const rows = Array.from({ length: 9_000 }, (_, i) => `{"t":${i},"event":"tool","tool":"Read"}`)
+  files.set(`${EVENTS}.gz`, `${['{"v":1,"event":"session","start":5,"cwd":"/p"}', ...rows].join('\n')}\n`)
+  await endTurn($)
+  await settle()
+  expect(posts().length).toBeGreaterThan(2)
+  expect(posts().every(p => p.body.runs.reduce((n: number, r: { rows: unknown[] }) => n + r.rows.length, 0) <= 5_000)).toBe(true)
+  expect(stored.get('sess-1/events/5')!.slice(0, 9_000)).toEqual(rows.map(r => JSON.parse(r)))
+})
+
+test('a hub that is down is mentioned once, not every turn', async ($, on) => {
+  const { logs } = logged(on)
   const { files } = setup(on)
   hub(on, { down: true })
   on('turn.complete', () => ({ text: '' }))
-  on('ui.log', (_, e) => {
-    logs.push(String(e.text ?? e))
-    return { value: undefined }
-  })
   files.set(CONFIG, JSON.stringify(SERVER))
   await endTurn($)
   await endTurn($)
@@ -976,36 +1084,102 @@ test('a server that is down is mentioned once, not every turn', async ($, on) =>
   expect(logs.filter(l => l.includes('upload paused'))).toHaveLength(1)
 })
 
+test('a revoked token says to log in again, once', async ($, on) => {
+  const { logs } = logged(on)
+  const { files } = setup(on)
+  const { state } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  state.token = 'someone-else'
+  files.set(CONFIG, JSON.stringify(SERVER))
+  await endTurn($)
+  await endTurn($)
+  await settle()
+  expect(logs.filter(l => l.includes('/hook-analytics login'))).toHaveLength(1)
+})
+
 test('the sweep sends finished sessions once, and skips ones already in', async ($, on) => {
   const { files, setSweep } = setup(on)
   const { stored, posts } = hub(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   files.set(CONFIG, JSON.stringify(SERVER))
-  const old = '/home/test/.claude/analytics/events/old-1.jsonl'
-  files.set(`${old}.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
-  files.set('/home/test/.claude/analytics/sent/done-1.json', JSON.stringify({ url: 'https://hub.test', events: 10, drafts: 0, gz: [40, 0] }))
+  files.set(`${DIR}/events/old-1.jsonl.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
+  files.set(`${DIR}/sent/done-1.json`, JSON.stringify({ v: 2, url: 'https://hub.test', events: { lines: 2, run: 1, acked: 1 }, gz: [40, 0] }))
   setSweep('old-1 70 0\ndone-1 40 0\n')
 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
   await settle()
-  expect(posts.map(p => new URL(p.url).pathname)).toEqual(['/v1/sessions/old-1/events'])
-  expect(text(stored, '/v1/sessions/old-1/events')).toBe(files.get(`${old}.gz`))
-  expect(JSON.parse(files.get('/home/test/.claude/analytics/sent/old-1.json')!).gz).toEqual([70, 0])
+  expect(posts().map(p => p.body.runs[0].session)).toEqual(['old-1'])
+  expect(stored.get('old-1/events/1')).toEqual([{ t: 0, event: 'prompt' }])
+  expect(JSON.parse(files.get(`${DIR}/sent/old-1.json`)!)).toMatchObject({ v: 2, gz: [70, 0] })
 })
 
-test('a session sent to another hub is sent again to this one', async ($, on) => {
+test('a session sent to another hub, or by the old uploads, is sent again', async ($, on) => {
   const { files, setSweep } = setup(on)
   const { stored } = hub(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   files.set(CONFIG, JSON.stringify(SERVER))
-  const old = '/home/test/.claude/analytics/events/old-1.jsonl'
-  files.set(`${old}.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
-  // all in, but at the scratch hub
-  files.set('/home/test/.claude/analytics/sent/old-1.json', JSON.stringify({ url: 'http://127.0.0.1:4749', events: 70, gz: [70, 0] }))
-  setSweep('old-1 70 0\n')
+  for (const id of ['other-1', 'bytes-1']) files.set(`${DIR}/events/${id}.jsonl.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n{"t":0,"event":"prompt"}\n')
+  files.set(`${DIR}/sent/other-1.json`, JSON.stringify({ v: 2, url: 'http://127.0.0.1:4749', events: { lines: 2, run: 1, acked: 1 }, gz: [70, 0] }))
+  // the byte-offset uploads' manifest, all in by its reckoning
+  files.set(`${DIR}/sent/bytes-1.json`, JSON.stringify({ url: 'https://hub.test', events: 70, gz: [70, 0] }))
+  setSweep('other-1 70 0\nbytes-1 70 0\n')
 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
   await settle()
-  expect(text(stored, '/v1/sessions/old-1/events')).toBe(files.get(`${old}.gz`))
-  expect(JSON.parse(files.get('/home/test/.claude/analytics/sent/old-1.json')!)).toMatchObject({ url: 'https://hub.test', gz: [70, 0] })
+  expect(stored.get('other-1/events/1')).toEqual([{ t: 0, event: 'prompt' }])
+  expect(stored.get('bytes-1/events/1')).toEqual([{ t: 0, event: 'prompt' }])
+  expect(JSON.parse(files.get(`${DIR}/sent/bytes-1.json`)!)).toMatchObject({ v: 2, url: 'https://hub.test', gz: [70, 0] })
+})
+
+const command = ($: Engine, args: string) => $.command.run({ command: 'hook-analytics', args } as never)
+
+test('login answers at once, and saves the token once the code is approved', async ($, on) => {
+  const { files, runs } = setup(on)
+  const { toasts } = logged(on)
+  const { requests, posts, state } = hub(on)
+  state.pending = 2
+  files.set(CONFIG, JSON.stringify({ files: { exclude: ['**/.env'] } }))
+  files.set(EVENTS, '{"v":1,"event":"session","start":7,"cwd":"/proj"}\n{"t":1,"event":"prompt","words":3}\n')
+
+  const { text } = await command($, 'login https://hub.test/')
+  expect(text).toContain('https://hub.test/device?code=ABCD-EFGH')
+  expect(text).not.toContain('hct_')
+  expect(requests.find(r => r.path === '/v1/device/code')!.body).toEqual({ device_name: 'miggys-laptop' })
+  await settle()
+  expect(requests.filter(r => r.path === '/v1/device/token')).toHaveLength(3)
+  expect(JSON.parse(files.get(CONFIG)!)).toEqual({ files: { exclude: ['**/.env'] }, server: { url: 'https://hub.test', token: 'hct_new' } })
+  expect(runs.find(argv => argv[2]?.includes('umask 077'))).toBeDefined()
+  expect(toasts.at(-1)).toContain('logged in to https://hub.test as Miggy')
+  // and this session's rows go up straight away, with the new token
+  expect(posts()[0]!.headers.authorization).toBe('Bearer hct_new')
+  expect(posts()[0]!.body.runs[0]).toMatchObject({ run: 7, from: 0, rows: [{ t: 1, event: 'prompt', words: 3 }] })
+})
+
+test('a denied login says so and saves nothing', async ($, on) => {
+  const { files } = setup(on)
+  const { toasts } = logged(on)
+  const { state } = hub(on)
+  state.denied = true
+  await command($, 'login https://hub.test')
+  await settle()
+  expect(toasts.at(-1)).toContain('denied')
+  expect(files.has(CONFIG)).toBe(false)
+})
+
+test('login checks it found a hub that speaks its protocol', async ($, on) => {
+  setup(on)
+  hub(on, { down: true })
+  expect((await command($, 'login https://not-a-hub.test')).text).toContain("doesn't answer like a claude-hours hub")
+  expect((await command($, 'login')).text).toContain('which hub?')
+})
+
+test('status says who this computer is logged in as, logout forgets it here and on the hub', async ($, on) => {
+  const { files } = setup(on)
+  const { requests } = hub(on)
+  expect((await command($, 'status')).text).toContain('not logged in')
+  files.set(CONFIG, JSON.stringify({ ...SERVER, files: { include: ['src/**'] } }))
+  expect((await command($, 'status')).text).toBe('logged in to https://hub.test as Miggy')
+  expect((await command($, 'logout')).text).toBe('logged out of https://hub.test')
+  expect(requests.at(-1)).toMatchObject({ path: '/v1/me', method: 'DELETE', headers: { authorization: 'Bearer tok' } })
+  expect(JSON.parse(files.get(CONFIG)!)).toEqual({ files: { include: ['src/**'] } })
 })

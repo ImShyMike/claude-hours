@@ -1,6 +1,6 @@
 {
   "name": "hook-analytics",
-  "version": "0.1.0",
-  "description": "Logs prompts, turns, interrupts, tool calls, file changes and session start/end to ~/.claude/analytics/events.jsonl",
+  "version": "0.2.0",
+  "description": "Logs prompts, turns, interrupts, tool calls and file changes under ~/.claude/analytics, and sends them to a claude-hours hub after /hook-analytics login",
   "types": "./types/index.d.ts"
 }

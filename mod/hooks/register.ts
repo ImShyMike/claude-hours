@@ -21,12 +21,17 @@ const EVENTS_DIR = `${LOG_DIR}/events`
 const DRAFTS_DIR = `${LOG_DIR}/drafts`
 const FORMAT = 1
 // which files get logged, globs in {"files":{"include":[...],"exclude":[...]}},
-// and where to send them, {"server":{"url":...,"token":...}}
+// and where to send them, {"server":{"url":...,"token":...}} (/hook-analytics
+// login writes that part)
 const CONFIG_FILE = `${LOG_DIR}/config.json`
 // how far each session's files have reached the server: sent/<session>.json
 const SENT_DIR = `${LOG_DIR}/sent`
-// one upload's most, cut back to its last whole line
-const CHUNK_BYTES = 512 * 1024
+// the hub's sync protocol, sent as X-Protocol
+const PROTOCOL = 1
+// one request's most, in whole lines: well under the hub's 5000 rows, and
+// under the 512 KB body a Node server takes by default
+const CHUNK_LINES = 4_000
+const CHUNK_BYTES = 256 * 1024
 const UPLOAD_TIMEOUT_MS = 10_000
 const KINDS = ['events', 'drafts'] as const
 
@@ -446,25 +451,37 @@ async function fileRules($: EngineInterface, dir: string): Promise<FileRules> {
   return { include: list(files.include), exclude: list(files.exclude) }
 }
 
-async function serverOf($: EngineInterface, dir: string): Promise<Server | undefined> {
-  const server = (await readConfig($, dir)).server as Record<string, unknown> | undefined
+function serverFrom(value: unknown): Server | undefined {
+  const server = value as Record<string, unknown> | undefined
   if (typeof server?.url !== 'string' || typeof server.token !== 'string') return undefined
   return { url: server.url.replace(/\/+$/, ''), token: server.token }
 }
 
-// Uploads. A session's files are append-only, so the wire format is the file
-// itself: POST the bytes past what the server holds, and it answers its new
-// length. Every send can be repeated safely, and the server is the one that
-// counts (in bytes, never a JS string's length). sent/<session>.json keeps the
-// last length it answered, plus the .gz sizes once a finished session is in,
-// for one server: pointing the config at another starts over from nothing.
+async function serverOf($: EngineInterface, dir: string) {
+  return serverFrom((await readConfig($, dir)).server)
+}
+
+// Uploads: the hub's sync protocol (docs/rewrite.md in claude-hours). A
+// session's events stream (the .gz's members, then the plain file) is a list
+// of runs, each from a header to the next and keyed by its start, and a row is
+// its index in its run; the drafts stream is one run, 0, a row per line. The
+// hub holds a contiguous prefix of each run and answers how far that reaches,
+// so any send can be repeated. sent/<session>.json keeps, for one hub, how
+// many lines of each stream are in and the run the events stream is in at
+// that point, plus the .gz sizes once a finished session is all in. A file
+// from the old byte-offset uploads (no v: 2) counts as nothing sent.
 //
 // This runs on its own chain, never awaited by a hook: a slow server must not
 // hold up the log or the person.
-type Sent = { url?: string; events?: number; drafts?: number; gz?: [number, number] }
+type Kind = (typeof KINDS)[number]
+type Cursor = { lines: number; run?: number; header?: Fields; acked: number }
+type Sent = { v: 2; url: string; events?: Cursor; drafts?: Cursor; gz?: [number, number] }
+type RunOut = { session: string; stream: Kind; run: number; header?: Fields; from: number; rows: unknown[] }
+type RunAnswer = { status?: string; acked?: number; error?: string }
 
 let syncing: Promise<void> = Promise.resolve()
 let warned = false
+let version: Promise<string> | undefined
 
 function sentPath(dir: string, sessionId: string) {
   return `${dir}/${SENT_DIR}/${sessionId}.json`
@@ -472,70 +489,127 @@ function sentPath(dir: string, sessionId: string) {
 
 async function readSent($: EngineInterface, server: Server, dir: string, sessionId: string): Promise<Sent> {
   const path = sentPath(dir, sessionId)
-  const fresh = { url: server.url }
+  const fresh: Sent = { v: 2, url: server.url }
   if (!(await $.fs.exists(path).catch(() => false))) return fresh
   try {
     const sent = JSON.parse(String(await $.fs.read(path)))
-    return sent?.url === server.url ? sent : fresh
+    return sent?.v === 2 && sent.url === server.url ? sent : fresh
   } catch {
     return fresh
   }
 }
 
-// the session's file as one stream (the .gz's members, then the plain file),
-// from `offset` bytes on, cut back to its last whole line
-async function chunkFrom($: EngineInterface, path: string, offset: number) {
-  const script = '{ [ -f "$1.gz" ] && gzip -dc "$1.gz" 2>/dev/null; [ -f "$1" ] && cat "$1"; } | tail -c +$(($2 + 1)) | head -c $3'
-  const { stdout } = await $.process.run(['sh', '-c', script, 'sh', path, String(offset), String(CHUNK_BYTES)], { timeoutMs: 5_000 })
-  return stdout.slice(0, stdout.lastIndexOf('\n') + 1)
+// the stream's lines from line `from` on, as many as one request takes; a
+// last line with no newline is still being written, so it waits
+async function linesFrom($: EngineInterface, path: string, from: number) {
+  const script = '{ [ -f "$1.gz" ] && gzip -dc "$1.gz" 2>/dev/null; [ -f "$1" ] && cat "$1"; } | tail -n +$(($2 + 1)) | head -n $3 | head -c $4'
+  const argv = ['sh', '-c', script, 'sh', path, String(from), String(CHUNK_LINES), String(CHUNK_BYTES)]
+  const { stdout } = await $.process.run(argv, { timeoutMs: 5_000 })
+  const lines = stdout.split('\n')
+  lines.pop()
+  return lines
 }
 
-async function post($: EngineInterface, server: Server, url: string, body: string) {
-  const timeout = $.clock.sleep(UPLOAD_TIMEOUT_MS).then(() => {
-    throw new Error(`no answer from ${server.url} in ${UPLOAD_TIMEOUT_MS / 1000}s`)
-  })
-  return Promise.race([
-    $.http.fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/x-ndjson' },
-      body,
-    }),
-    timeout,
-  ])
-}
-
-// Sends one session's files up to their last whole line. True if the server
-// holds all of it
-async function pushSession($: EngineInterface, server: Server, dir: string, sessionId: string, sent: Sent) {
-  let complete = true
-  for (const kind of KINDS) {
-    const path = `${dir}/${LOG_DIR}/${kind}/${sessionId}.jsonl`
-    let drained = false
-    // a 409 moves the offset to the server's, so a few rounds always settle
-    for (let round = 0; round < 8 && !drained; round++) {
-      const offset = sent[kind] ?? 0
-      const body = await chunkFrom($, path, offset)
-      drained = !body
-      if (drained) break
-      const url = `${server.url}/v1/sessions/${encodeURIComponent(sessionId)}/${kind}?offset=${offset}`
-      const res = await post($, server, url, body)
-      const length = Number((JSON.parse(res.text || '{}') as { length?: unknown }).length)
-      if ((res.ok || res.status === 409) && Number.isSafeInteger(length) && length >= 0) {
-        sent[kind] = length
-        await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
-        continue
-      }
-      throw new Error(`upload refused: ${res.status} ${res.text.slice(0, 200)}`)
-    }
-    if (!drained) complete = false
+// a line that isn't JSON goes as it is, so it keeps its place (the hub
+// quarantines it)
+function rowOf(line: string): unknown {
+  try {
+    return JSON.parse(line)
+  } catch {
+    return line
   }
-  return complete
+}
+
+const isHeader = (row: unknown): row is Fields & { start: number } =>
+  !!row && typeof row === 'object' && (row as Fields).event === 'session' && Number.isSafeInteger((row as Fields).start)
+
+function versionOf($: EngineInterface) {
+  return (version ??= $.fs
+    .read(`${$.plugin.root}/.claude-plugin/plugin.json`)
+    .then(text => String(JSON.parse(String(text)).version ?? '0'))
+    .catch(() => '0'))
+}
+
+async function request($: EngineInterface, url: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) {
+  const timeout = $.clock.sleep(UPLOAD_TIMEOUT_MS).then(() => {
+    throw new Error(`no answer from ${new URL(url).origin} in ${UPLOAD_TIMEOUT_MS / 1000}s`)
+  })
+  const headers = { 'user-agent': `hook-analytics/${await versionOf($)}`, ...init.headers }
+  return Promise.race([$.http.fetch(url, { ...init, headers }), timeout])
+}
+
+const answerOf = (text: string): Record<string, unknown> => {
+  try {
+    const body = JSON.parse(text)
+    return body && typeof body === 'object' ? body : {}
+  } catch {
+    return {}
+  }
+}
+
+async function sendRuns($: EngineInterface, server: Server, runs: RunOut[]) {
+  const res = await request($, `${server.url}/v1/events`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json', 'x-protocol': String(PROTOCOL) },
+    body: JSON.stringify({ runs }),
+  })
+  const answer = answerOf(res.text)
+  if (res.status === 401) throw new Error(`${server.url} turned down this computer's token, run /hook-analytics login`)
+  if (res.status === 400 && Array.isArray(answer.protocols))
+    throw new Error(`${server.url} speaks protocol ${answer.protocols.join(', ')} and this mod ${PROTOCOL}, update the one behind`)
+  if (!res.ok) throw new Error(`upload refused: ${res.status} ${res.text.slice(0, 200)}`)
+  return (answer.runs ?? {}) as Record<string, RunAnswer>
+}
+
+// Sends one stream past what sent/ says the hub holds, a request at a time,
+// until it's all in. A hub that holds less than that (it lost rows, or the
+// file was sent from elsewhere) starts the stream over once: it skips what
+// it has
+async function pushStream($: EngineInterface, server: Server, dir: string, sessionId: string, sent: Sent, kind: Kind) {
+  const path = `${dir}/${LOG_DIR}/${kind}/${sessionId}.jsonl`
+  let restarted = false
+  for (;;) {
+    const at = sent[kind] ?? { lines: 0, acked: 0 }
+    const lines = await linesFrom($, path, at.lines)
+    if (!lines.length) return
+    // a header starts a run; any other row goes on the run it's in, and
+    // rows before the first header belong to none
+    let { run, header, acked } = kind === 'drafts' ? { run: 0, header: undefined, acked: at.lines } : at
+    let part: RunOut | undefined
+    const runs: RunOut[] = []
+    for (const line of lines) {
+      const row = rowOf(line)
+      if (kind === 'events' && isHeader(row)) {
+        ;({ run, header, acked, part } = { run: row.start, header: row, acked: 0, part: undefined })
+      } else if (run !== undefined) {
+        if (!part) runs.push((part = { session: sessionId, stream: kind, run, header, from: acked, rows: [] }))
+        part.rows.push(row)
+        acked++
+      }
+    }
+    const answers = runs.length ? await sendRuns($, server, runs) : {}
+    const short = runs.find(r => {
+      const answer = answers[`${sessionId}/${kind}/${r.run}`]
+      if (answer?.status === 'invalid') throw new Error(`${server.url} refused ${sessionId}: ${answer.error ?? 'invalid'}`)
+      return answer?.status !== 'ok' || !((answer.acked ?? 0) >= r.from + r.rows.length)
+    })
+    if (short) {
+      if (restarted) throw new Error(`${server.url} keeps answering short for ${sessionId}`)
+      restarted = true
+      delete sent[kind]
+    } else sent[kind] = kind === 'drafts' ? { lines: at.lines + lines.length, acked } : { lines: at.lines + lines.length, run, header, acked }
+    await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
+  }
+}
+
+async function pushSession($: EngineInterface, server: Server, dir: string, sessionId: string, sent: Sent) {
+  for (const kind of KINDS) await pushStream($, server, dir, sessionId, sent, kind)
 }
 
 function warnOnce($: EngineInterface, err: unknown) {
   if (warned) return
   warned = true
-  $.ui.log(`${$.plugin.name}: upload paused: ${String(err)}`)
+  $.ui.log(`${$.plugin.name}: upload paused: ${err instanceof Error ? err.message : String(err)}`)
 }
 
 // This session's files, after the writes queued so far. Not awaited
@@ -553,10 +627,10 @@ function syncSession($: EngineInterface) {
     .catch(err => warnOnce($, err))
 }
 
-// Finished sessions not yet all sent: one that crashed, ran offline or ended
-// after its last upload. Only finished ones (.gz alone, no plain file and no
-// pack under way), since a live session sends its own. A .gz whose size
-// matches what sent/ recorded is already in. Not awaited
+// Finished sessions not yet all sent: one that crashed, ran offline, ended
+// after its last upload or came before the login. Only finished ones (.gz
+// alone, no plain file and no pack under way), since a live session sends its
+// own. A .gz whose size matches what sent/ recorded is already in. Not awaited
 function sweep($: EngineInterface) {
   syncing = syncing
     .then(async () => {
@@ -574,14 +648,137 @@ function sweep($: EngineInterface) {
         const gz: [number, number] = [Number(e), Number(d)]
         const sent = await readSent($, server, dir, sessionId)
         if (sent.gz?.[0] === gz[0] && sent.gz[1] === gz[1]) continue
-        if (await pushSession($, server, dir, sessionId, sent)) {
-          sent.gz = gz
-          await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
-        }
+        await pushSession($, server, dir, sessionId, sent)
+        sent.gz = gz
+        await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
       }
       warned = false
     })
     .catch(err => warnOnce($, err))
+}
+
+// Logging in to a hub: the device flow (RFC 8628). /hook-analytics login
+// answers at once with a code to approve on the hub; a poll behind it saves
+// the token once someone does, then sends everything not sent yet
+const USAGE = 'usage: /hook-analytics login <hub url> | status | logout'
+// the newest login, so starting another stops the last one's poll
+let loginId = 0
+
+// config.json with the token in it, never readable by anyone else, not even
+// for a moment between a write and a chmod
+async function writeConfig($: EngineInterface, dir: string, config: Record<string, unknown>) {
+  const script = 'umask 077 && cat > "$1.tmp" && mv "$1.tmp" "$1"'
+  const { exitCode, stderr } = await $.process.run(['sh', '-c', script, 'sh', `${dir}/${CONFIG_FILE}`], { stdin: `${JSON.stringify(config, null, 2)}\n` })
+  if (exitCode !== 0) throw new Error(`couldn't save the config: ${stderr.trim()}`)
+}
+
+async function whoami($: EngineInterface, server: Server) {
+  const res = await request($, `${server.url}/v1/me`, { headers: { authorization: `Bearer ${server.token}` } })
+  if (res.status === 401) return undefined
+  if (!res.ok) throw new Error(`${res.status} ${res.text.slice(0, 100)}`)
+  const me = answerOf(res.text)
+  return String(me.name ?? me.email ?? 'someone')
+}
+
+async function startLogin($: EngineInterface, arg: string) {
+  const dir = await homeDir($)
+  const url = (arg || (await serverOf($, dir))?.url || '').replace(/\/+$/, '')
+  if (!/^https?:\/\/[^/\s]+/.test(url)) return `which hub? ${USAGE}`
+  const hello = await request($, `${url}/v1/hello`).catch(() => undefined)
+  const protocols = hello?.ok ? answerOf(hello.text).protocols : undefined
+  if (!Array.isArray(protocols)) return `${url} doesn't answer like a claude-hours hub${hello ? ` (${hello.status})` : ''}`
+  if (!protocols.includes(PROTOCOL)) return `${url} speaks protocol ${protocols.join(', ')} and this mod ${PROTOCOL}, update the one behind`
+  const host = await $.process.run(['uname', '-n'], { timeoutMs: 1_000 }).catch(() => undefined)
+  const res = await request($, `${url}/v1/device/code`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ device_name: host?.stdout.trim() || 'Claude Code' }),
+  })
+  const code = answerOf(res.text)
+  if (!res.ok || typeof code.device_code !== 'string' || typeof code.user_code !== 'string')
+    return `${url} wouldn't start a login: ${res.status} ${String(code.error ?? '')}`.trim()
+  // built from the url typed here, which a hub behind a proxy may not know
+  const verify = `${url}/device?code=${encodeURIComponent(code.user_code)}`
+  const open = 'if command -v xdg-open >/dev/null; then xdg-open "$1"; elif command -v open >/dev/null; then open "$1"; fi'
+  $.process.run(['sh', '-c', open, 'sh', verify], { timeoutMs: 3_000 }).catch(() => undefined)
+  pollLogin($, url, code, ++loginId)
+  return `open ${verify} and approve the code ${code.user_code} there. this computer logs in once you do`
+}
+
+// Not awaited: it waits as long as the code lasts
+function pollLogin($: EngineInterface, url: string, code: Record<string, unknown>, id: number) {
+  const run = async () => {
+    let interval = Number(code.interval) || 5
+    const deadline = (await $.clock.now()) + (Number(code.expires_in) || 600) * 1000
+    while ((await $.clock.now()) < deadline) {
+      await $.clock.sleep(interval * 1000)
+      if (id !== loginId) return
+      const res = await request($, `${url}/v1/device/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ device_code: code.device_code }),
+      }).catch(() => undefined)
+      // a dropped connection is worth another try while the code lasts
+      if (!res) continue
+      const answer = answerOf(res.text)
+      if (res.ok && typeof answer.access_token === 'string') {
+        const dir = await homeDir($)
+        const server = { url, token: answer.access_token }
+        await writeConfig($, dir, { ...(await readConfig($, dir)), server })
+        const who = await whoami($, server).catch(() => undefined)
+        $.ui.toast(`${$.plugin.name}: logged in to ${url}${who ? ` as ${who}` : ''}`)
+        warned = false
+        sweep($)
+        syncSession($)
+        return
+      }
+      if (answer.error === 'authorization_pending') continue
+      if (answer.error === 'slow_down') {
+        interval += 5
+        continue
+      }
+      throw new Error(answer.error === 'access_denied' ? 'it was denied' : answer.error === 'expired_token' ? 'the code ran out' : `${res.status} ${String(answer.error ?? '')}`)
+    }
+    throw new Error('the code ran out')
+  }
+  run().catch(err => {
+    if (id !== loginId) return
+    const text = `${$.plugin.name}: login failed, ${err instanceof Error ? err.message : String(err)}`
+    $.ui.toast(text)
+    $.ui.log(text)
+  })
+}
+
+async function loginStatus($: EngineInterface) {
+  const server = await serverOf($, await homeDir($))
+  if (!server) return `not logged in. ${USAGE}`
+  const who = await whoami($, server).catch(err => err as Error)
+  if (who instanceof Error) return `logged in to ${server.url}, which isn't answering (${who.message})`
+  return who ? `logged in to ${server.url} as ${who}` : `${server.url} turned down this computer's token, run /hook-analytics login`
+}
+
+// forgets the token here and asks the hub to forget it too
+async function logout($: EngineInterface) {
+  loginId++
+  const dir = await homeDir($)
+  const { server, ...rest } = await readConfig($, dir)
+  const saved = serverFrom(server)
+  if (!saved) return 'not logged in'
+  await writeConfig($, dir, rest)
+  // JSON, or the hub takes a bodyless DELETE for a cross-site form and refuses it
+  const headers = { authorization: `Bearer ${saved.token}`, 'content-type': 'application/json' }
+  const res = await request($, `${saved.url}/v1/me`, { method: 'DELETE', headers }).catch(() => undefined)
+  return res?.ok || res?.status === 401
+    ? `logged out of ${saved.url}`
+    : `logged out here, but ${saved.url} didn't answer: revoke this computer at ${saved.url}/settings`
+}
+
+async function runCommand($: EngineInterface, args: string) {
+  const [verb = '', arg = ''] = args.trim().split(/\s+/)
+  if (verb === 'login') return startLogin($, arg)
+  if (verb === 'status' || !verb) return loginStatus($)
+  if (verb === 'logout') return logout($)
+  return USAGE
 }
 
 // excluded always loses; with any includes, only those are logged
@@ -772,6 +969,9 @@ export const register: Register = on => {
   // It reruns on every hot reload, hence the dedupe.
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    await $.command
+      .register({ name: 'hook-analytics', description: 'Log in to a claude-hours hub to send it your analytics', argumentHint: 'login <hub url> | status | logout' })
+      .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
     const sessionId = await $.session.id()
     if (!(await read($, startedSessions)).includes(sessionId)) {
       await update($, startedSessions, ids => [...ids, sessionId])
@@ -780,6 +980,11 @@ export const register: Register = on => {
     }
     return started
   })
+
+  // /hook-analytics login | status | logout
+  on('command.run', { command: 'hook-analytics' }, async ($, e) => ({ text: await runCommand($, e.args) })).catch(($, _, next) => ({
+    text: `${$.plugin.name}: ${next.error.message ?? next.error.kind}`,
+  }))
 
   // session.end gets 1.5 s for every hook: the session_end line plus any
   // abandoned drafts still waiting, a few appends at most
