@@ -92,6 +92,62 @@
     }
   })
 
+  // Pressing and moving pans it, with a mouse or pen (a finger already does).
+  // A press that hardly moves is still a click; one that moved isn't, so
+  // letting go over a bar doesn't open it
+  const DRAG_PX = 4
+  let dragging = $state(false)
+  const pannable = $derived(labelW + trackW > scrollW + 1)
+  $effect(() => {
+    const el = scroller
+    if (!el) return
+    let press: { id: number; x: number; left: number } | undefined
+    let moved = false
+    const onDown = (e: PointerEvent) => {
+      moved = false
+      if (e.pointerType === 'touch' || e.button !== 0 || el.scrollWidth <= el.clientWidth) return
+      press = { id: e.pointerId, x: e.clientX, left: el.scrollLeft }
+    }
+    const onMove = (e: PointerEvent) => {
+      if (press?.id !== e.pointerId) return
+      const dx = e.clientX - press.x
+      if (!moved && Math.abs(dx) < DRAG_PX) return
+      if (!moved) {
+        moved = dragging = true
+        el.setPointerCapture(e.pointerId)
+        hideTip()
+      }
+      el.scrollLeft = press.left - dx
+    }
+    const onUp = (e: PointerEvent) => {
+      if (press?.id !== e.pointerId) return
+      press = undefined
+      dragging = false
+    }
+    // the click that ends a drag, caught before the bar it lands on sees it
+    const onClick = (e: MouseEvent) => {
+      if (!moved) return
+      moved = false
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    const noNativeDrag = (e: DragEvent) => e.preventDefault()
+    el.addEventListener('pointerdown', onDown)
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('pointercancel', onUp)
+    el.addEventListener('click', onClick, true)
+    el.addEventListener('dragstart', noNativeDrag)
+    return () => {
+      el.removeEventListener('pointerdown', onDown)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('pointercancel', onUp)
+      el.removeEventListener('click', onClick, true)
+      el.removeEventListener('dragstart', noNativeDrag)
+    }
+  })
+
   const tipOf = (html?: string) => (html ? (e: MouseEvent) => showTip(e, html) : undefined)
 </script>
 
@@ -126,7 +182,12 @@
       </div>
     </div>
   </div>
-  <div class="overflow-x-auto" bind:this={scroller} bind:clientWidth={scrollW} onscroll={e => (scrolled = e.currentTarget.scrollLeft > 0)}>
+  <div
+    class={['overflow-x-auto', pannable && 'cursor-grab', dragging && 'cursor-grabbing select-none [&_*]:cursor-grabbing']}
+    bind:this={scroller}
+    bind:clientWidth={scrollW}
+    onscroll={e => (scrolled = e.currentTarget.scrollLeft > 0)}
+  >
     <div class="relative min-w-full overflow-x-clip text-xs" style:width="{labelW + trackW}px">
       <!-- behind the rows: a hairline at every tick, and each squashed stretch hatched -->
       <div class="pointer-events-none absolute top-5 bottom-0" style:left="{labelW}px" style:width="{trackW}px">
