@@ -100,6 +100,9 @@ export function prefetchDigest(url: URL, spans = false) {
   prefetch(url, digestKey(range, spans), digestPath(range, spans))
 }
 
+// for a range picker's option, pointed at or focused before it's picked
+export const prefetchRange = (range: Range, spans = false) => prefetch(new URL(location.href), digestKey(range, spans), digestPath(range, spans))
+
 const sessionPath = (id: string) => `/api/session/${encodeURIComponent(id)}?tz=${encodeURIComponent(tz())}`
 
 // one session's events and draft timelines

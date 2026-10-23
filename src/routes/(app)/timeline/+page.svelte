@@ -54,7 +54,7 @@
       <h1 class="text-2xl font-semibold tracking-tight">Timeline</h1>
       <p class="text-sm text-muted-foreground">Every session, {rangeWindow(range.value).label}</p>
     </div>
-    <RangePicker bind:range={range.value} />
+    <RangePicker bind:range={range.value} spans />
   </div>
 
   {#if !tl}
