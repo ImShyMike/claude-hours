@@ -1,4 +1,4 @@
-// A session's files as the sync protocol sees them (docs/rewrite.md): the
+// A session's files as the sync protocol sees them (docs/how-it-works.md): the
 // events stream is a list of runs, each from a header to the next, keyed by
 // the header's start; the drafts stream is one run. A row is its index in its
 // run. The mod keeps its own copy of this, since it can't import

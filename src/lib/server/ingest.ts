@@ -1,5 +1,5 @@
 // POST /v1/events: what the mod's session files hold, run by run (the sync
-// protocol in docs/rewrite.md). Every run keeps a contiguous prefix of its
+// protocol in docs/how-it-works.md). Every run keeps a contiguous prefix of its
 // rows, so a repeated, reordered or interrupted send never doubles or skips
 // one
 import { and, eq, sql } from 'drizzle-orm'

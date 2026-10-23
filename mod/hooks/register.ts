@@ -508,7 +508,7 @@ async function serverOf($: EngineInterface, dir: string) {
   return serverFrom((await readConfig($, dir)).server)
 }
 
-// Uploads: the hub's sync protocol (docs/rewrite.md in claude-hours). A
+// Uploads: the hub's sync protocol (docs/how-it-works.md in claude-hours). A
 // session's events stream (the .gz's members, then the plain file) is a list
 // of runs, each from a header to the next and keyed by its start, and a row is
 // its index in its run; the drafts stream is one run, 0, a row per line. The

@@ -5,7 +5,7 @@ import { authenticateDevice } from '#lib/server/devices.js'
 import { ingest, MAX_BYTES, parseBatch, PROTOCOLS } from '#lib/server/ingest.js'
 import type { RequestHandler } from './$types'
 
-// The mod's rows, run by run (the sync protocol in docs/rewrite.md)
+// The mod's rows, run by run (the sync protocol in docs/how-it-works.md)
 export const POST: RequestHandler = async ({ request }) => {
   const token = bearerOf(request)
   const device = token ? await authenticateDevice(db, token) : null

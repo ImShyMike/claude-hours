@@ -114,7 +114,7 @@ export const settings = pgTable('settings', {
 // One run of a session's file: from a header (a new session, or a resume) to
 // the next, keyed by the header's start. The drafts sidecar is one run per
 // session with start 0. acked is how many of its rows the hub holds, always
-// rows 0 to acked - 1 (see the sync protocol in docs/rewrite.md)
+// rows 0 to acked - 1 (see the sync protocol in docs/how-it-works.md)
 export const runs = pgTable(
   '_runs',
   {
