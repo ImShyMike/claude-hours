@@ -101,7 +101,10 @@ and answers at once with the link (built from the url typed, not the hub's
 it saves `server` in `config.json` (written under `umask 077`, the rest of the
 config kept), then sends everything not sent. `logout` drops it and calls
 `DELETE /v1/me`, which revokes that token (as JSON: SvelteKit refuses a
-bodyless DELETE as a cross-site form). `status` asks `GET /v1/me`.
+bodyless DELETE as a cross-site form). `status` asks `GET /v1/me`, and
+`stats` asks `GET /v1/stats?tz=<the computer's zone>`: today, the last 7 days
+with their top three projects, and all time, counted by the same `digest` as
+the dashboard (`src/lib/server/stats.ts`).
 `login <hub> <code>` takes a code made on the hub's settings page instead:
 the hub makes it approved from the start (`loginCode`), so the mod swaps it
 at `POST /v1/device/token` once, sending its hostname as `device_name` to
@@ -194,7 +197,7 @@ has. A 401 says to log in again, once. Files from the old byte-offset protocol
       summed on the hub (`/api/summary`, `/api/session/:id`), equal to what
       the old dashboard summed from the same files; an admin picks whose to
       see
-- [x] The mod: `/time-track login | status | logout`, after-turn sync and
+- [x] The mod: `/time-track login | status | stats | logout`, after-turn sync and
       the startup sweep on protocol v1
 - [x] `curl <hub>/install.sh | sh` and copyable login commands on settings
 - [x] The mod's requests (captured from its own code under the test engine)

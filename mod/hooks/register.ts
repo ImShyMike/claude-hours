@@ -694,7 +694,7 @@ function sweep($: EngineInterface) {
 // the token once someone does, then sends everything not sent yet. A login
 // command copied from the hub's settings carries a code approved already,
 // swapped for the token straight away
-const USAGE = 'usage: /time-track login <hub url> [code] | status | logout'
+const USAGE = 'usage: /time-track login <hub url> [code] | status | stats | logout'
 // the newest login, so starting another stops the last one's poll
 let loginId = 0
 
@@ -834,11 +834,48 @@ async function logout($: EngineInterface) {
     : `logged out here, but ${saved.url} didn't answer: revoke this computer at ${saved.url}/settings`
 }
 
+// 2h 05m, or 14m under an hour
+function hm(ms: number) {
+  const m = Math.round(ms / 60_000)
+  return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m` : `${m}m`
+}
+
+type Stats = {
+  today: { ms: number; sessions: number }
+  week: { ms: number; projects: { project: string; ms: number }[] }
+  allTime: { ms: number }
+  dashboard: string
+}
+
+// a few numbers from the hub, which does the counting (the same as its
+// dashboard), with days in this computer's time zone
+async function stats($: EngineInterface) {
+  const server = await serverOf($, await homeDir($))
+  if (!server) return `not logged in, so there's nothing counted yet. ${USAGE}`
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const res = await request($, `${server.url}/v1/stats?tz=${encodeURIComponent(tz)}`, {
+    headers: { authorization: `Bearer ${server.token}` },
+  }).catch(err => err as Error)
+  if (res instanceof Error) return `${server.url} isn't answering (${res.message})`
+  if (res.status === 401) return `${server.url} turned down this computer's token, run /time-track login`
+  if (!res.ok) return `${server.url} couldn't count (${res.status})`
+  const { today, week, allTime, dashboard } = answerOf(res.text) as Stats
+  const top = week.projects.map(p => `${p.project} ${hm(p.ms)}`).join(', ')
+  return [
+    `today        ${hm(today.ms)} (${today.sessions} ${today.sessions === 1 ? 'session' : 'sessions'})`,
+    `last 7 days  ${hm(week.ms)}`,
+    `all time     ${hm(allTime.ms)}`,
+    ...(top ? [`top this week: ${top}`] : []),
+    `dashboard: ${dashboard}`,
+  ].join('\n')
+}
+
 async function runCommand($: EngineInterface, args: string) {
   const [verb = '', arg = '', code = ''] = args.trim().split(/\s+/)
   if (verb === 'login') return startLogin($, arg, code)
   if (verb === 'status' || !verb) return loginStatus($)
   if (verb === 'logout') return logout($)
+  if (verb === 'stats') return stats($)
   return USAGE
 }
 
@@ -1046,7 +1083,7 @@ export const register: Register = on => {
       .register({
         name: 'time-track',
         description: 'Log in to a claude-hours hub to send it your analytics',
-        argumentHint: 'login <hub url> [code] | status | logout',
+        argumentHint: 'login <hub url> [code] | status | stats | logout',
       })
       .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
     const sessionId = await $.session.id()

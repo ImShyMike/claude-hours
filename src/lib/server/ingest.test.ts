@@ -13,6 +13,7 @@ import { revokeDevice, sessionDevices } from './devices'
 import { draftsText, eventsOf, serverTiming, sessionTexts, type Timing } from './history'
 import { ingest, parseBatch, type RunIn } from './ingest'
 import { setIdleCap } from './settings'
+import { quickStats } from './stats'
 
 async function withPerson() {
   const db = await testDb()
@@ -205,6 +206,32 @@ describe('digest', () => {
   test('a time zone that does not exist is a RangeError', async () => {
     const { db, person } = await withPerson()
     await expect(digest(db, person, { tz: 'Mars/Olympus' })).rejects.toThrow(RangeError)
+  })
+})
+
+describe('quickStats', () => {
+  test('today, the last 7 days with their top projects, and all time', async () => {
+    const { db, person } = await withPerson()
+    const DAY = 24 * 60 * 60_000
+    const at = Date.UTC(2026, 9, 20, 12)
+    const session = (session: string, start: number, cwd: string, rows: unknown[]) =>
+      run(0, rows, { session, run: start, header: { ...header, start, cwd } })
+    await ingest(db, person, [
+      session('today', at, '/code/terra', [{ t: 0, event: 'prompt' }, tool(60_000)]),
+      session('this-week', at - 3 * DAY, '/code/hub', [{ t: 0, event: 'prompt' }, tool(120_000)]),
+      session('long-ago', at - 30 * DAY, '/code/terra', [{ t: 0, event: 'prompt' }, tool(60_000)]),
+    ])
+    expect(await quickStats(db, person, { now: at + 2 * 60 * 60_000, tz: 'UTC' })).toEqual({
+      today: { ms: 60_000, sessions: 1 },
+      week: {
+        ms: 180_000,
+        projects: [
+          { project: 'hub', ms: 120_000 },
+          { project: 'terra', ms: 60_000 },
+        ],
+      },
+      allTime: { ms: 240_000 },
+    })
   })
 })
 

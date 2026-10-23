@@ -914,7 +914,7 @@ test('a session ending gzips its files behind the last row', async ($, on) => {
 // starts past it is a gap, and a new events run needs its header
 const hub = (on: On, { down = false } = {}) => {
   const stored = new Map<string, unknown[]>()
-  const requests: { path: string; method: string; headers: Record<string, string>; body?: any }[] = []
+  const requests: { url: string; path: string; method: string; headers: Record<string, string>; body?: any }[] = []
   const state = { token: 'tok', pending: 0, denied: false }
   // the upload's 10 s timeout never fires; the login's poll waits no time
   on('clock.sleep', (_, e) => (e.ms === 10_000 ? new Promise(() => {}) : { value: undefined }))
@@ -922,7 +922,7 @@ const hub = (on: On, { down = false } = {}) => {
     const url = new URL(e.url)
     const headers = e.init?.headers ?? {}
     const body = e.init?.body ? JSON.parse(e.init.body) : undefined
-    requests.push({ path: url.pathname, method: e.init?.method ?? 'GET', headers, body })
+    requests.push({ url: url.href, path: url.pathname, method: e.init?.method ?? 'GET', headers, body })
     const reply = (status: number, value: unknown) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(value) } })
     if (down) return { value: { status: 503, ok: false, headers: {}, text: 'down' } }
     // SvelteKit's origin check: anything but GET that could be a form needs a JSON type
@@ -942,6 +942,19 @@ const hub = (on: On, { down = false } = {}) => {
     }
     if (headers.authorization !== `Bearer ${state.token}`) return reply(401, { error: 'invalid_token' })
     if (url.pathname === '/v1/me') return reply(200, e.init?.method === 'DELETE' ? {} : { name: 'Miggy', email: 'miggy@example.com' })
+    if (url.pathname === '/v1/stats')
+      return reply(200, {
+        today: { ms: 134 * 60_000, sessions: 3 },
+        week: {
+          ms: 662 * 60_000,
+          projects: [
+            { project: 'claude-hours', ms: 370 * 60_000 },
+            { project: 'terra', ms: 9 * 60_000 },
+          ],
+        },
+        allTime: { ms: 5200 * 60_000 },
+        dashboard: url.origin,
+      })
     const runs: Record<string, { status: string; acked: number }> = {}
     for (const r of body.runs) {
       const key = `${r.session}/${r.stream}/${r.run}`
@@ -1222,6 +1235,27 @@ test('login answers at once, and saves the token once the code is approved', asy
   // and this session's rows go up straight away, with the new token
   expect(posts()[0]!.headers.authorization).toBe('Bearer hct_new')
   expect(posts()[0]!.body.runs[0]).toMatchObject({ run: 7, from: 0, rows: [{ t: 1, event: 'prompt', words: 3 }] })
+})
+
+test('stats asks the hub in the time zone of this computer, and lays the numbers out', async ($, on) => {
+  const { files } = setup(on)
+  const { requests } = hub(on)
+  expect((await command($, 'stats')).text).toContain('not logged in')
+
+  files.set(CONFIG, JSON.stringify(SERVER))
+  const { text } = await command($, 'stats')
+  const asked = new URL(requests.at(-1)!.url)
+  expect(asked.pathname).toBe('/v1/stats')
+  expect(asked.searchParams.get('tz')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)
+  expect(text).toBe(
+    [
+      'today        2h 14m (3 sessions)',
+      'last 7 days  11h 02m',
+      'all time     86h 40m',
+      'top this week: claude-hours 6h 10m, terra 9m',
+      `dashboard: ${asked.origin}`,
+    ].join('\n'),
+  )
 })
 
 test('a denied login says so and saves nothing', async ($, on) => {

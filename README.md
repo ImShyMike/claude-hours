@@ -102,7 +102,9 @@ Running Claude Code inside WSL works like Linux.
    settings page carries a code approved already
    (`/time-track login <hub> <code>`), so that one logs in straight
    away. `/time-track status` says who it's logged
-   in as, `/time-track logout` forgets the token here and on the hub.
+   in as, `/time-track stats` shows today's time, the last 7 days' (with
+   the top projects) and all time's, and `/time-track logout` forgets the
+   token here and on the hub.
 
 ## Where things live
 
