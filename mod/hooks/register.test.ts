@@ -1044,7 +1044,14 @@ const logged = (on: On) => {
     toasts.push(String((e as { text?: unknown }).text ?? e))
     return { value: undefined }
   })
-  return { logs, toasts }
+  // the pinned status line, as it stands now (undefined once cleared)
+  const status = { line: undefined as string | undefined, set: 0 }
+  on('ui.status', (_, e) => {
+    status.line = (e as { text?: string }).text
+    status.set++
+    return { value: undefined }
+  })
+  return { logs, toasts, status }
 }
 
 test('with no server in the config nothing is sent', async ($, on) => {
@@ -1419,4 +1426,43 @@ test('update leaves a clone alone, and changes nothing when the hub hands out so
   expect((await command($, 'update')).text).toContain("couldn't download the update")
   expect(files.has(`${root}/hooks/register.ts`)).toBe(false)
   expect(JSON.parse(files.get(RELEASE)!)).toEqual({ version: 'old' })
+})
+
+test("today's time sits under the prompt once turned on, asked at most once a minute after a sync", async ($, on) => {
+  const { files, tick } = setup(on)
+  const { status } = logged(on)
+  const { requests } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  const asked = () => requests.filter(r => r.path === '/v1/stats').length
+  files.set(CONFIG, JSON.stringify(SERVER))
+
+  // off until asked for
+  await endTurn($)
+  await settle()
+  expect(status.line).toBeUndefined()
+  expect(asked()).toBe(0)
+
+  expect((await command($, 'statusline')).text).toBe("showing today's time under the prompt")
+  expect(status.line).toBe('2h 14m today')
+  expect(JSON.parse(files.get(CONFIG)!)).toMatchObject({ statusLine: true })
+  await endTurn($)
+  await settle()
+  expect(asked()).toBe(1)
+  tick(60_000)
+  await endTurn($)
+  await settle()
+  expect(asked()).toBe(2)
+
+  expect((await command($, 'statusline')).text).toContain('hid the status line')
+  expect(status.line).toBeUndefined()
+  expect(JSON.parse(files.get(CONFIG)!).statusLine).toBeUndefined()
+  tick(60_000)
+  await endTurn($)
+  await settle()
+  expect(status.line).toBeUndefined()
+  expect(asked()).toBe(2)
+
+  await command($, 'statusline')
+  await command($, 'logout')
+  expect(status.line).toBeUndefined()
 })

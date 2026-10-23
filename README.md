@@ -106,7 +106,9 @@ Running Claude Code inside WSL works like Linux.
    in as and how uploads are going (the last sync, finished sessions still
    waiting, the last problem), `/time-track stats` shows today's time, the
    last 7 days' (with the top projects) and all time's, and
-   `/time-track logout` forgets the token here and on the hub.
+   `/time-track logout` forgets the token here and on the hub. To see
+   today's time on a line under the prompt (asked of the hub at most once a
+   minute), run `/time-track statusline`, and again to hide it.
 
 ## Where things live
 

@@ -686,6 +686,7 @@ function syncSession($: EngineInterface) {
       if (!server) return
       await pushSession($, server, dir, sessionId, await readSent($, server, dir, sessionId))
       await uploadWorked($)
+      showToday($, server).catch(() => undefined)
     })
     .catch(err => uploadFailed($, err))
 }
@@ -727,6 +728,7 @@ function sweep($: EngineInterface) {
         await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
       }
       await uploadWorked($)
+      showToday($, server).catch(() => undefined)
     })
     .catch(err => uploadFailed($, err))
 }
@@ -736,7 +738,7 @@ function sweep($: EngineInterface) {
 // the token once someone does, then sends everything not sent yet. A login
 // command copied from the hub's settings carries a code approved already,
 // swapped for the token straight away
-const USAGE = 'usage: /time-track login <hub url> [code] | status | stats | ignore | update | logout'
+const USAGE = 'usage: /time-track login <hub url> [code] | status | stats | ignore | statusline | update | logout'
 // the newest login, so starting another stops the last one's poll
 let loginId = 0
 
@@ -968,6 +970,7 @@ async function logout($: EngineInterface) {
   const saved = serverFrom(server)
   if (!saved) return 'not logged in'
   await writeConfig($, dir, rest)
+  $.ui.status(undefined)
   // JSON, or the hub takes a bodyless DELETE for a cross-site form and refuses it
   const headers = { authorization: `Bearer ${saved.token}`, 'content-type': 'application/json' }
   const res = await request($, `${saved.url}/v1/me`, { method: 'DELETE', headers }).catch(() => undefined)
@@ -989,15 +992,51 @@ type Stats = {
   dashboard: string
 }
 
-// a few numbers from the hub, which does the counting (the same as its
-// dashboard), with days in this computer's time zone
+// the hub's count (the same as its dashboard), days in this computer's time zone
+function statsOf($: EngineInterface, server: Server) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  return request($, `${server.url}/v1/stats?tz=${encodeURIComponent(tz)}`, {
+    headers: { authorization: `Bearer ${server.token}` },
+  }).catch(err => err as Error)
+}
+
+// Today's time pinned under the prompt, after a sync sent this turn's rows,
+// asked of the hub at most once a minute. Off unless the config says
+// "statusLine": true (/time-track statusline)
+const STATUS_EVERY_MS = 60_000
+let statusAt = 0
+
+async function showToday($: EngineInterface, server: Server) {
+  const now = await $.clock.now()
+  if (now - statusAt < STATUS_EVERY_MS) return
+  statusAt = now
+  if ((await readConfig($, await homeDir($))).statusLine !== true) return
+  const res = await statsOf($, server)
+  if (res instanceof Error || !res.ok) return
+  const { today } = answerOf(res.text) as Partial<Stats>
+  if (typeof today?.ms === 'number') $.ui.status(`${hm(today.ms)} today`)
+}
+
+async function toggleStatusLine($: EngineInterface) {
+  const dir = await homeDir($)
+  const { statusLine, ...rest } = await readConfig($, dir)
+  const show = statusLine !== true
+  await writeConfig($, dir, show ? { ...rest, statusLine: true } : rest)
+  if (!show) {
+    $.ui.status(undefined)
+    return 'hid the status line. /time-track statusline again to bring it back'
+  }
+  statusAt = 0
+  const server = await serverOf($, dir)
+  if (server) await showToday($, server)
+  return `showing today's time under the prompt${server ? '' : ' once you log in'}`
+}
+
+// a few numbers from the hub, which does the counting
 async function stats($: EngineInterface) {
   const server = await serverOf($, await homeDir($))
   if (!server) return `not logged in, so there's nothing counted yet. ${USAGE}`
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
-  const res = await request($, `${server.url}/v1/stats?tz=${encodeURIComponent(tz)}`, {
-    headers: { authorization: `Bearer ${server.token}` },
-  }).catch(err => err as Error)
+  const res = await statsOf($, server)
   if (res instanceof Error) return `${server.url} isn't answering (${res.message})`
   if (res.status === 401) return `${server.url} turned down this computer's token, run /time-track login`
   if (!res.ok) return `${server.url} couldn't count (${res.status})`
@@ -1022,6 +1061,7 @@ async function runCommand($: EngineInterface, args: string) {
   if (verb === 'stats') return stats($)
   if (verb === 'ignore') return toggleIgnore($)
   if (verb === 'update') return updateMod($)
+  if (verb === 'statusline') return toggleStatusLine($)
   return USAGE
 }
 
@@ -1229,7 +1269,7 @@ export const register: Register = on => {
       .register({
         name: 'time-track',
         description: 'Log in to a claude-hours hub to send it your analytics',
-        argumentHint: 'login <hub url> [code] | status | stats | ignore | update | logout',
+        argumentHint: 'login <hub url> [code] | status | stats | ignore | statusline | update | logout',
       })
       .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
     const sessionId = await $.session.id()
