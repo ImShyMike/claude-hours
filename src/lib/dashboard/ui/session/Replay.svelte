@@ -15,17 +15,23 @@
   import Shapes from './Shapes.svelte'
 
   // keyed by the draft outside, so a new draft starts a fresh player; a
-  // refresh of the same draft doesn't touch it
-  let { draft, card = $bindable() }: { draft: Draft; card?: HTMLElement } = $props()
+  // refresh of the same draft doesn't touch it. Playing, the speed and
+  // squashing can live outside too, so they carry on into the next draft
+  // (Play all), and onend says the replay ran to its end
+  let {
+    draft,
+    card = $bindable(),
+    playing = $bindable(false),
+    speed = $bindable('1'),
+    squashed = $bindable(true),
+    onend,
+  }: { draft: Draft; card?: HTMLElement; playing?: boolean; speed?: string; squashed?: boolean; onend?: () => void } = $props()
   const d = untrack(() => draft)
   const tl = d.timeline
   const replay = tl && replayer(tl)
   const SPEEDS = ['1', '2', '5', '20']
 
-  // pauses squashed to 1.5 s, so a replay doesn't sit through a tea break
-  let squashed = $state(true)
-  let speed = $state('1')
-  let playing = $state(false)
+  // squashed: pauses cut to 1.5 s, so a replay doesn't sit through a tea break
   // where the replay is, in replay time (the squashed clock)
   let playMs = $state(0)
   let stripW = $state(0)
@@ -58,9 +64,11 @@
     seek(clock.toPlay(target ?? (dir > 0 ? durationOf(tl) : 0)))
   }
 
-  // one frame at a time while playing, stopped on pause or when the page goes
+  // one frame at a time while playing, stopped on pause or when the page goes;
+  // played again from the end, it starts over
   $effect(() => {
     if (!playing) return
+    untrack(() => playMs >= clock.length && (playMs = 0))
     let last = performance.now()
     let frame = requestAnimationFrame(function step(now) {
       playMs += (now - last) * Number(speed)
@@ -68,6 +76,7 @@
       if (playMs >= clock.length) {
         playMs = clock.length
         playing = false
+        onend?.()
         return
       }
       frame = requestAnimationFrame(step)

@@ -1,7 +1,10 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, untrack } from 'svelte'
+  import PlayIcon from '@lucide/svelte/icons/play'
+  import SquareIcon from '@lucide/svelte/icons/square'
   import { page } from '$app/state'
   import { summarize } from '#lib/analytics/aggregate.js'
+  import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
@@ -47,12 +50,67 @@
   const shown = $derived(drafts.slice(current * PAGE, (current + 1) * PAGE))
   const turnTo = (next: number) => (paged = { session: id, page: Math.max(0, Math.min(pages - 1, next)) })
 
-  async function pick(draft: string) {
+  // the replay's player, kept here so its speed and squashing carry on from
+  // one draft to the next
+  let playing = $state(false)
+  let speed = $state('1')
+  let squashed = $state(true)
+
+  async function show(draft: string) {
     picked = { session: id, draft }
     turnTo(pageOf(draft))
     await tick()
     replayCard?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
+
+  // a draft picked by hand ends Play all
+  function pick(draft: string) {
+    stop()
+    show(draft)
+  }
+
+  // Play all: every draft with a replay, oldest first, a beat between each.
+  // Playing starts once the next draft's player is up, so the one that just
+  // ended doesn't start over
+  const playable = $derived(drafts.filter(d => d.timeline))
+  const playIndex = $derived(playable.findIndex(d => d.id === selectedId))
+  let playAll = $state(false)
+  let beat: ReturnType<typeof setTimeout> | undefined
+  const BEAT_MS = 800
+
+  async function startAll() {
+    if (!playable.length) return
+    playAll = true
+    await show(playable[0]!.id)
+    playing = true
+  }
+
+  function stopAll() {
+    playAll = false
+    clearTimeout(beat)
+  }
+
+  // the Stop button: the draft playing pauses too
+  function stop() {
+    stopAll()
+    playing = false
+  }
+
+  function onend() {
+    const next = playable[playIndex + 1]
+    if (!playAll || !next) return stopAll()
+    beat = setTimeout(async () => {
+      await show(next.id)
+      playing = true
+    }, BEAT_MS)
+  }
+
+  // another session stops it all, and so does leaving the page mid-beat
+  $effect(() => {
+    void id
+    untrack(stop)
+    return () => clearTimeout(beat)
+  })
 
   const subtitle = $derived.by(() => {
     if (!events.length) return ''
@@ -95,7 +153,16 @@
     <Card.Root>
       <Card.Header>
         <Card.Title>Drafts</Card.Title>
-        <Card.Description>Click one to replay it</Card.Description>
+        <Card.Description>
+          {playAll && playIndex >= 0 ? `Playing ${playIndex + 1} of ${playable.length}` : 'Click one to replay it'}
+        </Card.Description>
+        {#if playable.length > 1}
+          <Card.Action>
+            <Button variant="outline" size="sm" onclick={() => (playAll ? stop() : startAll())}>
+              {#if playAll}<SquareIcon /> Stop{:else}<PlayIcon /> Play all{/if}
+            </Button>
+          </Card.Action>
+        {/if}
       </Card.Header>
       <Card.Content>
         <Table.Root>
@@ -132,7 +199,7 @@
 
     {#if selected}
       {#key `${id}/${selected.id}`}
-        <Replay draft={selected} bind:card={replayCard} />
+        <Replay draft={selected} bind:card={replayCard} bind:playing bind:speed bind:squashed {onend} />
       {/key}
     {/if}
   {/if}
