@@ -1,10 +1,38 @@
-import { defineConfig } from 'vitest/config'
+import { readFileSync } from 'node:fs'
+import { defineConfig, type Plugin } from 'vitest/config'
 import tailwindcss from '@tailwindcss/vite'
 import adapter from '@sveltejs/adapter-node'
 import { sveltekit } from '@sveltejs/kit/vite'
 
+// What the hub's installer routes hand out, read as plain text when the hub
+// is built: the mod (as install.sh puts it), settings.py and install.sh. Not
+// ?raw imports, which still send a .ts file through the TypeScript transform,
+// and that wants the mod's tsconfig, whose base is generated and gitignored
+const INSTALLER: Record<string, string> = {
+  'mod/.claude-plugin/plugin.json': 'mod/.claude-plugin/plugin.json',
+  'mod/hooks/hooks.json': 'mod/hooks/hooks.json',
+  'mod/hooks/register.ts': 'mod/hooks/register.ts',
+  'mod/types/index.d.ts': 'mod/types/index.d.ts',
+  'mod/tsconfig.json': 'mod/tsconfig.json',
+  'settings.py': 'scripts/settings.py',
+}
+const installer = (): Plugin => ({
+  name: 'installer-files',
+  resolveId: id => (id === 'virtual:installer' ? '\0virtual:installer' : undefined),
+  load(id) {
+    if (id !== '\0virtual:installer') return
+    const read = (path: string) => {
+      this.addWatchFile(path)
+      return readFileSync(path, 'utf8')
+    }
+    const files = Object.fromEntries(Object.entries(INSTALLER).map(([served, path]) => [served, read(path)]))
+    return `export const files = ${JSON.stringify(files)}\nexport const script = ${JSON.stringify(read('install.sh'))}\n`
+  },
+})
+
 export default defineConfig({
   plugins: [
+    installer(),
     tailwindcss(),
     sveltekit({
       compilerOptions: {

@@ -1,4 +1,4 @@
-import script from '../../../install.sh?raw'
+import { script } from 'virtual:installer'
 import type { RequestHandler } from './$types'
 
 // The installer for curl -fsSL <hub>/install.sh | sh, with this hub filled
