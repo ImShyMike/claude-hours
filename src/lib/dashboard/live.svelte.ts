@@ -4,7 +4,7 @@ import { page } from '$app/state'
 import type { Event } from '../analytics/aggregate'
 import type { Timeline } from '../analytics/replay'
 import type { Digest } from '../server/digest'
-import { api, load, rangeWindow, save, type Me, type Range } from './shared'
+import { api, load, rangeWindow, save, withPerson, type Me, type Range } from './shared'
 
 export type { Digest }
 export type SessionDigest = { events: Event[]; projects: Digest['projects']; idleCapMs: number; timelines: Timeline[]; devices: string[] }
@@ -18,6 +18,27 @@ export const tz = () => Intl.DateTimeFormat().resolvedOptions().timeZone
 // the timeline shows what's already here while it refreshes
 const answers = new Map<string, unknown>()
 const meCache = new Map<string, Me>()
+
+// Answers asked for ahead, by the same key: a page's load starts its fetch
+// when a link to it is hovered, and the page takes it up if it opens soon
+// after. Not api(): its 401 reruns every load, and so this again
+const ahead = new Map<string, { at: number; value: Promise<unknown> }>()
+const AHEAD_MS = 10_000
+
+function prefetch(url: URL, want: string, path: string) {
+  const person = url.searchParams.get('person') ?? ''
+  // the fetch asks for whoever's dashboard is open now (withPerson)
+  if (person !== (new URLSearchParams(location.search).get('person') ?? '')) return
+  // the load runs again when the click comes, and the hover's is on its way
+  const key = `${person} ${want}`
+  if (Date.now() - (ahead.get(key)?.at ?? 0) < AHEAD_MS) return
+  const value = fetch(withPerson(path)).then(res => {
+    if (!res.ok) throw new Error(`${path} answered ${res.status}`)
+    return res.json() as Promise<unknown>
+  })
+  value.catch(() => {})
+  ahead.set(key, { at: Date.now(), value })
+}
 
 // What the hub answers for a key, fetched now and every 30 s. undefined
 // until the first answer, so nothing claims the log is empty early; asked
@@ -33,7 +54,10 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
     live.value = answers.get(cached) as T | undefined
     const refresh = async () => {
       try {
-        const value = await api<T>(path(want))
+        const early = ahead.get(cached)
+        ahead.delete(cached)
+        const fresh = () => api<T>(path(want))
+        const value = early && Date.now() - early.at < AHEAD_MS ? await (early.value as Promise<T>).catch(fresh) : await fresh()
         if (stale) return
         answers.set(cached, value)
         live.value = value
@@ -51,27 +75,41 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
   return live
 }
 
+const digestKey = (range: Range, spans: boolean) => `digest ${range}${spans ? ' spans' : ''}`
+
+function digestPath(range: Range, spans: boolean) {
+  const { from, to } = rangeWindow(range)
+  const q = new URLSearchParams({ tz: tz() })
+  if (from !== undefined) q.set('from', String(from))
+  if (to !== undefined) q.set('to', String(to))
+  if (spans) q.set('spans', '')
+  return `/api/summary?${q}`
+}
+
 // the hub's summary of a range, with what all time decides; spans for the timeline
 export function liveDigest(range: () => Range, spans = false) {
   return polled<Digest>(
-    () => `digest ${range()}${spans ? ' spans' : ''}`,
-    () => {
-      const { from, to } = rangeWindow(range())
-      const q = new URLSearchParams({ tz: tz() })
-      if (from !== undefined) q.set('from', String(from))
-      if (to !== undefined) q.set('to', String(to))
-      if (spans) q.set('spans', '')
-      return `/api/summary?${q}`
-    },
+    () => digestKey(range(), spans),
+    () => digestPath(range(), spans),
   )
 }
 
+// for a page's load: the summary its stored range will ask for
+export function prefetchDigest(url: URL, spans = false) {
+  const range = load<Range>('range', '7')
+  prefetch(url, digestKey(range, spans), digestPath(range, spans))
+}
+
+const sessionPath = (id: string) => `/api/session/${encodeURIComponent(id)}?tz=${encodeURIComponent(tz())}`
+
 // one session's events and draft timelines
 export function liveSession(id: () => string) {
-  return polled<SessionDigest>(
-    () => id() || undefined,
-    id => `/api/session/${encodeURIComponent(id)}?tz=${encodeURIComponent(tz())}`,
-  )
+  return polled<SessionDigest>(() => id() || undefined, sessionPath)
+}
+
+export function prefetchSession(url: URL) {
+  const id = url.searchParams.get('id')
+  if (id) prefetch(url, id, sessionPath(id))
 }
 
 export function whoIsLooking() {
