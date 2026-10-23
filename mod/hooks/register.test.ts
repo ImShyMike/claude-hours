@@ -1249,6 +1249,7 @@ test('stats asks the hub in the time zone of this computer, and lays the numbers
   expect(asked.searchParams.get('tz')).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)
   expect(text).toBe(
     [
+      '',
       'today        2h 14m (3 sessions)',
       'last 7 days  11h 02m',
       'all time     86h 40m',

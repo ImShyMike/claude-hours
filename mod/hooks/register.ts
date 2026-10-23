@@ -861,7 +861,9 @@ async function stats($: EngineInterface) {
   if (!res.ok) return `${server.url} couldn't count (${res.status})`
   const { today, week, allTime, dashboard } = answerOf(res.text) as Stats
   const top = week.projects.map(p => `${p.project} ${hm(p.ms)}`).join(', ')
+  // the first line under Claude Code's "time-track:", not beside it
   return [
+    '',
     `today        ${hm(today.ms)} (${today.sessions} ${today.sessions === 1 ? 'session' : 'sessions'})`,
     `last 7 days  ${hm(week.ms)}`,
     `all time     ${hm(allTime.ms)}`,
