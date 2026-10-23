@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vitest/config'
 import tailwindcss from '@tailwindcss/vite'
-import adapter from '@sveltejs/adapter-node'
+import adapter from '@sveltejs/adapter-bun'
 import { sveltekit } from '@sveltejs/kit/vite'
 
 // What the hub's installer routes hand out, read as plain text when the hub

@@ -72,6 +72,8 @@ Running Claude Code inside WSL works like Linux.
    The Hack Club Auth app is registered at https://auth.hackclub.com/developer/apps
    with the redirect uri `http://localhost:5173/auth/callback` (plus the deployed
    one).
+   `bun run build` needs Bun 1.4 or newer (an older one stops before writing
+   `build/`, with no error), and `bun ./build` runs what it made.
    Deploying it is [below](#deploying).
 
 5. **Connect the mod to a hub** with `/time-track login`, as in the
@@ -366,31 +368,33 @@ keeps, for one hub url, how many lines of each stream are in, the run the
 events stream is in there (its start, header and `acked`), and once a
 finished session is all in its `.gz` sizes so the sweep can skip it. Each send
 reads from that line on, at most 4000 lines and 256 KB, so a read never hits
-`process.run`'s 4 MiB cap and a request stays under node's default 512 KB
-body. A run answered short (a gap: the hub lost rows, or holds less than this
-file says) starts that stream over from line 0 once, and the hub skips what it
-has. A 401 says to log in again, once. Files from the old byte-offset protocol
+`process.run`'s 4 MiB cap and a request stays under the server's default
+512 KB body. A run answered short (a gap: the hub lost rows, or holds less
+than this file says) starts that stream over from line 0 once, and the hub
+skips what it has. A 401 says to log in again, once. Files from the old byte-offset protocol
 (no `"v": 2`) count as nothing sent.
 
 ## Deploying
 
-- The `Dockerfile` builds with bun and runs on node. Each start runs
-  `scripts/migrate.js` first (drizzle-orm's migrator, no drizzle-kit), so a
-  new database gets its tables and a deploy brings an old one up to date. It
-  sets `PORT=3000`, `BODY_SIZE_LIMIT=4M` and the `x-forwarded-*` headers
-  below. Without the image, run `bun run db:migrate` (with `DATABASE_URL`
-  set) before starting a new version; the app doesn't migrate on its own.
+- The `Dockerfile` builds and runs with bun (1.4 or newer, which adapter-bun
+  needs). Each start runs `scripts/migrate.js` first (drizzle-orm's migrator,
+  no drizzle-kit), so a new database gets its tables and a deploy brings an
+  old one up to date. It sets `PORT=3000`, `BODY_SIZE_LIMIT=4M` and the
+  `x-forwarded-*` headers below. Without the image, run `bun run db:migrate`
+  (with `DATABASE_URL` set) before starting a new version; the app doesn't
+  migrate on its own.
 - `vite build` needs no secrets. `DATABASE_URL`, `HCA_CLIENT_ID` and
   `HCA_CLIENT_SECRET` are checked when the server starts, and it refuses to
   boot without them.
-- adapter-node 6 has no `ORIGIN` env anymore. The origin comes from the
-  request: the `Host` header, and `https` unless `PROTOCOL_HEADER` names a
-  header that says otherwise. Behind a TLS proxy that keeps `Host`, that's
-  already right. Otherwise set `paths.origin` in `vite.config.ts`, or
-  `HOST_HEADER`/`PROTOCOL_HEADER` (e.g. `x-forwarded-host`/`x-forwarded-proto`).
+- adapter-bun has no `ORIGIN` env. The origin comes from the request: the
+  `Host` header, and `https` unless `PROTOCOL_HEADER` names a header that says
+  otherwise. Behind a TLS proxy that keeps `Host`, that's already right.
+  Otherwise set `paths.origin` in `vite.config.ts`, or
+  `HOST_HEADER`/`PROTOCOL_HEADER` (e.g.
+  `x-forwarded-host`/`x-forwarded-proto`).
 - Rate limits live in memory, so they assume one server process.
 - Set `BODY_SIZE_LIMIT=4M` to take what `GET /v1/hello` says it takes. The
-  mod stays under node's default 512K either way; `scripts/import.ts` needs
+  mod stays under the default 512K either way; `scripts/import.ts` needs
   more.
 
 ## Layout

@@ -1,8 +1,8 @@
 // Brings DATABASE_URL up to the newest migration in drizzle/, before the hub
 // starts (the Dockerfile runs it). Plain JS on drizzle-orm alone, so the
-// image needs neither drizzle-kit nor bun
+// image needs no drizzle-kit
 //
-//   DATABASE_URL=postgres://... node scripts/migrate.js
+//   DATABASE_URL=postgres://... bun scripts/migrate.js
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import postgres from 'postgres'
