@@ -1027,7 +1027,7 @@ test('a turn sends each run past what the hub holds, and remembers how far it go
   await settle()
   const [first] = posts()
   expect(first!.headers).toMatchObject({ authorization: 'Bearer tok', 'x-protocol': '1', 'content-type': 'application/json' })
-  expect(first!.headers['user-agent']).toStartWith('hook-analytics/')
+  expect(first!.headers['user-agent']).toStartWith('time-track/')
   const [start, rows] = [...runsIn(files.get(EVENTS)!)][0]!
   expect(first!.body.runs).toEqual([
     { session: 'sess-1', stream: 'events', run: start, header: expect.objectContaining({ event: 'session', start }), from: 0, rows },
@@ -1162,7 +1162,7 @@ test('a revoked token says to log in again, once', async ($, on) => {
   await endTurn($)
   await endTurn($)
   await settle()
-  expect(logs.filter(l => l.includes('/hook-analytics login'))).toHaveLength(1)
+  expect(logs.filter(l => l.includes('/time-track login'))).toHaveLength(1)
 })
 
 test('the sweep sends finished sessions once, and skips ones already in', async ($, on) => {
@@ -1200,7 +1200,7 @@ test('a session sent to another hub, or by the old uploads, is sent again', asyn
   expect(JSON.parse(files.get(`${DIR}/sent/bytes-1.json`)!)).toMatchObject({ v: 2, url: 'https://hub.test', gz: [70, 0] })
 })
 
-const command = ($: Engine, args: string) => $.command.run({ command: 'hook-analytics', args } as never)
+const command = ($: Engine, args: string) => $.command.run({ command: 'time-track', args } as never)
 
 test('login answers at once, and saves the token once the code is approved', async ($, on) => {
   const { files, runs } = setup(on)

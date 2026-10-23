@@ -104,7 +104,7 @@ test('rle round trips shapes', () => {
   expect(unrle('12a')).toBe('a'.repeat(12))
 })
 
-// These strings are the ones hook-analytics' own tests expect it to write,
+// These strings are the ones time-track' own tests expect it to write,
 // so the two sides can't drift apart unnoticed
 test('decodes what the mod writes', () => {
   // gaps are in 10ms ticks

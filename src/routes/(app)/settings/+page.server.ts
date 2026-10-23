@@ -16,7 +16,7 @@ export const actions: Actions = {
   // as long as a device code does
   connect: async ({ locals, url }) => {
     const { deviceCode } = await loginCode(db, requirePerson(locals, url).id)
-    return { login: `/hook-analytics login ${url.origin} ${deviceCode}` }
+    return { login: `/time-track login ${url.origin} ${deviceCode}` }
   },
   revoke: async ({ locals, url, request }) => {
     const person = requirePerson(locals, url)

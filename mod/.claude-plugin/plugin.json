@@ -1,6 +1,6 @@
 {
-  "name": "hook-analytics",
+  "name": "time-track",
   "version": "0.2.0",
-  "description": "Logs prompts, turns, interrupts, tool calls and file changes under ~/.claude/analytics, and sends them to a claude-hours hub after /hook-analytics login",
+  "description": "Logs prompts, turns, interrupts, tool calls and file changes under ~/.claude/analytics, and sends them to a claude-hours hub after /time-track login",
   "types": "./types/index.d.ts"
 }

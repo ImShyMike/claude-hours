@@ -1,4 +1,4 @@
-// Turns the raw hook-analytics lines into dashboard numbers. Pure; the hub
+// Turns the raw time-track lines into dashboard numbers. Pure; the hub
 // runs it with the viewer's time zone, so days are their local days, not UTC
 // ones (the session page still runs it in the browser, on one session).
 
@@ -42,7 +42,7 @@ export type Summary = {
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
   // midTurn: sent while Claude was still working
   prompts: { count: number; avgWords: number; avgChars: number; typed: number; midTurn: number }
-  // time spent typing prompts (from hook-analytics' prompt.edit tracking)
+  // time spent typing prompts (from time-track' prompt.edit tracking)
   writing: {
     typingMs: number
     sent: number
@@ -172,7 +172,7 @@ function leadMs(e: Event) {
 
 // Waiting on the person isn't Claude working, and the engine already leaves it
 // out of a turn's durationMs: a main-thread question or plan to approve (its
-// whole call), and a permission dialog (hook-analytics puts those on the turn
+// whole call), and a permission dialog (time-track puts those on the turn
 // row as `waits`: [ms before the turn's end it opened, ms open, tool]). So a
 // turn with one in it began earlier than end - durationMs, and the wait is a
 // gap like any other: the idle cap decides it

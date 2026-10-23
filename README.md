@@ -1,7 +1,7 @@
 # claude-hours
 
 A Hackatime-style dashboard for the time spent coding with Claude Code. The
-`hook-analytics` mod writes JSONL logs to `~/.claude/analytics/events/`, one
+`time-track` mod writes JSONL logs to `~/.claude/analytics/events/`, one
 file per session, and the hub is where people log in with their Hack Club
 account to see their time.
 
@@ -24,7 +24,7 @@ curl -fsSL https://your-hub.example/install.sh | sh -s uninstall --purge   # ...
 That downloads the mod the hub was built with to `~/.claude/claude-hours/mod`
 (rerunning it updates the mod). Then start a new Claude Code session and
 paste in a login command from the hub's settings page
-(`/hook-analytics login https://your-hub.example <code>`, good once for 10
+(`/time-track login https://your-hub.example <code>`, good once for 10
 minutes).
 
 From a clone, `./install.sh` (and `./install.sh uninstall [--purge]`) does
@@ -32,7 +32,7 @@ the same with the clone's own `mod/` folder, so keep the clone where it is.
 
 Either way the installer only edits `env.CLAUDE_CODE_PLUGIN_DIRS` in
 `~/.claude/settings.json` (keeping a `settings.json.bak`), adding the mod's
-folder and dropping any other copy of hook-analytics so nothing gets
+folder and dropping any other copy of time-track so nothing gets
 logged twice. Other plugin folders listed there are left alone.
 
 Windows isn't supported yet: the mod writes with `tee`, `mkdir` and `find`.
@@ -40,7 +40,7 @@ Running Claude Code inside WSL works like Linux.
 
 ### By hand
 
-1. **Get the mod.** `hook-analytics` is a Claude Code plugin made of a
+1. **Get the mod.** `time-track` is a Claude Code plugin made of a
    function-hooks module, in this repo's `mod/` folder:
 
    ```
@@ -93,16 +93,16 @@ Running Claude Code inside WSL works like Linux.
 5. **Connect the mod to a hub.** In Claude Code:
 
    ```
-   /hook-analytics login https://your-hub.example
+   /time-track login https://your-hub.example
    ```
 
    It answers with a link and a code; approve it there and this computer
    starts sending, history included (every finished session not sent yet
    goes up in the background). A login command copied from the hub's
    settings page carries a code approved already
-   (`/hook-analytics login <hub> <code>`), so that one logs in straight
-   away. `/hook-analytics status` says who it's logged
-   in as, `/hook-analytics logout` forgets the token here and on the hub.
+   (`/time-track login <hub> <code>`), so that one logs in straight
+   away. `/time-track status` says who it's logged
+   in as, `/time-track logout` forgets the token here and on the hub.
 
 ## Where things live
 
@@ -123,7 +123,7 @@ Running Claude Code inside WSL works like Linux.
 - **It does hold local paths:** the session's `cwd`, plus the files tools
   touched (`file_changed`). That's why nothing syncs until you say so.
 - **Nothing leaves the machine until you log in to a hub.** The mod appends
-  with `tee -a`. After `/hook-analytics login`, the rows go to that hub after
+  with `tee -a`. After `/time-track login`, the rows go to that hub after
   every turn (see The hub). The token sits in `config.json`, readable only by
   you.
 - **It splits itself.** Each session gets its own small file, so there's no
@@ -270,7 +270,7 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   and doesn't.
 - Time is computed separately for each session and project, so a `cd` from
   one repo into another doesn't bridge them.
-- Typing a prompt counts too. hook-analytics times each draft from its first
+- Typing a prompt counts too. time-track times each draft from its first
   keystroke and puts `typingMs` (pauses over 30 s left out) on the `prompt`
   line. Drafts that never get sent are logged as `draft_abandoned`. Both count
   as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
@@ -303,4 +303,4 @@ draft lasted; an empty starting box and `truncated: false` are left out.
 - `src/lib/analytics/runs.ts`: a session file as the sync protocol's runs
 - `scripts/fixtures.ts`: deterministic fake data (`bun scripts/fixtures.ts` writes it to `fixtures/`)
 - `scripts/import.ts`: sends a folder of session files to a hub
-- `mod/`: the hook-analytics mod that writes the data (see Setup)
+- `mod/`: the time-track mod that writes the data (see Setup)

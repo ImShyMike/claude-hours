@@ -33,11 +33,19 @@ test('add works with no settings.json yet', () => {
 })
 
 test('add keeps other plugins and drops other copies of the mod', () => {
-  const { home, run, read } = setup({ env: { CLAUDE_CODE_PLUGIN_DIRS: '~/other:~/.claude/mods/hook-analytics' } })
+  const { home, run, read } = setup({ env: { CLAUDE_CODE_PLUGIN_DIRS: '~/other:~/.claude/mods/time-track' } })
+  mkdirSync(join(home, '.claude/mods/time-track/.claude-plugin'), { recursive: true })
+  writeFileSync(join(home, '.claude/mods/time-track/.claude-plugin/plugin.json'), '{"name":"time-track"}')
+  run('add', '/repo/mod')
+  expect(read().env).toEqual({ CLAUDE_CODE_PLUGIN_DIRS: '~/other:/repo/mod' })
+})
+
+test('add drops a copy from before the mod was renamed, too', () => {
+  const { home, run, read } = setup({ env: { CLAUDE_CODE_PLUGIN_DIRS: '~/.claude/mods/hook-analytics' } })
   mkdirSync(join(home, '.claude/mods/hook-analytics/.claude-plugin'), { recursive: true })
   writeFileSync(join(home, '.claude/mods/hook-analytics/.claude-plugin/plugin.json'), '{"name":"hook-analytics"}')
   run('add', '/repo/mod')
-  expect(read().env).toEqual({ CLAUDE_CODE_PLUGIN_DIRS: '~/other:/repo/mod' })
+  expect(read().env).toEqual({ CLAUDE_CODE_PLUGIN_DIRS: '/repo/mod' })
 })
 
 test('remove takes out only the mod, and an empty env goes away', () => {

@@ -1,4 +1,4 @@
-# hook-analytics: handoff
+# time-track: handoff
 
 A function-hooks mod (Claude Code plugin) that appends one JSON line per event
 to `~/.claude/analytics/events/<sessionId>.jsonl`. It's loaded in every session through
@@ -49,16 +49,16 @@ Prompt text and file contents are never written.
 - `/clear` gives `session_end` with `reason: clear`, then lines under a new `sessionId` with no `session_start`.
 - `$.session.cwd()` follows a Bash `cd`, but the `cd` call's own `tool` row still lands under the old dir. A hot reload forgets the last cwd, so it writes a `cwd_changed` before its first row even if nothing moved.
 - Saving the hooks module swaps it at the next turn, not mid-turn (seen live 2026-10-20): calls in the turn that saved it still run the old code.
-- Uploads: after `/hook-analytics login <hub>` (device flow; `status`, `logout`), each main-loop turn sends the session's new rows on the hub's sync protocol v1, fire and forget, and at session start a sweep sends finished sessions not all in; the exit's own rows wait for that sweep. `sent/<id>.json` (`v: 2`) counts lines per stream, so a send reads at most 4000 lines / 256 KB from there. Pack moves the file to `.packing` before gzipping so a concurrent read sees fewer lines, never doubled ones. Not yet seen live on this protocol (the byte-offset one was, 2026-10-20).
+- Uploads: after `/time-track login <hub>` (device flow; `status`, `logout`), each main-loop turn sends the session's new rows on the hub's sync protocol v1, fire and forget, and at session start a sweep sends finished sessions not all in; the exit's own rows wait for that sweep. `sent/<id>.json` (`v: 2`) counts lines per stream, so a send reads at most 4000 lines / 256 KB from there. Pack moves the file to `.packing` before gzipping so a concurrent read sees fewer lines, never doubled ones. Not yet seen live on this protocol (the byte-offset one was, 2026-10-20).
 - On the hub, a project is named after the `root` the header or `cwd_changed` sent (the cwd's own folder without one): the hub can't look for `.git` on someone else's disk. Rows logged before 2026-10-20 have no `root`, so a session started in a subfolder still shows as that subfolder there. `rootOf` takes a worktree's repo from its common git dir, so `repo` and `root` name the main repo, never `.claude/worktrees/<x>`.
 - A single line over 256 KB never uploads: the read cut back to whole lines comes back empty, so that stream stops there silently (and the sweep then marks the session done). Draft timelines are capped well below that.
 - This build has no MultiEdit tool. If a later one does, add it to `EDIT_TOOLS`.
 
 ## Dev loop
 
-- `claude plugin validate ~/.claude/mods/hook-analytics`
-- `claude plugin test ~/.claude/mods/hook-analytics` (tests in `hooks/register.test.ts`, mocks answer `$` calls with `{ value }`)
-- type-check: once a session has loaded the mod, the engine lays types in `.claude-plugin/types/` and `tsc -p ~/.claude/mods/hook-analytics` works. The API reference is `.claude-plugin/types/claude-code/index.d.ts` (grep it for event names)
+- `claude plugin validate ~/.claude/mods/time-track`
+- `claude plugin test ~/.claude/mods/time-track` (tests in `hooks/register.test.ts`, mocks answer `$` calls with `{ value }`)
+- type-check: once a session has loaded the mod, the engine lays types in `.claude-plugin/types/` and `tsc -p ~/.claude/mods/time-track` works. The API reference is `.claude-plugin/types/claude-code/index.d.ts` (grep it for event names)
 - headless smoke run from a scratch dir: `claude -p "<prompt>" --allowedTools Bash` (the prompt goes BEFORE `--allowedTools`, which swallows the args after it), then `jq -c . ~/.claude/analytics/events.jsonl`
 - helpers that take `$` must be top-level functions, or validate refuses the module
 - `find` in Claude's Bash shell is `bfs`, so `-newermt` gets whole-second ISO (`2026-10-19T21:32:40Z`), never `@epoch`

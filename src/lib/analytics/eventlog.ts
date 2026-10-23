@@ -1,4 +1,4 @@
-// hook-analytics' event log: one file per session, events/<sessionId>.jsonl.
+// time-track' event log: one file per session, events/<sessionId>.jsonl.
 // The first row is a header, {"v":1,"event":"session","start":<epoch ms>,
 // "cwd":...}. Later rows carry `t`, ms since that start (or `at`, epoch ms,
 // when the mod couldn't read the header back), and no cwd: a cwd_changed row

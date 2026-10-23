@@ -4,6 +4,6 @@ export type StartedSessions = string[]
 
 declare module 'claude-code' {
   interface PluginState {
-    'hook-analytics': { startedSessions: StartedSessions }
+    'time-track': { startedSessions: StartedSessions }
   }
 }

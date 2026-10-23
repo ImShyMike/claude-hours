@@ -13,7 +13,8 @@ import os
 import sys
 
 KEY = "CLAUDE_CODE_PLUGIN_DIRS"
-MOD_NAME = "hook-analytics"
+# its name, and the name it had before, so an old copy is dropped too
+MOD_NAMES = ("time-track", "hook-analytics")
 
 
 def expand(path):
@@ -24,7 +25,7 @@ def is_our_mod(path):
     """Another copy of this mod, which would log every event twice."""
     try:
         with open(os.path.join(expand(path), ".claude-plugin", "plugin.json")) as f:
-            return json.load(f).get("name") == MOD_NAME
+            return json.load(f).get("name") in MOD_NAMES
     except (OSError, ValueError, AttributeError):
         return False
 

@@ -21,7 +21,7 @@ const EVENTS_DIR = `${LOG_DIR}/events`
 const DRAFTS_DIR = `${LOG_DIR}/drafts`
 const FORMAT = 1
 // which files get logged, globs in {"files":{"include":[...],"exclude":[...]}},
-// and where to send them, {"server":{"url":...,"token":...}} (/hook-analytics
+// and where to send them, {"server":{"url":...,"token":...}} (/time-track
 // login writes that part)
 const CONFIG_FILE = `${LOG_DIR}/config.json`
 // how far each session's files have reached the server: sent/<session>.json
@@ -83,7 +83,7 @@ const NOISY_HOME_DIRS = ['.claude/projects', '.claude/state', '.claude/analytics
 
 type Fields = Record<string, unknown>
 
-const startedSessions = atom({ plugin: 'hook-analytics', key: 'startedSessions' } as const, [] as StartedSessions)
+const startedSessions = atom({ plugin: 'time-track', key: 'startedSessions' } as const, [] as StartedSessions)
 
 // `find -newermt` wants whole seconds on both GNU find and bfs
 const isoSeconds = (ms: number) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -566,7 +566,7 @@ async function request($: EngineInterface, url: string, init: { method?: string;
   const timeout = $.clock.sleep(UPLOAD_TIMEOUT_MS).then(() => {
     throw new Error(`no answer from ${new URL(url).origin} in ${UPLOAD_TIMEOUT_MS / 1000}s`)
   })
-  const headers = { 'user-agent': `hook-analytics/${await versionOf($)}`, ...init.headers }
+  const headers = { 'user-agent': `time-track/${await versionOf($)}`, ...init.headers }
   return Promise.race([$.http.fetch(url, { ...init, headers }), timeout])
 }
 
@@ -586,7 +586,7 @@ async function sendRuns($: EngineInterface, server: Server, runs: RunOut[]) {
     body: JSON.stringify({ runs }),
   })
   const answer = answerOf(res.text)
-  if (res.status === 401) throw new Error(`${server.url} turned down this computer's token, run /hook-analytics login`)
+  if (res.status === 401) throw new Error(`${server.url} turned down this computer's token, run /time-track login`)
   if (res.status === 400 && Array.isArray(answer.protocols))
     throw new Error(`${server.url} speaks protocol ${answer.protocols.join(', ')} and this mod ${PROTOCOL}, update the one behind`)
   if (!res.ok) throw new Error(`upload refused: ${res.status} ${res.text.slice(0, 200)}`)
@@ -689,12 +689,12 @@ function sweep($: EngineInterface) {
     .catch(err => warnOnce($, err))
 }
 
-// Logging in to a hub: the device flow (RFC 8628). /hook-analytics login
+// Logging in to a hub: the device flow (RFC 8628). /time-track login
 // answers at once with a code to approve on the hub; a poll behind it saves
 // the token once someone does, then sends everything not sent yet. A login
 // command copied from the hub's settings carries a code approved already,
 // swapped for the token straight away
-const USAGE = 'usage: /hook-analytics login <hub url> [code] | status | logout'
+const USAGE = 'usage: /time-track login <hub url> [code] | status | logout'
 // the newest login, so starting another stops the last one's poll
 let loginId = 0
 
@@ -815,7 +815,7 @@ async function loginStatus($: EngineInterface) {
   if (!server) return `not logged in. ${USAGE}`
   const who = await whoami($, server).catch(err => err as Error)
   if (who instanceof Error) return `logged in to ${server.url}, which isn't answering (${who.message})`
-  return who ? `logged in to ${server.url} as ${who}` : `${server.url} turned down this computer's token, run /hook-analytics login`
+  return who ? `logged in to ${server.url} as ${who}` : `${server.url} turned down this computer's token, run /time-track login`
 }
 
 // forgets the token here and asks the hub to forget it too
@@ -1044,7 +1044,7 @@ export const register: Register = on => {
     const started = await next(e)
     await $.command
       .register({
-        name: 'hook-analytics',
+        name: 'time-track',
         description: 'Log in to a claude-hours hub to send it your analytics',
         argumentHint: 'login <hub url> [code] | status | logout',
       })
@@ -1058,8 +1058,8 @@ export const register: Register = on => {
     return started
   })
 
-  // /hook-analytics login | status | logout
-  on('command.run', { command: 'hook-analytics' }, async ($, e) => ({ text: await runCommand($, e.args) })).catch(($, _, next) => ({
+  // /time-track login | status | logout
+  on('command.run', { command: 'time-track' }, async ($, e) => ({ text: await runCommand($, e.args) })).catch(($, _, next) => ({
     text: `${$.plugin.name}: ${next.error.message ?? next.error.kind}`,
   }))
 

@@ -1,4 +1,4 @@
-// Writes fake but plausible hook-analytics events to fixtures/events.jsonl, so
+// Writes fake but plausible time-track events to fixtures/events.jsonl, so
 // the dashboard has something to draw while the real log is still tiny.
 // Deterministic: the same seed gives the same file (relative to today).
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'

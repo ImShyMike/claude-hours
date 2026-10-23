@@ -49,7 +49,7 @@ broken stretch of one run can't renumber the next.
 
 ```
 POST /v1/events
-User-Agent: hook-analytics/<version>
+User-Agent: time-track/<version>
 X-Protocol: 1
 Authorization: Bearer hct_...
 Content-Type: application/json
@@ -95,7 +95,7 @@ dashboard used.
 
 ### The mod's side
 
-`/hook-analytics login <hub>` checks `GET /v1/hello`, starts the device flow
+`/time-track login <hub>` checks `GET /v1/hello`, starts the device flow
 and answers at once with the link (built from the url typed, not the hub's
 `verification_uri`, which a hub behind a proxy may get wrong). A poll behind
 it saves `server` in `config.json` (written under `umask 077`, the rest of the
@@ -194,7 +194,7 @@ has. A 401 says to log in again, once. Files from the old byte-offset protocol
       summed on the hub (`/api/summary`, `/api/session/:id`), equal to what
       the old dashboard summed from the same files; an admin picks whose to
       see
-- [x] The mod: `/hook-analytics login | status | logout`, after-turn sync and
+- [x] The mod: `/time-track login | status | logout`, after-turn sync and
       the startup sweep on protocol v1
 - [x] `curl <hub>/install.sh | sh` and copyable login commands on settings
 - [x] The mod's requests (captured from its own code under the test engine)

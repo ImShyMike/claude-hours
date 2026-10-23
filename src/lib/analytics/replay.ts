@@ -1,4 +1,4 @@
-// Rebuilds a prompt draft from hook-analytics' edit timeline. Shapes only:
+// Rebuilds a prompt draft from time-track' edit timeline. Shapes only:
 // 'a' is any character, ' ' a blank, '\n' a newline. Pure, shared by the
 // session page and the tests.
 
@@ -138,7 +138,7 @@ export function describe(step: Step) {
 }
 
 // --- the stored format -------------------------------------------------
-// v 1 (hook-analytics' encodeSteps; keep the two in step): shapes are
+// v 1 (time-track' encodeSteps; keep the two in step): shapes are
 // run-length encoded, a for a letter, _ a blank, n a newline ("5a_3a"), and
 // steps are one string of comma separated "<dt><kind>[@pos][-removed]
 // [+shape][:who]". dt is ms since the previous step; a missing position is
