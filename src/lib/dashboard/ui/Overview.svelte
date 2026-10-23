@@ -104,7 +104,7 @@
   const sharedTip = (ms: number) => `<strong>${duration(ms)} active</strong>time two projects shared counts for each`
 </script>
 
-<div class="flex flex-col gap-6">
+<div class="flex flex-col gap-4 md:gap-6">
   <div class="flex flex-wrap items-end justify-between gap-4">
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Overview</h1>
@@ -117,13 +117,13 @@
   </div>
 
   {#if !s || !ever}
-    <div class="grid gap-x-4 gap-y-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+    <div class="grid gap-4 md:max-lg:gap-y-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <Skeleton class="h-40 rounded-xl" />
       <Skeleton class="h-40 rounded-xl" />
     </div>
     <Skeleton class="h-64 rounded-xl" />
   {:else}
-    <div class="grid gap-x-4 gap-y-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+    <div class="grid gap-4 md:max-lg:gap-y-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <Card.Root class="justify-center">
         <Card.Header>
           <Card.Description>Active with Claude</Card.Description>
@@ -167,7 +167,7 @@
         </Card.Root>
       {/if}
 
-      <div class="grid gap-x-4 gap-y-6 md:grid-cols-2">
+      <div class="grid gap-4 md:grid-cols-2">
         <Card.Root>
           <Card.Header><Card.Title>Projects</Card.Title></Card.Header>
           <Card.Content>
@@ -202,7 +202,7 @@
         </Card.Root>
       </div>
 
-      <div class="grid gap-x-4 gap-y-6 md:grid-cols-2">
+      <div class="grid gap-4 md:grid-cols-2">
         <Card.Root>
           <Card.Header>
             <Card.Title>Time of day</Card.Title>
