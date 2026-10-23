@@ -58,3 +58,7 @@ curl -fsSL https://claude-hours.k.hackclub.dev/install.sh | sh -s uninstall --pu
 - [How it works](docs/how-it-works.md): what gets logged, how time is
   counted, the sync protocol, and running or deploying it yourself
 - [mod/TODO.md](mod/TODO.md): every field the mod logs, and its known limits
+
+## License
+
+[AGPL-3.0](LICENSE)
