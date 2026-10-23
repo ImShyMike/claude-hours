@@ -6,6 +6,7 @@ import {
   decideDeviceCode,
   findPendingCode,
   listDevices,
+  loginCode,
   newUserCode,
   normalizeUserCode,
   pollDeviceCode,
@@ -57,6 +58,32 @@ describe('the device flow', () => {
 
     expect((await authenticateDevice(db, result.token, at(16)))?.person.id).toBe(ana.id)
     expect(await listDevices(db, ana.id)).toMatchObject([{ name: 'ana-laptop' }])
+  })
+
+  test("a code made on the hub swaps at once, named by the mod, and can't be shown on /device", async () => {
+    const { db, ana } = await setup()
+    const { deviceCode, userCode } = await loginCode(db, ana.id, at(0))
+    expect(await findPendingCode(db, userCode, at(1))).toBeNull()
+    const result = await pollDeviceCode(db, deviceCode, at(2), 'ana-desktop')
+    if (!('token' in result)) throw new Error(`expected a token, got ${result.error}`)
+    expect((await authenticateDevice(db, result.token, at(3)))?.person.id).toBe(ana.id)
+    expect(await listDevices(db, ana.id)).toMatchObject([{ name: 'ana-desktop' }])
+    expect(await pollDeviceCode(db, deviceCode, at(4), 'ana-desktop')).toEqual({ error: 'invalid_grant' })
+  })
+
+  test('a code made on the hub runs out like any other, and the mod naming one never renames a device', async () => {
+    const { db, ana } = await setup()
+    const late = await loginCode(db, ana.id, at(0))
+    expect(await pollDeviceCode(db, late.deviceCode, at(601))).toEqual({ error: 'expired_token' })
+    // a code the mod started keeps the mod's name, whatever the poll says
+    const { deviceCode, userCode } = await startDeviceCode(db, 'ana-laptop', at(700))
+    await decideDeviceCode(db, userCode, ana.id, true, at(701))
+    await pollDeviceCode(db, deviceCode, at(706), 'something else')
+    expect(await listDevices(db, ana.id)).toMatchObject([{ name: 'ana-laptop' }])
+    // and one made on the hub with no name from the mod gets a plain one
+    const bare = await loginCode(db, ana.id, at(800))
+    await pollDeviceCode(db, bare.deviceCode, at(801))
+    expect((await listDevices(db, ana.id)).map(d => d.name).sort()).toEqual(['Claude Code', 'ana-laptop'])
   })
 
   test('polling faster than the interval gets slow_down', async () => {

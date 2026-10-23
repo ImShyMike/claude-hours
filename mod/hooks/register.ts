@@ -669,8 +669,10 @@ function sweep($: EngineInterface) {
 
 // Logging in to a hub: the device flow (RFC 8628). /hook-analytics login
 // answers at once with a code to approve on the hub; a poll behind it saves
-// the token once someone does, then sends everything not sent yet
-const USAGE = 'usage: /hook-analytics login <hub url> | status | logout'
+// the token once someone does, then sends everything not sent yet. A login
+// command copied from the hub's settings carries a code approved already,
+// swapped for the token straight away
+const USAGE = 'usage: /hook-analytics login <hub url> [code] | status | logout'
 // the newest login, so starting another stops the last one's poll
 let loginId = 0
 
@@ -692,7 +694,19 @@ async function whoami($: EngineInterface, server: Server) {
   return String(me.name ?? me.email ?? 'someone')
 }
 
-async function startLogin($: EngineInterface, arg: string) {
+// saves the token, says who it is, and sends what's waiting
+async function finishLogin($: EngineInterface, url: string, token: string) {
+  const dir = await homeDir($)
+  const server = { url, token }
+  await writeConfig($, dir, { ...(await readConfig($, dir)), server })
+  const who = await whoami($, server).catch(() => undefined)
+  warned = false
+  sweep($)
+  syncSession($)
+  return `logged in to ${url}${who ? ` as ${who}` : ''}`
+}
+
+async function startLogin($: EngineInterface, arg: string, approved: string) {
   const dir = await homeDir($)
   const url = (arg || (await serverOf($, dir))?.url || '').replace(/\/+$/, '')
   if (!/^https?:\/\/[^/\s]+/.test(url)) return `which hub? ${USAGE}`
@@ -701,10 +715,24 @@ async function startLogin($: EngineInterface, arg: string) {
   if (!Array.isArray(protocols)) return `${url} doesn't answer like a claude-hours hub${hello ? ` (${hello.status})` : ''}`
   if (!protocols.includes(PROTOCOL)) return `${url} speaks protocol ${protocols.join(', ')} and this mod ${PROTOCOL}, update the one behind`
   const host = await $.process.run(['uname', '-n'], { timeoutMs: 1_000 }).catch(() => undefined)
+  const deviceName = host?.stdout.trim() || 'Claude Code'
+  if (approved) {
+    loginId++
+    const res = await request($, `${url}/v1/device/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device_code: approved, device_name: deviceName }),
+    })
+    const answer = answerOf(res.text)
+    if (res.ok && typeof answer.access_token === 'string') return finishLogin($, url, answer.access_token)
+    if (answer.error === 'expired_token') return `that login command ran out, copy a new one from ${url}/settings`
+    if (answer.error === 'invalid_grant') return `that login command was used already or got cut short, copy a new one from ${url}/settings`
+    return `${url} wouldn't log in: ${res.status} ${String(answer.error ?? '')}`.trim()
+  }
   const res = await request($, `${url}/v1/device/code`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ device_name: host?.stdout.trim() || 'Claude Code' }),
+    body: JSON.stringify({ device_name: deviceName }),
   })
   const code = answerOf(res.text)
   if (!res.ok || typeof code.device_code !== 'string' || typeof code.user_code !== 'string')
@@ -734,14 +762,7 @@ function pollLogin($: EngineInterface, url: string, code: Record<string, unknown
       if (!res) continue
       const answer = answerOf(res.text)
       if (res.ok && typeof answer.access_token === 'string') {
-        const dir = await homeDir($)
-        const server = { url, token: answer.access_token }
-        await writeConfig($, dir, { ...(await readConfig($, dir)), server })
-        const who = await whoami($, server).catch(() => undefined)
-        $.ui.toast(`${$.plugin.name}: logged in to ${url}${who ? ` as ${who}` : ''}`)
-        warned = false
-        sweep($)
-        syncSession($)
+        $.ui.toast(`${$.plugin.name}: ${await finishLogin($, url, answer.access_token)}`)
         return
       }
       if (answer.error === 'authorization_pending') continue
@@ -792,8 +813,8 @@ async function logout($: EngineInterface) {
 }
 
 async function runCommand($: EngineInterface, args: string) {
-  const [verb = '', arg = ''] = args.trim().split(/\s+/)
-  if (verb === 'login') return startLogin($, arg)
+  const [verb = '', arg = '', code = ''] = args.trim().split(/\s+/)
+  if (verb === 'login') return startLogin($, arg, code)
   if (verb === 'status' || !verb) return loginStatus($)
   if (verb === 'logout') return logout($)
   return USAGE
@@ -1003,7 +1024,7 @@ export const register: Register = on => {
       .register({
         name: 'hook-analytics',
         description: 'Log in to a claude-hours hub to send it your analytics',
-        argumentHint: 'login <hub url> | status | logout',
+        argumentHint: 'login <hub url> [code] | status | logout',
       })
       .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
     const sessionId = await $.session.id()

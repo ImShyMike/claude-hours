@@ -101,6 +101,16 @@ it saves `server` in `config.json` (written under `umask 077`, the rest of the
 config kept), then sends everything not sent. `logout` drops it and calls
 `DELETE /v1/me`, which revokes that token (as JSON: SvelteKit refuses a
 bodyless DELETE as a cross-site form). `status` asks `GET /v1/me`.
+`login <hub> <code>` takes a code made on the hub's settings page instead:
+the hub makes it approved from the start (`loginCode`), so the mod swaps it
+at `POST /v1/device/token` once, sending its hostname as `device_name` to
+name the device.
+
+The hub serves its own installer: `GET /install.sh` is `install.sh` with
+`hub=''` filled in, and `GET /install/<file>` hands out the mod's files and
+`scripts/settings.py`, built in with `?raw` imports (the repo's private, so
+the installer can't fetch them from GitHub). The script puts the mod in
+`~/.claude/claude-hours/mod`.
 
 After every main-loop turn the mod sends its session's new rows, and at
 session start a sweep sends finished sessions not all in. `sent/<session>.json`
@@ -185,6 +195,7 @@ has. A 401 says to log in again, once. Files from the old byte-offset protocol
       see
 - [x] The mod: `/hook-analytics login | status | logout`, after-turn sync and
       the startup sweep on protocol v1
+- [x] `curl <hub>/install.sh | sh` and copyable login commands on settings
 - [x] The mod's requests (captured from its own code under the test engine)
       replayed into `node build`: every run acked as expected, and the data
       the same as the import path's

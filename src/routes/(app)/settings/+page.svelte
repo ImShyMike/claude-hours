@@ -1,12 +1,14 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
   import * as Alert from '#lib/components/ui/alert/index.js'
+  import TerminalIcon from '@lucide/svelte/icons/terminal'
   import { Badge } from '#lib/components/ui/badge/index.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Input } from '#lib/components/ui/input/index.js'
   import { Label } from '#lib/components/ui/label/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
+  import CopyCommand from '#lib/dashboard/ui/CopyCommand.svelte'
   import { day } from '#lib/format.js'
   import type { PageProps } from './$types'
 
@@ -19,6 +21,30 @@
       <Alert.Description>{form.problem}</Alert.Description>
     </Alert.Root>
   {/if}
+
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>Connect Claude Code</Card.Title>
+      <Card.Description>Two commands to start sending your sessions here from another computer.</Card.Description>
+    </Card.Header>
+    <Card.Content class="flex flex-col gap-5">
+      <div class="flex flex-col gap-2">
+        <p class="text-sm">1. Install the mod, in a terminal (macOS or Linux):</p>
+        <CopyCommand command={`curl -fsSL ${data.hub}/install.sh | sh`} />
+      </div>
+      <div class="flex flex-col gap-2">
+        <p class="text-sm">2. Start a new Claude Code session and paste in a login command:</p>
+        {#if form?.login}
+          <CopyCommand command={form.login} />
+          <p class="text-xs text-muted-foreground">Works once, for the next 10 minutes.</p>
+        {:else}
+          <form method="post" action="?/connect" use:enhance>
+            <Button type="submit" variant="outline" size="sm"><TerminalIcon /> Make a login command</Button>
+          </form>
+        {/if}
+      </div>
+    </Card.Content>
+  </Card.Root>
 
   <Card.Root>
     <Card.Header>
@@ -53,7 +79,7 @@
           </Table.Body>
         </Table.Root>
       {:else}
-        <p class="text-sm text-muted-foreground">No devices yet. Log in from the mod in Claude Code to connect one.</p>
+        <p class="text-sm text-muted-foreground">No devices yet. Connect one with the commands above.</p>
       {/if}
     </Card.Content>
   </Card.Root>

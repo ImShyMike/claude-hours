@@ -2,7 +2,9 @@
 // (startDeviceCode), shows the person the user code and polls with the device
 // code (pollDeviceCode). The person types the user code into /device while
 // logged in and approves (decideDeviceCode); the next poll swaps the device
-// code for a long-lived device token
+// code for a long-lived device token. Or the person, already logged in on
+// the hub, makes a code that's approved from the start (loginCode) and pastes
+// it into the mod's login command, which swaps it at once
 import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm'
 import { deviceCodes, deviceTokens, people, sha256, type Db } from './db/index'
 import { randomToken } from './tokens'
@@ -31,7 +33,8 @@ export function normalizeUserCode(input: string) {
   return `${letters.slice(0, 4)}-${letters.slice(4)}`
 }
 
-export async function startDeviceCode(db: Db, deviceName: string, now = new Date()) {
+// approvedBy: a code approved from the start, for that person
+export async function startDeviceCode(db: Db, deviceName: string, now = new Date(), approvedBy?: number) {
   await db.delete(deviceCodes).where(lt(deviceCodes.expiresAt, now))
   const deviceCode = randomToken()
   const expiresAt = new Date(now.getTime() + CODE_TTL_S * 1000)
@@ -41,7 +44,14 @@ export async function startDeviceCode(db: Db, deviceName: string, now = new Date
     const userCode = newUserCode()
     const rows = await db
       .insert(deviceCodes)
-      .values({ deviceCodeHash: await sha256(deviceCode), userCode, deviceName, expiresAt, createdAt: now })
+      .values({
+        deviceCodeHash: await sha256(deviceCode),
+        userCode,
+        deviceName,
+        expiresAt,
+        createdAt: now,
+        ...(approvedBy !== undefined && { personId: approvedBy, approvedAt: now }),
+      })
       .onConflictDoNothing({ target: deviceCodes.userCode })
       .returning({ userCode: deviceCodes.userCode })
     if (rows.length) return { deviceCode, userCode, expiresAt }
@@ -49,9 +59,15 @@ export async function startDeviceCode(db: Db, deviceName: string, now = new Date
   }
 }
 
+// A code for the hub's "connect Claude Code" command: approved already, so
+// the mod's first poll gets the token. The device is named by the mod then
+export const loginCode = (db: Db, personId: number, now = new Date()) => startDeviceCode(db, '', now, personId)
+
 export type PollResult = { token: string } | { error: 'authorization_pending' | 'slow_down' | 'access_denied' | 'expired_token' | 'invalid_grant' }
 
-export async function pollDeviceCode(db: Db, deviceCode: string, now = new Date()): Promise<PollResult> {
+// deviceName: what the mod calls this computer, for a code made on the hub
+// (one the mod started has its name already)
+export async function pollDeviceCode(db: Db, deviceCode: string, now = new Date(), deviceName?: string): Promise<PollResult> {
   const hash = await sha256(deviceCode)
   return db.transaction(async tx => {
     const [row] = await tx.select().from(deviceCodes).where(eq(deviceCodes.deviceCodeHash, hash)).for('update')
@@ -66,7 +82,8 @@ export async function pollDeviceCode(db: Db, deviceCode: string, now = new Date(
       // mint a second token
       await tx.delete(deviceCodes).where(eq(deviceCodes.deviceCodeHash, hash))
       const token = randomToken('hct_')
-      await tx.insert(deviceTokens).values({ tokenHash: await sha256(token), personId: row.personId, name: row.deviceName, createdAt: now })
+      const name = row.deviceName || deviceName || 'Claude Code'
+      await tx.insert(deviceTokens).values({ tokenHash: await sha256(token), personId: row.personId, name, createdAt: now })
       return { token }
     }
     // a second of slack, so a poll that wakes up a hair early isn't punished

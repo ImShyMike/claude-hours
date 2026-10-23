@@ -11,22 +11,29 @@ There are two halves: the mod, which records, and the hub, which shows.
 
 ### Quick install (macOS and Linux)
 
-Needs Claude Code and `python3` (on macOS it comes with the Command Line
-Tools, same as `git`). From this repo:
+Needs Claude Code, `curl` and `python3` (on macOS it comes with the Command
+Line Tools, same as `git`). The hub's settings page has both commands ready
+to copy. From a hub, no clone needed:
 
 ```sh
-./install.sh                     # load the mod in every Claude Code session
-./install.sh uninstall           # stop loading it, keep your data
-./install.sh uninstall --purge   # stop loading it and delete ~/.claude/analytics
+curl -fsSL https://your-hub.example/install.sh | sh                          # install, or update
+curl -fsSL https://your-hub.example/install.sh | sh -s uninstall           # stop loading it, keep your data
+curl -fsSL https://your-hub.example/install.sh | sh -s uninstall --purge   # ...and delete ~/.claude/analytics
 ```
 
-The installer only edits `env.CLAUDE_CODE_PLUGIN_DIRS` in
-`~/.claude/settings.json` (keeping a `settings.json.bak`), adding this repo's
-`mod/` folder and dropping any other copy of hook-analytics so nothing gets
-logged twice. Other plugin folders listed there are left alone. Then start
-a new Claude Code session. The mod loads from this repo's `mod/`, so keep
-the clone where it is. The installer doesn't touch the hub; that
-stays a repo thing (`bun run dev`, below).
+That downloads the mod the hub was built with to `~/.claude/claude-hours/mod`
+(rerunning it updates the mod). Then start a new Claude Code session and
+paste in a login command from the hub's settings page
+(`/hook-analytics login https://your-hub.example <code>`, good once for 10
+minutes).
+
+From a clone, `./install.sh` (and `./install.sh uninstall [--purge]`) does
+the same with the clone's own `mod/` folder, so keep the clone where it is.
+
+Either way the installer only edits `env.CLAUDE_CODE_PLUGIN_DIRS` in
+`~/.claude/settings.json` (keeping a `settings.json.bak`), adding the mod's
+folder and dropping any other copy of hook-analytics so nothing gets
+logged twice. Other plugin folders listed there are left alone.
 
 Windows isn't supported yet: the mod writes with `tee`, `mkdir` and `find`.
 Running Claude Code inside WSL works like Linux.
@@ -91,7 +98,10 @@ Running Claude Code inside WSL works like Linux.
 
    It answers with a link and a code; approve it there and this computer
    starts sending, history included (every finished session not sent yet
-   goes up in the background). `/hook-analytics status` says who it's logged
+   goes up in the background). A login command copied from the hub's
+   settings page carries a code approved already
+   (`/hook-analytics login <hub> <code>`), so that one logs in straight
+   away. `/hook-analytics status` says who it's logged
    in as, `/hook-analytics logout` forgets the token here and on the hub.
 
 ## Where things live
