@@ -22,7 +22,8 @@ curl -fsSL https://your-hub.example/install.sh | sh -s uninstall --purge   # ...
 ```
 
 That downloads the mod the hub was built with to `~/.claude/claude-hours/mod`
-(rerunning it updates the mod). Then start a new Claude Code session and
+(rerunning it updates the mod, and so does `/time-track update`, which a
+toast suggests once the hub has a newer one). Then start a new Claude Code session and
 paste in a login command from the hub's settings page
 (`/time-track login https://your-hub.example <code>`, good once for 10
 minutes).
@@ -102,9 +103,10 @@ Running Claude Code inside WSL works like Linux.
    settings page carries a code approved already
    (`/time-track login <hub> <code>`), so that one logs in straight
    away. `/time-track status` says who it's logged
-   in as, `/time-track stats` shows today's time, the last 7 days' (with
-   the top projects) and all time's, and `/time-track logout` forgets the
-   token here and on the hub.
+   in as and how uploads are going (the last sync, finished sessions still
+   waiting, the last problem), `/time-track stats` shows today's time, the
+   last 7 days' (with the top projects) and all time's, and
+   `/time-track logout` forgets the token here and on the hub.
 
 ## Where things live
 
@@ -192,6 +194,12 @@ or to only log some, write `~/.claude/analytics/config.json`:
 A left-out file still logs its tool call, just without the path, so time and
 tool counts stay right. Changes apply from the next tool call. A broken
 config logs everything, with a warning in the mod's log.
+
+To leave a whole repo out, run `/time-track ignore` in a session inside it
+(again to take it back). That adds its root to `"ignore": [...]` in the
+config: nothing done in it is logged or sent from then on, and a file in it
+touched from elsewhere loses its path like an excluded one. What was sent
+before stays on the hub.
 
 ### How the mod hears things
 

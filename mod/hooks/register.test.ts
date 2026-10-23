@@ -118,13 +118,25 @@ const setup = (on: On) => {
   on('prompt.change', (_, e) => ({ text: e.text }))
   on('fs.exists', (_, e) => ({ value: files.has(e.path) }))
   on('fs.read', (_, e) => ({ value: files.get(e.path) ?? '' }))
+  // every write in order, a path again each time it's rewritten
+  const writes: string[] = []
   on('fs.write', (_, e) => {
+    writes.push(e.path)
     files.set(e.path, e.text)
     return { value: undefined }
   })
   on('prompt.submit', (_, e) => ({ text: e.text }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
+  // the plugin's store, kept across sessions
+  const store = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
   return {
+    store,
+    writes,
     runs,
     lines,
     raw,
@@ -915,7 +927,15 @@ test('a session ending gzips its files behind the last row', async ($, on) => {
 const hub = (on: On, { down = false } = {}) => {
   const stored = new Map<string, unknown[]>()
   const requests: { url: string; path: string; method: string; headers: Record<string, string>; body?: any }[] = []
-  const state = { token: 'tok', pending: 0, denied: false }
+  // release: the mod it hands out, by /v1/hello and /install/mod/<file>
+  // gone: files it lists there but answers 404 for
+  const state = {
+    token: 'tok',
+    pending: 0,
+    denied: false,
+    release: undefined as { version: string; files: string[] } | undefined,
+    gone: [] as string[],
+  }
   // the upload's 10 s timeout never fires; the login's poll waits no time
   on('clock.sleep', (_, e) => (e.ms === 10_000 ? new Promise(() => {}) : { value: undefined }))
   on('http.fetch', (_, e) => {
@@ -927,7 +947,13 @@ const hub = (on: On, { down = false } = {}) => {
     if (down) return { value: { status: 503, ok: false, headers: {}, text: 'down' } }
     // SvelteKit's origin check: anything but GET that could be a form needs a JSON type
     if (e.init?.method && e.init.method !== 'GET' && headers['content-type'] !== 'application/json') return reply(403, { message: 'cross-site form' })
-    if (url.pathname === '/v1/hello') return reply(200, { protocols: [1] })
+    if (url.pathname === '/v1/hello') return reply(200, { protocols: [1], ...(state.release && { mod: state.release }) })
+    if (url.pathname.startsWith('/install/mod/')) {
+      const file = url.pathname.slice('/install/mod/'.length)
+      if (!state.release?.files.includes(file) || state.gone.includes(file)) return reply(404, { message: 'Not a file the installer needs' })
+      const text = file.endsWith('release.json') ? JSON.stringify({ version: state.release.version }) : `${file} at ${state.release.version}`
+      return { value: { status: 200, ok: true, headers: {}, text } }
+    }
     if (url.pathname === '/v1/device/code')
       return reply(200, {
         device_code: 'dc',
@@ -1286,4 +1312,111 @@ test('status says who this computer is logged in as, logout forgets it here and 
   expect((await command($, 'logout')).text).toBe('logged out of https://hub.test')
   expect(requests.at(-1)).toMatchObject({ path: '/v1/me', method: 'DELETE', headers: { authorization: 'Bearer tok' } })
   expect(JSON.parse(files.get(CONFIG)!)).toEqual({ files: { include: ['src/**'] } })
+})
+
+test('ignore leaves the repo out of the log, files in it too, until it is run again', async ($, on) => {
+  const { lines, headers, files, cd } = setup(on)
+  on('tool.call', () => ({ result: {} }))
+  files.set(CONFIG, JSON.stringify({ files: { exclude: ['*.log'] } }))
+  cd('/proj/src')
+
+  expect((await command($, 'ignore')).text).toContain('ignoring /proj:')
+  expect(JSON.parse(files.get(CONFIG)!)).toEqual({ files: { exclude: ['*.log'] }, ignore: ['/proj'] })
+  await $.prompt.submit({ text: 'secret plans', wait: false, origin: { kind: 'composer' } })
+  await $.tool.call({ tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
+  expect(lines).toEqual([])
+  expect(headers).toEqual([])
+
+  // from another repo, a call into the ignored one keeps its row but not the file
+  cd('/code/hub')
+  await $.tool.call({ tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
+  expect(lines.map(l => l.event)).toEqual(['tool'])
+  expect(lines[0]).toMatchObject({ tool: 'Write' })
+  expect(lines[0]!.file).toBeUndefined()
+  expect(lines[0]!.repo).toBeUndefined()
+
+  cd('/proj')
+  expect((await command($, 'ignore')).text).toBe('logging /proj again')
+  expect(JSON.parse(files.get(CONFIG)!)).toEqual({ files: { exclude: ['*.log'] } })
+  await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
+  expect(lines.at(-1)).toMatchObject({ event: 'prompt', words: 1 })
+})
+
+test('status tells how uploads are going and what is ignored', async ($, on) => {
+  const { files, setSweep, tick, cd } = setup(on)
+  const { state } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  await endTurn($)
+  await settle()
+  tick(3 * 60_000)
+  expect((await command($, 'status')).text).toBe(['', 'logged in to https://hub.test as Miggy', 'last synced 3m ago'].join('\n'))
+
+  // a finished session not all in, and a token the hub stopped taking
+  files.set(`${DIR}/events/old-1.jsonl.gz`, '{"v":1,"event":"session","start":1,"cwd":"/p"}\n')
+  setSweep('old-1 50 0\n')
+  state.token = 'someone-else'
+  await endTurn($)
+  await settle()
+  tick(60_000)
+  cd('/code/hub')
+  await command($, 'ignore')
+  const { text } = await command($, 'status')
+  expect(text!.split('\n')).toEqual([
+    '',
+    "https://hub.test turned down this computer's token, run /time-track login",
+    'last synced 4m ago',
+    '1 finished session waiting to send',
+    "last problem 1m ago: https://hub.test turned down this computer's token, run /time-track login",
+    'ignoring /code/hub',
+  ])
+})
+
+// the mod's folder, as a clone's update answer names it (the test engine
+// has no $.plugin)
+const pluginRoot = async ($: Engine) => /runs from (\S+), not/.exec(String((await command($, 'update')).text))![1]!
+
+test('a downloaded mod hears about a newer one, and update swaps it in whole', async ($, on) => {
+  const { files, writes } = setup(on)
+  const { toasts } = logged(on)
+  const { state, requests } = hub(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const root = await pluginRoot($)
+  const RELEASE = `${root}/.claude-plugin/release.json`
+  files.set(CONFIG, JSON.stringify(SERVER))
+  files.set(RELEASE, JSON.stringify({ version: 'old' }))
+  state.release = { version: 'new', files: ['.claude-plugin/release.json', 'hooks/register.ts', '.claude-plugin/plugin.json'] }
+
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true } as never)
+  await settle()
+  expect(toasts).toContain('time-track has an update, run /time-track update')
+
+  expect((await command($, 'update')).text).toBe('updated time-track. new sessions load it')
+  expect(files.get(`${root}/hooks/register.ts`)).toBe('hooks/register.ts at new')
+  expect(JSON.parse(files.get(RELEASE)!)).toEqual({ version: 'new' })
+  // every file down before any is written, the release last
+  expect(writes.filter(f => f.startsWith(`${root}/`))).toEqual([`${root}/hooks/register.ts`, `${root}/.claude-plugin/plugin.json`, RELEASE])
+  expect(requests.filter(r => r.path.startsWith('/install/'))).toHaveLength(3)
+  expect((await command($, 'update')).text).toBe('already up to date')
+})
+
+test('update leaves a clone alone, and changes nothing when the hub hands out something odd', async ($, on) => {
+  const { files } = setup(on)
+  const { state } = hub(on)
+  const root = await pluginRoot($)
+  const RELEASE = `${root}/.claude-plugin/release.json`
+  files.set(CONFIG, JSON.stringify(SERVER))
+  state.release = { version: 'new', files: ['hooks/register.ts'] }
+  expect((await command($, 'update')).text).toBe(`this mod runs from ${root}, not from a hub's download: update it with git pull`)
+
+  files.set(RELEASE, JSON.stringify({ version: 'old' }))
+  state.release = { version: 'new', files: ['hooks/register.ts', '../../.bashrc'] }
+  expect((await command($, 'update')).text).toContain('named a file outside the mod (../../.bashrc)')
+
+  // a file it lists but won't hand out: nothing is written
+  state.release = { version: 'new', files: ['hooks/register.ts', 'hooks/gone.ts'] }
+  state.gone = ['hooks/gone.ts']
+  expect((await command($, 'update')).text).toContain("couldn't download the update")
+  expect(files.has(`${root}/hooks/register.ts`)).toBe(false)
+  expect(JSON.parse(files.get(RELEASE)!)).toEqual({ version: 'old' })
 })

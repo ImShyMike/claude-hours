@@ -105,6 +105,13 @@ bodyless DELETE as a cross-site form). `status` asks `GET /v1/me`, and
 `stats` asks `GET /v1/stats?tz=<the computer's zone>`: today, the last 7 days
 with their top three projects, and all time, counted by the same `digest` as
 the dashboard (`src/lib/server/stats.ts`).
+`/v1/hello` also names the mod the hub hands out, `mod: { version, files }`,
+the version a hash of its files taken when the hub is built (`installer()` in
+`vite.config.ts`). install.sh saves it as `.claude-plugin/release.json` beside
+the mod; at session start a mod with one toasts when the hub's differs, and
+`update` downloads every file in `files` from `/install/mod/` before writing
+any, `release.json` last. A clone has no `release.json`, so it's never
+touched.
 `login <hub> <code>` takes a code made on the hub's settings page instead:
 the hub makes it approved from the start (`loginCode`), so the mod swaps it
 at `POST /v1/device/token` once, sending its hostname as `device_name` to

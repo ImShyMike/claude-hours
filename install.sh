@@ -59,7 +59,8 @@ case "${1:-install}" in
     mkdir -p "$HOME/.claude"
     if [ -n "$hub" ]; then
       # the same files the hub's /install route hands out
-      for file in .claude-plugin/plugin.json hooks/hooks.json hooks/register.ts types/index.d.ts tsconfig.json; do
+      # (release.json names this build, for /time-track update)
+      for file in .claude-plugin/plugin.json hooks/hooks.json hooks/register.ts types/index.d.ts tsconfig.json .claude-plugin/release.json; do
         fetch "mod/$file"
       done
       rm -rf "$mod"

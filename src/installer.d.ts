@@ -3,4 +3,6 @@ declare module 'virtual:installer' {
   // by the path install.sh asks for under /install/
   export const files: Record<string, string>
   export const script: string
+  // the mod's version (a hash of its files) and its files, relative to its folder
+  export const mod: { version: string; files: string[] }
 }

@@ -21,9 +21,13 @@ const EVENTS_DIR = `${LOG_DIR}/events`
 const DRAFTS_DIR = `${LOG_DIR}/drafts`
 const FORMAT = 1
 // which files get logged, globs in {"files":{"include":[...],"exclude":[...]}},
-// and where to send them, {"server":{"url":...,"token":...}} (/time-track
-// login writes that part)
+// folders never logged at all, {"ignore":[...]} (/time-track ignore), and
+// where to send them, {"server":{"url":...,"token":...}} (/time-track login
+// writes that part)
 const CONFIG_FILE = `${LOG_DIR}/config.json`
+// the hub build a downloaded mod came from, beside its plugin.json. A clone
+// has none, so it's never updated from a hub
+const RELEASE_FILE = '.claude-plugin/release.json'
 // how far each session's files have reached the server: sent/<session>.json
 const SENT_DIR = `${LOG_DIR}/sent`
 // the hub's sync protocol, sent as X-Protocol
@@ -328,6 +332,9 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields][], 
       const root = await rootOf($, cwd)
       const rootName = root ? await remoteName($, root) : undefined
       const rooted = { ...(root && root !== cwd ? { root } : {}), ...(rootName ? { rootName } : {}) }
+      // an ignored folder writes nothing, not even a header
+      const ignored = await ignoredFolders($, dir)
+      if (under(ignored, cwd) || (root && under(ignored, root))) return
       const h = await headFor($, path, sessionId, now, cwd, rows, rooted)
       const stamp = h.start === undefined ? { at: now } : { t: now - h.start }
       if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd, ...rooted })
@@ -482,6 +489,14 @@ async function fileRules($: EngineInterface, dir: string): Promise<FileRules> {
   const list = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : [])
   return { include: list(files.include), exclude: list(files.exclude) }
 }
+
+// a repo's root (or a folder in no repo) and everything under it
+async function ignoredFolders($: EngineInterface, dir: string) {
+  const ignore = (await readConfig($, dir)).ignore
+  return Array.isArray(ignore) ? ignore.filter((f): f is string => typeof f === 'string') : []
+}
+
+const under = (folders: string[], path: string) => folders.some(f => path === f || path.startsWith(`${f}/`))
 
 function serverFrom(value: unknown): Server | undefined {
   const server = value as Record<string, unknown> | undefined
@@ -638,10 +653,26 @@ async function pushSession($: EngineInterface, server: Server, dir: string, sess
   for (const kind of KINDS) await pushStream($, server, dir, sessionId, sent, kind)
 }
 
-function warnOnce($: EngineInterface, err: unknown) {
-  if (warned) return
+// How uploads are going, in $.store so /time-track status can tell in any
+// session: when one last went through, and the last error
+type Health = { okAt?: number; error?: { at: number; message: string } }
+
+async function noteHealth($: EngineInterface, health: Health) {
+  const was = ((await $.store.get('health').catch(() => undefined)) ?? {}) as Health
+  await $.store.set('health', { ...was, ...health }).catch(() => undefined)
+}
+
+async function uploadWorked($: EngineInterface) {
+  warned = false
+  await noteHealth($, { okAt: await $.clock.now() })
+}
+
+// said once until an upload works again, remembered every time
+async function uploadFailed($: EngineInterface, err: unknown) {
+  const message = err instanceof Error ? err.message : String(err)
+  if (!warned) $.ui.log(`${$.plugin.name}: upload paused: ${message}`)
   warned = true
-  $.ui.log(`${$.plugin.name}: upload paused: ${err instanceof Error ? err.message : String(err)}`)
+  await noteHealth($, { error: { at: await $.clock.now(), message } }).catch(() => undefined)
 }
 
 // This session's files, after the writes queued so far. Not awaited
@@ -654,39 +685,50 @@ function syncSession($: EngineInterface) {
       const server = await serverOf($, dir)
       if (!server) return
       await pushSession($, server, dir, sessionId, await readSent($, server, dir, sessionId))
-      warned = false
+      await uploadWorked($)
     })
-    .catch(err => warnOnce($, err))
+    .catch(err => uploadFailed($, err))
 }
+
+// Finished sessions (.gz alone, no plain file and no pack under way) with
+// their .gz sizes, the events' and the drafts'
+async function finishedSessions($: EngineInterface, dir: string) {
+  const list =
+    'cd "$1" || exit 0; for f in events/*.jsonl.gz; do [ -e "$f" ] || continue; id=${f#events/}; id=${id%.jsonl.gz}; ' +
+    'for p in events/$id.jsonl drafts/$id.jsonl events/$id.jsonl.packing drafts/$id.jsonl.packing; do [ -e "$p" ] && continue 2; done; ' +
+    'd=0; [ -f "drafts/$id.jsonl.gz" ] && d=$(wc -c < "drafts/$id.jsonl.gz"); echo "$id $(wc -c < "$f") $d"; done'
+  const { stdout } = await $.process.run(['sh', '-c', list, 'sh', `${dir}/${LOG_DIR}`], { timeoutMs: 5_000 })
+  const found: { sessionId: string; gz: [number, number] }[] = []
+  for (const line of stdout.split('\n')) {
+    const [sessionId, e, d] = line.trim().split(/\s+/)
+    if (sessionId && /^[\w-]{1,128}$/.test(sessionId)) found.push({ sessionId, gz: [Number(e), Number(d)] })
+  }
+  return found
+}
+
+// a .gz whose size matches what sent/ recorded is all in
+const allIn = (sent: Sent, gz: [number, number]) => sent.gz?.[0] === gz[0] && sent.gz[1] === gz[1]
 
 // Finished sessions not yet all sent: one that crashed, ran offline, ended
 // after its last upload or came before the login. Only finished ones (.gz
 // alone, no plain file and no pack under way), since a live session sends its
-// own. A .gz whose size matches what sent/ recorded is already in. Not awaited
+// own. Not awaited
 function sweep($: EngineInterface) {
   syncing = syncing
     .then(async () => {
       const dir = await homeDir($)
       const server = await serverOf($, dir)
       if (!server) return
-      const list =
-        'cd "$1" || exit 0; for f in events/*.jsonl.gz; do [ -e "$f" ] || continue; id=${f#events/}; id=${id%.jsonl.gz}; ' +
-        'for p in events/$id.jsonl drafts/$id.jsonl events/$id.jsonl.packing drafts/$id.jsonl.packing; do [ -e "$p" ] && continue 2; done; ' +
-        'd=0; [ -f "drafts/$id.jsonl.gz" ] && d=$(wc -c < "drafts/$id.jsonl.gz"); echo "$id $(wc -c < "$f") $d"; done'
-      const { stdout } = await $.process.run(['sh', '-c', list, 'sh', `${dir}/${LOG_DIR}`], { timeoutMs: 5_000 })
-      for (const line of stdout.split('\n')) {
-        const [sessionId, e, d] = line.trim().split(/\s+/)
-        if (!sessionId || !/^[\w-]{1,128}$/.test(sessionId)) continue
-        const gz: [number, number] = [Number(e), Number(d)]
+      for (const { sessionId, gz } of await finishedSessions($, dir)) {
         const sent = await readSent($, server, dir, sessionId)
-        if (sent.gz?.[0] === gz[0] && sent.gz[1] === gz[1]) continue
+        if (allIn(sent, gz)) continue
         await pushSession($, server, dir, sessionId, sent)
         sent.gz = gz
         await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
       }
-      warned = false
+      await uploadWorked($)
     })
-    .catch(err => warnOnce($, err))
+    .catch(err => uploadFailed($, err))
 }
 
 // Logging in to a hub: the device flow (RFC 8628). /time-track login
@@ -694,7 +736,7 @@ function sweep($: EngineInterface) {
 // the token once someone does, then sends everything not sent yet. A login
 // command copied from the hub's settings carries a code approved already,
 // swapped for the token straight away
-const USAGE = 'usage: /time-track login <hub url> [code] | status | stats | logout'
+const USAGE = 'usage: /time-track login <hub url> [code] | status | stats | ignore | update | logout'
 // the newest login, so starting another stops the last one's poll
 let loginId = 0
 
@@ -810,12 +852,112 @@ function pollLogin($: EngineInterface, url: string, code: Record<string, unknown
   })
 }
 
+// 3m ago, or 2 days ago past two days
+function ago(ms: number) {
+  if (ms < 60_000) return 'just now'
+  return ms < 48 * 3_600_000 ? `${hm(ms)} ago` : `${Math.floor(ms / 86_400_000)} days ago`
+}
+
+// who this computer is logged in as, how uploads are going, and what's left out
 async function loginStatus($: EngineInterface) {
+  const dir = await homeDir($)
+  const [server, ignored] = await Promise.all([serverOf($, dir), ignoredFolders($, dir)])
+  const lines: string[] = []
+  if (!server) lines.push(`not logged in. ${USAGE}`)
+  else {
+    const who = await whoami($, server).catch(err => err as Error)
+    if (who instanceof Error) lines.push(`logged in to ${server.url}, which isn't answering (${who.message})`)
+    else lines.push(who ? `logged in to ${server.url} as ${who}` : `${server.url} turned down this computer's token, run /time-track login`)
+    const [now, health, finished] = await Promise.all([
+      $.clock.now(),
+      $.store.get('health').catch(() => undefined) as Promise<Health | undefined>,
+      finishedSessions($, dir).catch(() => []),
+    ])
+    let waiting = 0
+    for (const { sessionId, gz } of finished) if (!allIn(await readSent($, server, dir, sessionId), gz)) waiting++
+    if (health?.okAt) lines.push(`last synced ${ago(now - health.okAt)}`)
+    if (waiting) lines.push(`${waiting} finished ${waiting === 1 ? 'session' : 'sessions'} waiting to send`)
+    if (health?.error && health.error.at > (health.okAt ?? 0)) lines.push(`last problem ${ago(now - health.error.at)}: ${health.error.message}`)
+  }
+  if (ignored.length) lines.push(`ignoring ${ignored.join(', ')}`)
+  // the first line under Claude Code's "time-track:" when there's more than one
+  return (lines.length > 1 ? ['', ...lines] : lines).join('\n')
+}
+
+// Leaves the repo this session is in (or its folder, in no repo) out of the
+// log, or takes it back when it's out already. Rows already sent stay on the hub
+async function toggleIgnore($: EngineInterface) {
+  const [dir, cwd] = await Promise.all([homeDir($), $.session.cwd()])
+  const folder = (await rootOf($, cwd)) ?? cwd
+  const { ignore: _, ...rest } = await readConfig($, dir)
+  const ignored = await ignoredFolders($, dir)
+  const ignore = !ignored.includes(folder)
+  const next = ignore ? [...ignored, folder] : ignored.filter(f => f !== folder)
+  await writeConfig($, dir, next.length ? { ...rest, ignore: next } : rest)
+  return ignore
+    ? `ignoring ${folder}: nothing in it gets logged or sent from now on (what was sent before stays). /time-track ignore again to undo`
+    : `logging ${folder} again`
+}
+
+// The hub's build of the mod, from /v1/hello: a version, and the files in it
+// relative to the mod's folder
+async function hubRelease($: EngineInterface, url: string) {
+  const res = await request($, `${url}/v1/hello`)
+  if (!res.ok) throw new Error(`${res.status}`)
+  const mod = answerOf(res.text).mod as { version?: unknown; files?: unknown } | undefined
+  if (typeof mod?.version !== 'string' || !Array.isArray(mod.files)) return undefined
+  return { version: mod.version, files: mod.files.filter((f): f is string => typeof f === 'string') }
+}
+
+async function releaseOf($: EngineInterface) {
+  const text = await $.fs.read(`${$.plugin.root}/${RELEASE_FILE}`).catch(() => '')
+  try {
+    const { version } = JSON.parse(String(text))
+    return typeof version === 'string' ? version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// a name inside the mod's folder, never out of it
+const safeFile = (file: string) => /^[\w.-]+(\/[\w.-]+)*$/.test(file) && !file.split('/').includes('..')
+
+// At session start, a toast when the hub has a newer mod. Not awaited
+function nudgeUpdate($: EngineInterface) {
+  ;(async () => {
+    const mine = await releaseOf($)
+    const server = mine && (await serverOf($, await homeDir($)))
+    if (!server) return
+    const theirs = await hubRelease($, server.url)
+    if (theirs && theirs.version !== mine) $.ui.toast(`${$.plugin.name} has an update, run /time-track update`)
+  })().catch(() => undefined)
+}
+
+// Downloads the hub's mod over this one: every file first, so a download cut
+// short changes nothing, and release.json last, so a write cut short leaves
+// this mod still asking for the update
+async function updateMod($: EngineInterface) {
+  const mine = await releaseOf($)
+  if (!mine) return `this mod runs from ${$.plugin.root}, not from a hub's download: update it with git pull`
   const server = await serverOf($, await homeDir($))
-  if (!server) return `not logged in. ${USAGE}`
-  const who = await whoami($, server).catch(err => err as Error)
-  if (who instanceof Error) return `logged in to ${server.url}, which isn't answering (${who.message})`
-  return who ? `logged in to ${server.url} as ${who}` : `${server.url} turned down this computer's token, run /time-track login`
+  if (!server) return `not logged in, so there's no hub to update from. ${USAGE}`
+  const release = await hubRelease($, server.url).catch(err => err as Error)
+  if (release instanceof Error) return `${server.url} isn't answering (${release.message})`
+  if (!release) return `${server.url} doesn't hand out the mod`
+  if (release.version === mine) return 'already up to date'
+  const bad = release.files.find(f => !safeFile(f))
+  if (bad) return `${server.url} named a file outside the mod (${bad}), so nothing changed`
+  const files = [...release.files.filter(f => f !== RELEASE_FILE), ...release.files.filter(f => f === RELEASE_FILE)]
+  const texts = await Promise.all(
+    files.map(async file => {
+      const res = await request($, `${server.url}/install/mod/${file}`)
+      if (!res.ok) throw new Error(`${file}: ${res.status}`)
+      return res.text
+    }),
+  ).catch(err => err as Error)
+  if (texts instanceof Error) return `couldn't download the update, so nothing changed (${texts.message})`
+  for (const [i, file] of files.entries()) await $.fs.write(`${$.plugin.root}/${file}`, texts[i]!)
+  return `updated ${$.plugin.name}. new sessions load it`
 }
 
 // forgets the token here and asks the hub to forget it too
@@ -878,6 +1020,8 @@ async function runCommand($: EngineInterface, args: string) {
   if (verb === 'status' || !verb) return loginStatus($)
   if (verb === 'logout') return logout($)
   if (verb === 'stats') return stats($)
+  if (verb === 'ignore') return toggleIgnore($)
+  if (verb === 'update') return updateMod($)
   return USAGE
 }
 
@@ -1085,7 +1229,7 @@ export const register: Register = on => {
       .register({
         name: 'time-track',
         description: 'Log in to a claude-hours hub to send it your analytics',
-        argumentHint: 'login <hub url> [code] | status | stats | logout',
+        argumentHint: 'login <hub url> [code] | status | stats | ignore | update | logout',
       })
       .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
     const sessionId = await $.session.id()
@@ -1093,6 +1237,7 @@ export const register: Register = on => {
       await update($, startedSessions, ids => [...ids, sessionId])
       await log($, 'session_start', { surface: e.surface, isInteractive: e.isInteractive })
       sweep($)
+      nudgeUpdate($)
     }
     return started
   })
@@ -1266,8 +1411,9 @@ export const register: Register = on => {
         else if (asked !== undefined) turnClock.asked.push({ tool, from: asked, to: endedMs })
       }
       const [cwd, dir] = await Promise.all([$.session.cwd(), homeDir($)])
-      const rules = await fileRules($, dir)
-      const keep = (path: string | undefined) => (path && allowed(rules, path, cwd, dir) ? path : undefined)
+      const [rules, ignored] = await Promise.all([fileRules($, dir), ignoredFolders($, dir)])
+      const keep = (path: string | undefined) =>
+        path && allowed(rules, path, cwd, dir) && !under(ignored, resolvePath(cwd, path)) ? path : undefined
       const file = keep(typeof named === 'string' ? named : undefined)
       const where = file ? resolvePath(cwd, file).replace(/\/[^/]*$/, '') : e.tool === 'Bash' ? cdTarget(e.command, cwd, dir) : undefined
       const repo = keep(await workRepo($, where, cwd))

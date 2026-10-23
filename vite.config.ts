@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vitest/config'
 import tailwindcss from '@tailwindcss/vite'
@@ -26,7 +27,21 @@ const installer = (): Plugin => ({
       return readFileSync(path, 'utf8')
     }
     const files = Object.fromEntries(Object.entries(INSTALLER).map(([served, path]) => [served, read(path)]))
-    return `export const files = ${JSON.stringify(files)}\nexport const script = ${JSON.stringify(read('install.sh'))}\n`
+    // the mod's version is a hash of its files, so every change is a new one
+    // with nobody bumping anything; release.json carries it to the computer
+    const served = Object.keys(files).filter(f => f.startsWith('mod/'))
+    const version = createHash('sha256')
+      .update(JSON.stringify(served.map(f => [f, files[f]])))
+      .digest('hex')
+      .slice(0, 12)
+    files['mod/.claude-plugin/release.json'] = `${JSON.stringify({ version })}\n`
+    const mod = { version, files: [...served, 'mod/.claude-plugin/release.json'].map(f => f.slice('mod/'.length)) }
+    return [
+      `export const files = ${JSON.stringify(files)}`,
+      `export const script = ${JSON.stringify(read('install.sh'))}`,
+      `export const mod = ${JSON.stringify(mod)}`,
+      '',
+    ].join('\n')
   },
 })
 
