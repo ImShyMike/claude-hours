@@ -90,6 +90,11 @@
       { label: 'Thinking pauses', value: per(w.pauses), sub: '2 to 30 seconds' },
       { label: 'Breaks', value: per(w.breaks), sub: 'pauses over 30 seconds' },
       { label: 'Longest pause', value: seconds(w.longestPauseMs), sub: `over ${plural(w.measured, 'draft')}` },
+      {
+        label: 'Typing time',
+        value: seconds(w.typingMs / (w.sent + w.abandoned)),
+        sub: w.typingMs ? `${Math.round(w.typedChars / 5 / (w.typingMs / MIN))} wpm while typing` : '',
+      },
     ]
   }
 
@@ -203,8 +208,10 @@
             <Card.Title>Time of day</Card.Title>
             <Legend {colors} projects={s.projects.map(p => p.project)} />
           </Card.Header>
-          <Card.Content>
+          <!-- as tall as the card beside it -->
+          <Card.Content class="flex flex-1 flex-col">
             <Columns
+              fill
               labels={s.hours.map((_, h) => hourLabel(h))}
               series={series(colors, s.hourProjects)}
               tips={s.hours.map((ms, h) => `<strong>${hourLabel(h)}</strong>${duration(ms)} active${tipLines(colors, s.hourProjects[h]!)}`)}

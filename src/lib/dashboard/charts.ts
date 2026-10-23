@@ -31,9 +31,10 @@ function niceStep(maxMs: number) {
 const tickLabel = (ms: number) => (ms >= 60 * MIN ? `${ms / (60 * MIN)}h` : `${ms / MIN}m`)
 
 // one canvas per chart element, replaced on every draw
-function canvas(el: HTMLElement, height: number) {
+// height undefined leaves the element's own (a chart stretched by its layout)
+function canvas(el: HTMLElement, height?: number) {
   Chart.getChart(el.querySelector('canvas') ?? '')?.destroy()
-  el.style.height = `${height}px`
+  el.style.height = height === undefined ? '' : `${height}px`
   el.innerHTML = '<canvas></canvas>'
   return el.querySelector('canvas')!
 }
@@ -60,8 +61,9 @@ const tip = (html: (i: number) => string | undefined) =>
 export type Series = { name: string; color: string; values: number[] }
 
 // Columns from one baseline, each stacked by project bottom up, with a 2px
-// surface gap between segments and a 4px rounded top
-export function stackedColumns(el: HTMLElement, labels: string[], series: Series[], tips: string[], maxTicks = 12) {
+// surface gap between segments and a 4px rounded top. fill: as tall as the
+// element is laid out, not 200px
+export function stackedColumns(el: HTMLElement, labels: string[], series: Series[], tips: string[], maxTicks = 12, fill = false) {
   theme()
   const totals = labels.map((_, i) => series.reduce((sum, s) => sum + s.values[i]!, 0))
   const step = niceStep(Math.max(...totals, 0) || MIN)
@@ -69,7 +71,7 @@ export function stackedColumns(el: HTMLElement, labels: string[], series: Series
   // the highest segment with time in each column gets the rounded top
   const topmost = labels.map((_, i) => series.findLastIndex(s => s.values[i]! > 0))
   const surface = token('--card')
-  const chart = new Chart(canvas(el, 200), {
+  const chart = new Chart(canvas(el, fill ? undefined : 200), {
     type: 'bar',
     data: {
       labels,
