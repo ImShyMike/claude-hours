@@ -122,5 +122,7 @@ describe('the device flow', () => {
     expect(await authenticateDevice(db, token)).not.toBeNull()
     expect(await revokeDevice(db, ana.id, device!.id)).toBe(true)
     expect(await authenticateDevice(db, token)).toBeNull()
+    expect(await listDevices(db, ana.id)).toEqual([])
+    expect(await revokeDevice(db, ana.id, device!.id)).toBe(false)
   })
 })

@@ -7,7 +7,7 @@ import type { Digest } from '../server/digest'
 import { api, load, rangeWindow, save, type Me, type Range } from './shared'
 
 export type { Digest }
-export type SessionDigest = { events: Event[]; projects: Digest['projects']; idleCapMs: number; timelines: Timeline[] }
+export type SessionDigest = { events: Event[]; projects: Digest['projects']; idleCapMs: number; timelines: Timeline[]; devices: string[] }
 
 const REFRESH_MS = 30_000
 

@@ -84,7 +84,8 @@ Content-Type: application/json
 ### Storing
 
 A `_runs` row per run (person, session, stream, start, the header's fields,
-`acked`), then one table per event type (`_prompts`, `_tool_calls`, ...) with
+`acked`, and the device that started it, which the session page names;
+revoking a device only sets its `revoked_at`, so that name stays), then one table per event type (`_prompts`, `_tool_calls`, ...) with
 a typed column per known field plus an `extra jsonb` for anything else, keyed
 by run and `n`. Draft timelines get a table of their own (`_draft_timelines`),
 and refused rows go to `_quarantine`. Everything the mod sends is in a table

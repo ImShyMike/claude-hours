@@ -31,5 +31,5 @@ export const POST: RequestHandler = async ({ request }) => {
   }
   const batch = parseBatch(body)
   if ('error' in batch) return Response.json({ error: batch.error }, { status: batch.status })
-  return Response.json(await ingest(db, device.person.id, batch.runs))
+  return Response.json(await ingest(db, device.person.id, batch.runs, { deviceId: device.deviceId }))
 }

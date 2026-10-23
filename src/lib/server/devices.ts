@@ -6,7 +6,7 @@
 // the hub, makes a code that's approved from the start (loginCode) and pastes
 // it into the mod's login command, which swaps it at once
 import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm'
-import { deviceCodes, deviceTokens, people, sha256, type Db } from './db/index'
+import { deviceCodes, deviceTokens, people, runs, sha256, type Db } from './db/index'
 import { randomToken } from './tokens'
 
 export const CODE_TTL_S = 600
@@ -122,7 +122,7 @@ export async function authenticateDevice(db: Db, token: string, now = new Date()
     .select({ person: people, deviceId: deviceTokens.id, lastSeenAt: deviceTokens.lastSeenAt })
     .from(deviceTokens)
     .innerJoin(people, eq(people.id, deviceTokens.personId))
-    .where(eq(deviceTokens.tokenHash, tokenHash))
+    .where(and(eq(deviceTokens.tokenHash, tokenHash), isNull(deviceTokens.revokedAt)))
   if (!row) return null
   // once a minute is plenty for "last seen", and spares a write per request
   if (!row.lastSeenAt || now.getTime() - row.lastSeenAt.getTime() > 60_000)
@@ -134,15 +134,28 @@ export function listDevices(db: Db, personId: number) {
   return db
     .select({ id: deviceTokens.id, name: deviceTokens.name, createdAt: deviceTokens.createdAt, lastSeenAt: deviceTokens.lastSeenAt })
     .from(deviceTokens)
-    .where(eq(deviceTokens.personId, personId))
+    .where(and(eq(deviceTokens.personId, personId), isNull(deviceTokens.revokedAt)))
     .orderBy(desc(deviceTokens.createdAt))
 }
 
-// only ever someone's own device: the person id is part of the match
-export async function revokeDevice(db: Db, personId: number, id: number) {
+// only ever someone's own device: the person id is part of the match. The
+// row stays, revoked, so what it sent keeps its name
+export async function revokeDevice(db: Db, personId: number, id: number, now = new Date()) {
   const rows = await db
-    .delete(deviceTokens)
-    .where(and(eq(deviceTokens.id, id), eq(deviceTokens.personId, personId)))
+    .update(deviceTokens)
+    .set({ revokedAt: now })
+    .where(and(eq(deviceTokens.id, id), eq(deviceTokens.personId, personId), isNull(deviceTokens.revokedAt)))
     .returning({ id: deviceTokens.id })
   return rows.length > 0
+}
+
+// the devices a session's runs came from, revoked ones too, oldest first
+export async function sessionDevices(db: Db, personId: number, session: string) {
+  const rows = await db
+    .selectDistinct({ id: deviceTokens.id, name: deviceTokens.name })
+    .from(runs)
+    .innerJoin(deviceTokens, eq(deviceTokens.id, runs.deviceId))
+    .where(and(eq(runs.personId, personId), eq(runs.session, session)))
+    .orderBy(deviceTokens.id)
+  return rows.map(r => r.name)
 }

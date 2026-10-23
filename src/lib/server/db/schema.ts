@@ -74,6 +74,8 @@ export const deviceTokens = pgTable(
     name: text('name').notNull(),
     createdAt: createdAt(),
     lastSeenAt: at('last_seen_at'),
+    // revoking keeps the row, so the runs it sent still say where from
+    revokedAt: at('revoked_at'),
   },
   t => [index('device_tokens_person_idx').on(t.personId)],
 )
@@ -120,6 +122,9 @@ export const runs = pgTable(
     personId: personRef(),
     session: text('session').notNull(),
     stream: text('stream', { enum: ['events', 'drafts'] }).notNull(),
+    // the device that sent the run's first rows; null for runs from before
+    // devices were kept, or imported by hand
+    deviceId: bigint('device_id', { mode: 'number' }).references(() => deviceTokens.id, { onDelete: 'set null' }),
     start: bigint('start', { mode: 'number' }).notNull(),
     // the header's fields, events runs only
     v: integer('v'),

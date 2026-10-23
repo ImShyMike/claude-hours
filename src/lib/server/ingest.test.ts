@@ -6,9 +6,10 @@ import { beforeAll, describe, expect, test } from 'vitest'
 import { summarize } from '../analytics/aggregate'
 import { loadEvents, sessionParts } from '../analytics/load'
 import { rowsOf, splitRuns } from '../analytics/runs'
-import { people, quarantine, type Db } from './db/index'
+import { deviceTokens, people, quarantine, type Db } from './db/index'
 import { testDb } from './db/testing'
 import { digest } from './digest'
+import { revokeDevice, sessionDevices } from './devices'
 import { draftsText, eventsOf, serverTiming, sessionTexts, type Timing } from './history'
 import { ingest, parseBatch, type RunIn } from './ingest'
 import { setIdleCap } from './settings'
@@ -151,6 +152,26 @@ describe('acks', () => {
     await ingest(db, person, [run(0, [tool(1)])])
     await ingest(db, bo!.id, [run(0, [tool(1), tool(2)])])
     expect(splitRuns((await sessionTexts(db, person)).get('s1')!)[0]!.rows).toHaveLength(1)
+  })
+
+  test('a run keeps the device that started it, after that device is revoked too', async () => {
+    const { db, person } = await withPerson()
+    const device = (name: string) =>
+      db
+        .insert(deviceTokens)
+        .values({ tokenHash: name, personId: person, name })
+        .returning()
+        .then(([d]) => d!.id)
+    const [laptop, desktop] = [await device('laptop'), await device('desktop')]
+    await ingest(db, person, [run(0, [tool(1)])], { deviceId: laptop })
+    // more of the same run from elsewhere doesn't move it
+    await ingest(db, person, [run(1, [tool(2)])], { deviceId: desktop })
+    await ingest(db, person, [run(0, [tool(1)], { run: 2000, header: { ...header, start: 2000 } })], { deviceId: desktop })
+    await ingest(db, person, [run(0, [tool(1)], { session: 's2' })])
+    expect(await sessionDevices(db, person, 's1')).toEqual(['laptop', 'desktop'])
+    expect(await sessionDevices(db, person, 's2')).toEqual([])
+    await revokeDevice(db, person, laptop)
+    expect(await sessionDevices(db, person, 's1')).toEqual(['laptop', 'desktop'])
   })
 })
 

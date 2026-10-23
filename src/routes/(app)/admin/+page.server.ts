@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit'
-import { count, desc, eq, getTableColumns } from 'drizzle-orm'
+import { and, count, desc, eq, getTableColumns, isNull } from 'drizzle-orm'
 import { deviceTokens, people } from '#lib/server/db/index.js'
 import { db } from '#lib/server/db/client.js'
 import { decideDeletion, pendingDeletions } from '#lib/server/deletion.js'
@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     db
       .select({ ...getTableColumns(people), devices: count(deviceTokens.id) })
       .from(people)
-      .leftJoin(deviceTokens, eq(deviceTokens.personId, people.id))
+      .leftJoin(deviceTokens, and(eq(deviceTokens.personId, people.id), isNull(deviceTokens.revokedAt)))
       .groupBy(people.id)
       .orderBy(desc(people.createdAt)),
     pendingDeletions(db),

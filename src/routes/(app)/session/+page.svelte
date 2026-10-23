@@ -118,7 +118,8 @@
     const last = time(events[events.length - 1]!)
     const sent = drafts.filter(d => d.outcome === 'sent').length
     const when = new Date(first).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-    return `${when}, ${duration(last - first)} long · ${sent} sent, ${drafts.length - sent} abandoned · ${id.slice(0, 8)}`
+    const from = live.value?.devices.length ? ` · from ${live.value.devices.join(', ')}` : ''
+    return `${when}, ${duration(last - first)} long · ${sent} sent, ${drafts.length - sent} abandoned${from} · ${id.slice(0, 8)}`
   })
 </script>
 

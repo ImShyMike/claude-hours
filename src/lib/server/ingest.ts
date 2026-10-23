@@ -80,7 +80,7 @@ function placeTimeline(row: unknown): Placed {
 // parameters (the widest table has about 30 columns)
 const SLICE = 500
 
-async function storeRun(db: Db, personId: number, r: RunIn, now: Date): Promise<{ result: RunResult; quarantined: number }> {
+async function storeRun(db: Db, personId: number, r: RunIn, now: Date, deviceId?: number): Promise<{ result: RunResult; quarantined: number }> {
   return db.transaction(async tx => {
     const where = and(eq(runs.personId, personId), eq(runs.session, r.session), eq(runs.stream, r.stream), eq(runs.start, r.run))
     let [run] = await tx.select({ id: runs.id, acked: runs.acked }).from(runs).where(where).for('update')
@@ -89,7 +89,7 @@ async function storeRun(db: Db, personId: number, r: RunIn, now: Date): Promise<
         return { result: { status: 'invalid', acked: 0, error: 'a new run needs its header, with start equal to run' }, quarantined: 0 }
       await tx
         .insert(runs)
-        .values({ personId, session: r.session, stream: r.stream, start: r.run, ...(r.header ? headerColumns(r.header) : {}) })
+        .values({ personId, deviceId, session: r.session, stream: r.stream, start: r.run, ...(r.header ? headerColumns(r.header) : {}) })
         .onConflictDoNothing()
       ;[run] = await tx.select({ id: runs.id, acked: runs.acked }).from(runs).where(where).for('update')
     }
@@ -124,12 +124,12 @@ async function storeRun(db: Db, personId: number, r: RunIn, now: Date): Promise<
 }
 
 // Runs one at a time, each in its own transaction, so a long batch never
-// holds many locks at once
-export async function ingest(db: Db, personId: number, batch: RunIn[], now = new Date()) {
+// holds many locks at once. deviceId: the device sending, kept on runs it starts
+export async function ingest(db: Db, personId: number, batch: RunIn[], { now = new Date(), deviceId }: { now?: Date; deviceId?: number } = {}) {
   const results: Record<string, RunResult> = {}
   let quarantined = 0
   for (const r of batch) {
-    const stored = await storeRun(db, personId, r, now)
+    const stored = await storeRun(db, personId, r, now, deviceId)
     results[runKey(r)] = stored.result
     quarantined += stored.quarantined
   }
