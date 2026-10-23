@@ -406,6 +406,26 @@ test('a zone off by half an hour splits days and hours on its own clock', () => 
   expect(dayKey(Date.parse('2026-10-19T18:30:00Z'), 'Asia/Kolkata')).toBe('2026-10-20')
 })
 
+test('a zone whose clocks move half an hour has a 23.5 hour day', () => {
+  // Lord Howe goes from +10:30 to +11 at 2:00 on Oct 4; a prompt every 20 minutes Oct 2 to 6
+  const events: Event[] = []
+  for (let k = 0; k < 4 * 72; k++) events.push(at(new Date(Date.parse('2026-10-02T00:00:00Z') + k * 20 * MIN).toISOString(), 'prompt'))
+  const window = { from: Date.parse('2026-10-02T13:30:00Z'), to: Date.parse('2026-10-05T13:00:00Z') }
+  const s = summarize(events, { idleCapMs: 30 * MIN, tz: 'Australia/Lord_Howe', ...window })
+  expect(s.days.map(d => [d.day, d.ms / 3_600_000])).toEqual([
+    ['2026-10-03', 24],
+    ['2026-10-04', 23.5],
+    ['2026-10-05', 24],
+  ])
+})
+
+test('a turn with a fractional duration splits on the hour exactly', () => {
+  const events = [at('2026-10-19T12:30:00Z', 'turn_end', { durationMs: 60 * MIN + 0.25 })]
+  const s = summarize(events, { idleCapMs: 5 * MIN, tz: 'UTC' })
+  expect(s.hours[11]).toBe(30 * MIN + 0.25)
+  expect(s.hours[12]).toBe(30 * MIN)
+})
+
 test('a zone that does not exist throws', () => {
   expect(() => summarize([at('2026-10-19T18:00:00Z', 'prompt')], { idleCapMs: MIN, tz: 'Mars/Olympus' })).toThrow(RangeError)
 })

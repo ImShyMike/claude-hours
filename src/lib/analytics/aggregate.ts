@@ -150,8 +150,15 @@ export function languageOf(path: string) {
 // still activity, but they aren't prompts anyone wrote
 const HUMAN_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 
-// a draft_abandoned line is written late, so it carries its own end
-const time = (e: Event) => Date.parse(typeof e.endedAt === 'string' ? e.endedAt : e.ts)
+// a draft_abandoned line is written late, so it carries its own end. Parsing
+// costs more than the rest of what's done with an event, and the hub keeps
+// the same events between requests, so each one is parsed once
+const times = new WeakMap<Event, number>()
+function time(e: Event) {
+  let at = times.get(e)
+  if (at === undefined) times.set(e, (at = Date.parse(typeof e.endedAt === 'string' ? e.endedAt : e.ts)))
+  return at
+}
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')
 // subagent turns overlap the main thread's, so only main-thread turns make spans
 const isMainTurn = (e: Event) => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId
@@ -258,6 +265,9 @@ const local: Clock = {
 
 // one formatter per zone, since making one costs far more than using it
 const zones = new Map<string, Clock>()
+const QUARTER_MS = 900_000
+// about two years of quarter hours a zone, then it starts over
+const MAX_QUARTERS = 70_000
 
 function zoneClock(tz: string): Clock {
   const known = zones.get(tz)
@@ -279,29 +289,45 @@ function zoneClock(tz: string): Clock {
     return p as Record<'year' | 'month' | 'day' | 'hour' | 'minute' | 'second', number>
   }
   // how far the zone's wall clock is ahead of UTC at a moment
-  const offsetAt = (ms: number) => {
+  const exactOffset = (ms: number) => {
     const p = partsOf(ms)
     return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - (ms - (((ms % 1000) + 1000) % 1000))
   }
+  // the same, kept by quarter hour, since formatting is slow and offsets only
+  // change on quarter hours. One that starts and ends on different offsets
+  // (a quarter hour the clocks change in) is worked out each time
+  const offsets = new Map<number, number | null>()
+  const offsetAt = (ms: number) => {
+    const quarter = Math.floor(ms / QUARTER_MS)
+    let offset = offsets.get(quarter)
+    if (offset === undefined) {
+      if (offsets.size >= MAX_QUARTERS) offsets.clear()
+      const start = exactOffset(quarter * QUARTER_MS)
+      offsets.set(quarter, (offset = start === exactOffset((quarter + 1) * QUARTER_MS - 1) ? start : null))
+    }
+    return offset ?? exactOffset(ms)
+  }
+  // the wall clock at a moment, read with the getUTC* methods
+  const wall = (ms: number) => new Date(ms + offsetAt(ms))
   const clock: Clock = {
     dayKey: ms => {
-      const p = partsOf(ms)
-      return `${p.year}-${pad(p.month)}-${pad(p.day)}`
+      const d = wall(ms)
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
     },
     // the wall clock's next midnight, checked against the offset there, so a
     // day the clocks change is 23 or 25 hours long
     nextMidnight: ms => {
-      const p = partsOf(ms)
-      const wall = Date.UTC(p.year, p.month - 1, p.day + 1)
-      const guess = wall - offsetAt(ms)
-      return wall - offsetAt(guess)
+      const d = wall(ms)
+      const next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)
+      const guess = next - offsetAt(ms)
+      return next - offsetAt(guess)
     },
     // to the next whole hour on the wall clock, which works for zones offset by :30 or :45 too
     nextHour: ms => {
-      const p = partsOf(ms)
-      return ms + (60 - p.minute) * 60_000 - p.second * 1000 - (((ms % 1000) + 1000) % 1000)
+      const d = wall(ms)
+      return ms + (60 - d.getUTCMinutes()) * 60_000 - d.getUTCSeconds() * 1000 - (((ms % 1000) + 1000) % 1000)
     },
-    hourOf: ms => partsOf(ms).hour,
+    hourOf: ms => wall(ms).getUTCHours(),
   }
   zones.set(tz, clock)
   return clock
