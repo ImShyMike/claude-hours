@@ -72,7 +72,7 @@ case "${1:-install}" in
     echo
     echo "done! start a new Claude Code session and it starts recording to $data"
     if [ -n "$hub" ]; then
-      echo "to send it to $hub, copy a login command from $hub/settings and paste it into Claude Code"
+      echo "to send it to $hub, copy a login command from $hub/settings and paste it into Claude Code to start tracking your stats!"
     else
       echo "keep this folder where it is: Claude Code loads the mod from $mod"
     fi
