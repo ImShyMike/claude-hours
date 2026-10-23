@@ -218,6 +218,27 @@ test('projects are timed separately, even in one session', () => {
   ])
 })
 
+test('time splits by permission mode where it changed, from the start of the session', () => {
+  const events = [
+    // the mode row lands just after the first prompt; that turn is plan in full
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    at('2026-10-19T12:00:01Z', 'mode', { mode: 'plan' }),
+    at('2026-10-19T12:04:00Z', 'turn_end', { durationMs: 4 * MIN }),
+    // a shift+tab to auto mid-turn, seen at the next tool
+    at('2026-10-19T12:05:00Z', 'prompt'),
+    at('2026-10-19T12:07:00Z', 'mode', { mode: 'auto' }),
+    at('2026-10-19T12:10:00Z', 'turn_end', { durationMs: 5 * MIN }),
+    // a session from before the mod logged modes
+    at('2026-10-19T12:00:00Z', 'prompt', { sessionId: 's2' }),
+    at('2026-10-19T12:03:00Z', 'turn_end', { sessionId: 's2', durationMs: 3 * MIN }),
+  ]
+  expect(summarize(events, { idleCapMs: 5 * MIN }).modes).toEqual([
+    { mode: 'plan', ms: 7 * MIN },
+    { mode: 'auto', ms: 3 * MIN },
+    { mode: 'unknown', ms: 3 * MIN },
+  ])
+})
+
 test('file order across sessions does not matter', () => {
   const a = at('2026-10-19T12:00:00Z', 'tool')
   const b = at('2026-10-19T12:01:00Z', 'tool', { sessionId: 's2' })
@@ -265,6 +286,7 @@ test('an empty log summarizes to zeros', () => {
   expect(s.totalMs).toBe(0)
   expect(s.days).toEqual([])
   expect(s.sessions).toEqual([])
+  expect(s.modes).toEqual([])
 })
 
 test('typing a prompt counts as active time, tea breaks do not', () => {

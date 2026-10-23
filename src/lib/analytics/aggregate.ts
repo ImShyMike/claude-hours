@@ -34,6 +34,10 @@ export type Summary = {
   hours: number[]
   hourProjects: Record<string, number>[]
   projects: { project: string; ms: number }[]
+  // active ms by permission mode (default, acceptEdits, plan, auto, dontAsk,
+  // bypassPermissions), most first; `unknown` for sessions the mod never saw
+  // it in (older ones, or a setup that keeps those events from mods)
+  modes: { mode: string; ms: number }[]
   languages: { language: string; edits: number }[]
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
   // midTurn: sent while Claude was still working
@@ -455,6 +459,24 @@ function* shares(byProject: [string, Interval[]][]): Generator<[string, Interval
   }
 }
 
+// A session's permission modes in time order. It's in the first one from its
+// start, as that row comes with its first prompt; none at all is unknown
+function modesOf(events: Event[]): { at: number; mode: string }[] {
+  const changes = events
+    .filter(e => e.event === 'mode' && typeof e.mode === 'string')
+    .map(e => ({ at: time(e), mode: e.mode as string }))
+    .sort((a, b) => a.at - b.at)
+  return changes.length ? [{ at: -Infinity, mode: changes[0]!.mode }, ...changes] : [{ at: -Infinity, mode: 'unknown' }]
+}
+
+// an interval cut where the mode changed, each piece's ms with its mode
+function* byMode([start, end]: Interval, changes: { at: number; mode: string }[]): Generator<[string, number]> {
+  for (let i = 0; i < changes.length; i++) {
+    const piece = clip([start, end], changes[i]!.at, changes[i + 1]?.at ?? Infinity)
+    if (piece) yield [changes[i]!.mode, piece[1] - piece[0]]
+  }
+}
+
 function dayRange(from: number, to: number, clock: Clock) {
   const days: string[] = []
   for (let at = from; at < to; at = clock.nextMidnight(at)) days.push(clock.dayKey(at))
@@ -495,6 +517,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   const spans: Summary['spans'] = []
   const sessionProjects = new Map<string, Map<string, number>>()
   const projectMs = new Map<string, number>()
+  const modeMs = new Map<string, number>()
   const sessionMs = new Map<string, number>()
   let totalMs = 0
   const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
@@ -520,9 +543,11 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
       }
       for (const [hour, ms] of byHour(interval, clock)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share
     }
+    const changes = modesOf(events)
     for (const interval of mergeWithin([...byProject.values()].flat(), 0)) {
       const k = kept(interval)
       if (!k) continue
+      for (const [mode, ms] of byMode(k, changes)) inc(modeMs, mode, ms)
       for (const [day, ms] of byDay(k, clock)) inc(dayMs, day, ms)
       for (const [hour, ms] of byHour(k, clock)) hours[hour]! += ms
       totalMs += k[1] - k[0]
@@ -671,6 +696,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     hours,
     hourProjects,
     projects: sorted(projectMs).map(([project, ms]) => ({ project, ms })),
+    modes: sorted(modeMs).map(([mode, ms]) => ({ mode, ms })),
     languages: sorted(languages).map(([language, edits]) => ({ language, edits })),
     tools: [...tools]
       .map(([tool, t]) => ({ tool, calls: t.calls, errors: t.errors, denied: t.denied, avgMs: t.totalMs / t.calls }))

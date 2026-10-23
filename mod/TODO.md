@@ -20,6 +20,7 @@ Each session file opens with a header, `{"v":1,"event":"session","start":<epoch 
 | `compact` | `session.compact`, once it finishes | `trigger` (manual/auto/plugin/precompute), `agentId`, `messages` (count going in), `outcome` (compacted/skipped/threw), `tokensBefore`, `tokensAfter`, `usage`, `durationMs` |
 | `tool` | `tool.call`, once it ends (a call that never ends leaves no row) | `tool`, `agentId`, `file` (built-in file tools only) / `commandChars`, `repo` (the git root it worked in when not the cwd's: a file's, or where a Bash command `cd`s first; a worktree's is its main repo; never the command), `repoName` (its origin remote's name, when not the folder's), `outcome`, `durationMs` |
 | `file_changed` | `tool.call` | `path`, `via: tool` (Edit/Write/NotebookEdit) or `via: bash-window` |
+| `mode` | `classic.UserPromptSubmit` / `classic.PostToolUse` / `classic.Stop`, main loop only, when the permission mode differs from the last one logged (and once after a reload) | `mode` (`default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`). None where a plugin above this one sends those events past it (the built-in `cc-plugin-sec-default` did on 2026-10-23) |
 | `cwd_changed` | inside `logAll()` whenever the cwd differs from the last row's, and once after a reload | `cwd` (the new one), `root` (its repo's folder, when that's not the cwd itself; the header has it too), `rootName` (the repo's name from its origin remote, when that's not its folder's) |
 
 Prompt text and file contents are never written.

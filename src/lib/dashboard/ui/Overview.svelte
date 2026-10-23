@@ -5,7 +5,7 @@
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
   import { liveDigest, stored, whoIsLooking } from '../live.svelte'
-  import { HEAT_LABELS, hourLabel, longDay, series, shortDay, tipLines, toolName } from '../overview'
+  import { HEAT_LABELS, hourLabel, longDay, modeName, series, shortDay, tipLines, toolName } from '../overview'
   import { MIN, attachments, compact, duration, esc, hideTip, palette, rangeWindow, seconds, showTip, withPerson, type Range } from '../shared'
   import BarList from './BarList.svelte'
   import Calendar from './Calendar.svelte'
@@ -31,6 +31,9 @@
 
   const period = $derived(rangeWindow(range.value))
   const s = $derived(live.value?.range)
+  // most setups never let the mod see the mode, so its card waits for a
+  // range that has some
+  const modesSeen = $derived(!!s?.modes.some(m => m.mode !== 'unknown'))
   // all time picks each project's color and fills the calendar
   const ever = $derived(live.value)
   const colors = $derived(palette(ever?.projects ?? []))
@@ -254,21 +257,42 @@
         </Card.Content>
       </Card.Root>
 
-      <Card.Root>
-        <Card.Header><Card.Title>Tools</Card.Title></Card.Header>
-        <Card.Content>
-          <BarList
-            limit={12}
-            columns={2}
-            items={s.tools.map(t => ({
-              name: toolName(t.tool),
-              value: t.calls,
-              amount: compact(t.calls),
-              tip: `<strong>${esc(toolName(t.tool))}</strong>${t.calls} calls · avg ${t.avgMs < 1000 ? `${Math.round(t.avgMs)}ms` : `${(t.avgMs / 1000).toFixed(1)}s`}<span class="muted">${t.errors} errors · ${t.denied} denied</span>`,
-            }))}
-          />
-        </Card.Content>
-      </Card.Root>
+      <div class={['grid gap-4', modesSeen && 'lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]']}>
+        <Card.Root>
+          <Card.Header><Card.Title>Tools</Card.Title></Card.Header>
+          <Card.Content>
+            <BarList
+              limit={12}
+              columns={2}
+              items={s.tools.map(t => ({
+                name: toolName(t.tool),
+                value: t.calls,
+                amount: compact(t.calls),
+                tip: `<strong>${esc(toolName(t.tool))}</strong>${t.calls} calls · avg ${t.avgMs < 1000 ? `${Math.round(t.avgMs)}ms` : `${(t.avgMs / 1000).toFixed(1)}s`}<span class="muted">${t.errors} errors · ${t.denied} denied</span>`,
+              }))}
+            />
+          </Card.Content>
+        </Card.Root>
+        {#if modesSeen}
+          <Card.Root>
+            <Card.Header>
+              <Card.Title>Permission modes</Card.Title>
+              <Card.Description>Active time in each</Card.Description>
+            </Card.Header>
+            <Card.Content>
+              <BarList
+                items={s.modes.map(m => ({
+                  name: modeName(m.mode),
+                  value: m.ms,
+                  amount: duration(m.ms),
+                  color: m.mode === 'unknown' ? 'var(--muted-foreground)' : undefined,
+                  tip: `<strong>${esc(modeName(m.mode))}</strong>${duration(m.ms)} · ${Math.round((m.ms / s.totalMs) * 100)}%${m.mode === 'unknown' ? '<span class="muted">sessions where the mod could not see the mode</span>' : ''}`,
+                }))}
+              />
+            </Card.Content>
+          </Card.Root>
+        {/if}
+      </div>
 
       <Card.Root>
         <Card.Header>

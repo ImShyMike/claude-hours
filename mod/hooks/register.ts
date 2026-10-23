@@ -213,6 +213,28 @@ const runningTools = new Map<string, string>()
 // ends, so the left-out time is what tells how long it stayed open
 const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
 const askedAt = new Map<string, number>()
+// the last permission mode logged, for the session it was in
+let mode: { sessionId: string; mode: string } | undefined
+
+// The permission mode (default, acceptEdits, plan, auto, dontAsk,
+// bypassPermissions): only the classic hooks' input carries it, and their
+// events fire for a module whether or not any settings hook is set. A `mode`
+// row each time the main loop's changes, so a prompt in a new mode finds it
+// by the time it's sent and a shift+tab mid-turn by the next tool or the end.
+// A plugin above this one can send those events on past it, and then there's
+// no row at all
+async function noteMode($: EngineInterface, e: { permission_mode?: string; agent_id?: string }) {
+  if (e.agent_id !== undefined || !e.permission_mode) return
+  try {
+    const sessionId = await $.session.id()
+    if (mode?.sessionId === sessionId && mode.mode === e.permission_mode) return
+    mode = { sessionId, mode: e.permission_mode }
+    await log($, 'mode', { mode: e.permission_mode })
+  } catch (err) {
+    $.ui.log(`${$.plugin.name}: ${String(err)}`)
+  }
+}
+
 let turnClock: { turnId: string; startedMs: number; questionsMs: number; asked: { tool: string; from: number; to: number }[] } | undefined
 
 // [ms before the turn's end it opened, ms open, tool] per dialog. Several in
@@ -1124,6 +1146,10 @@ export const register: Register = on => {
     }
     return changed
   }).catch(($, e, next) => next(e))
+
+  on('classic.UserPromptSubmit', async ($, e, next) => (await noteMode($, e), next(e))).catch(($, e, next) => next(e))
+  on('classic.PostToolUse', async ($, e, next) => (await noteMode($, e), next(e))).catch(($, e, next) => next(e))
+  on('classic.Stop', async ($, e, next) => (await noteMode($, e), next(e))).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {

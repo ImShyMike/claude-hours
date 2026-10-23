@@ -6,6 +6,18 @@ import { MIN, duration, esc, type Palette } from './shared'
 // mcp__helium-devtools__new_page reads better as "helium-devtools · new_page"
 export const toolName = (tool: string) => tool.replace(/^mcp__(.+?)__(.+)$/, '$1 · $2')
 
+// a permission mode as Claude Code's footer names it; one it adds later as is
+const MODES: Record<string, string> = {
+  default: 'Default',
+  acceptEdits: 'Accept edits',
+  plan: 'Plan',
+  auto: 'Auto',
+  dontAsk: "Don't ask",
+  bypassPermissions: 'Bypass permissions',
+  unknown: 'Not recorded',
+}
+export const modeName = (mode: string) => MODES[mode] ?? mode
+
 export const shortDay = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 export const longDay = (day: string) =>
   new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })

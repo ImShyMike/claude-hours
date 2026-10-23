@@ -161,6 +161,28 @@ test('an aborted turn is an interrupt, an answered one a turn_end', async ($, on
   expect(lines[0]).toMatchObject({ durationMs: 1200, turnId: 't1' })
 })
 
+test('the permission mode is logged when the main loop changes it, never for a subagent', async ($, on) => {
+  const { lines } = setup(on)
+  on('classic.UserPromptSubmit', () => ({}))
+  on('classic.PostToolUse', () => ({}))
+  on('classic.Stop', () => ({}))
+
+  await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'default' })
+  await $.classic.PostToolUse({ tool_name: 'Read', tool_input: {}, tool_response: {}, tool_use_id: 'u1', permission_mode: 'default' })
+  await $.classic.PostToolUse({
+    tool_name: 'Read',
+    tool_input: {},
+    tool_response: {},
+    tool_use_id: 'u2',
+    permission_mode: 'plan',
+    agent_id: 'a1',
+  })
+  await $.classic.Stop({ stop_hook_active: false, permission_mode: 'auto' })
+  await $.classic.UserPromptSubmit({ prompt: 'and again', permission_mode: 'auto' })
+
+  expect(lines.filter(l => l.event === 'mode').map(l => l.mode)).toEqual(['default', 'auto'])
+})
+
 test('a tool call logs one row when it ends, then the file it edited', async ($, on) => {
   const { lines, tick } = setup(on)
   on('tool.call', () => (tick(250), { result: {} }))
