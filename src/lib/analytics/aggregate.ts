@@ -173,6 +173,17 @@ export function lastAt(events: Event[]) {
   for (const e of events) end = Math.max(end, time(e))
   return end
 }
+// and a moment none of its spans start before: a span reaches back from its
+// line by its turn's or tool's run, its typing, and any waits it steps over
+export function firstAt(events: Event[]) {
+  let start = Infinity
+  for (const e of events) {
+    let back = (Number(e.durationMs) || 0) + (Number(e.typingMs) || 0)
+    if (Array.isArray(e.waits)) for (const w of e.waits) back += Array.isArray(w) ? Number(w[1]) || 0 : 0
+    start = Math.min(start, time(e) - back)
+  }
+  return start
+}
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')
 // subagent turns overlap the main thread's, so only main-thread turns make spans
 const isMainTurn = (e: Event) => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId

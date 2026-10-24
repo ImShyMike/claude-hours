@@ -2,7 +2,7 @@
 // range's summary, plus what all time decides whatever the range (each
 // project's color by rank, the calendar's days, each session's home project).
 // The browser gets these few numbers, not every event
-import { lastAt, summarize, type Event, type Summary } from '../analytics/aggregate'
+import { firstAt, lastAt, summarize, type Event, type Summary } from '../analytics/aggregate'
 import type { Db } from './db/index'
 import { sessionsOf, timed, type Timing } from './history'
 import { idleCapMs } from './settings'
@@ -102,13 +102,16 @@ function allTime(
 
 const DAY = 86_400_000
 
-// each session's last moment, for as long as history.ts keeps its events
-const ends = new WeakMap<Event[], number>()
-function endOf(events: Event[]) {
-  let end = ends.get(events)
-  if (end === undefined) ends.set(events, (end = lastAt(events)))
-  return end
+// each session's first and last moments, for as long as history.ts keeps
+// its events
+const bounds = new WeakMap<Event[], { start: number; end: number }>()
+function boundsOf(events: Event[]) {
+  let known = bounds.get(events)
+  if (!known) bounds.set(events, (known = { start: firstAt(events), end: lastAt(events) }))
+  return known
 }
+const within = (sessions: Event[][], from: number, to = Infinity) =>
+  sessions.filter(events => boundsOf(events).end >= from && boundsOf(events).start < to).flat()
 
 // tz is the viewer's IANA zone, days and hours are theirs; a zone that
 // doesn't exist throws a RangeError. spans (every active stretch) only when
@@ -119,18 +122,19 @@ export async function digest(db: Db, personId: number, window: { from?: number; 
   const entry = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz }, timing)
   const ever = entry.ever
   const shift = from !== undefined && to !== undefined && !window.spans ? Math.ceil((to - from) / DAY) * DAY : 0
-  // only sessions still going when the earliest window starts can add to it
-  const since = from === undefined ? -Infinity : from - shift
-  const events = [...sessions.values()].filter(events => endOf(events) >= since).flat()
+  // only sessions still going when a window starts can add to it, and the
+  // earlier window leaves out the ones that began after it too
+  const all = [...sessions.values()]
+  const events = within(all, from ?? -Infinity)
   const sum = () => {
     const summary = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, tz }))
     timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
     return summary
   }
   const range = from === undefined && to === undefined ? (entry.whole ??= sum()) : sum()
-  const before = shift
-    ? timed(timing, 'before', () => summarize(events, { from: from! - shift, to: to! - shift, idleCapMs: cap, tz }).totalMs)
-    : undefined
+  const earlier = shift ? { from: from! - shift, to: to! - shift } : undefined
+  const before =
+    earlier && timed(timing, 'before', () => summarize(within(all, earlier.from, earlier.to), { ...earlier, idleCapMs: cap, tz }).totalMs)
   const home = new Map(ever.sessions.map(s => [s.sessionId, s.project]))
   const ids = new Set([...range.sessions.map(s => s.sessionId), ...range.spans.map(s => s.sessionId)])
   const homes = Object.fromEntries([...ids].map(id => [id, home.get(id) ?? '']))
