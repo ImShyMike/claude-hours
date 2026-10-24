@@ -42,10 +42,12 @@ function prefetch(url: URL, want: string, path: string) {
   ahead.set(key, { at: Date.now(), value })
 }
 
-// What the hub answers for a key, fetched now and every 30 s. undefined
-// until the first answer, so nothing claims the log is empty early; asked
-// again when the key changes or an admin switches whose dashboard it is.
-// path is worked out on every fetch, so a range ending now moves with now
+// What the hub answers for a key, fetched now and every 30 s while the tab
+// is in front (one in the background asks nothing, and catches up as it
+// comes back). undefined until the first answer, so nothing claims the log
+// is empty early; asked again when the key changes or an admin switches
+// whose dashboard it is. path is worked out on every fetch, so a range
+// ending now moves with now
 function polled<T>(key: () => string | undefined, path: (key: string) => string) {
   const live = $state<{ value?: T }>({})
   $effect(() => {
@@ -54,7 +56,9 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
     const cached = `${page.url.searchParams.get('person') ?? ''} ${want}`
     let stale = false
     live.value = answers.get(cached)?.value as T | undefined
+    let asked = 0
     const refresh = async () => {
+      asked = Date.now()
       try {
         const early = ahead.get(cached)
         ahead.delete(cached)
@@ -69,10 +73,13 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
       }
     }
     refresh()
-    const timer = setInterval(refresh, REFRESH_MS)
+    const timer = setInterval(() => document.hidden || refresh(), REFRESH_MS)
+    const back = () => document.hidden || Date.now() - asked < REFRESH_MS || refresh()
+    document.addEventListener('visibilitychange', back)
     return () => {
       stale = true
       clearInterval(timer)
+      document.removeEventListener('visibilitychange', back)
     }
   })
   return live
