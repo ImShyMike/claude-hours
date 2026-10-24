@@ -1,6 +1,7 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
   import * as Alert from '#lib/components/ui/alert/index.js'
+  import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
@@ -41,7 +42,7 @@
   <Card.Root>
     <Card.Header>
       <Card.Title>Deletion requests</Card.Title>
-      <Card.Description>Approving records the decision. Nothing is deleted yet, there's no event data to delete.</Card.Description>
+      <Card.Description>Approving deletes the person's account and everything they've sent, at once and for good.</Card.Description>
     </Card.Header>
     <Card.Content>
       {#if data.deletions.length}
@@ -62,10 +63,28 @@
                 <Table.Cell class="max-w-xs truncate whitespace-normal">{request.reason ?? ''}</Table.Cell>
                 <Table.Cell>
                   <div class="flex justify-end gap-2">
-                    <form method="post" action="?/approve" use:enhance>
-                      <input type="hidden" name="id" value={request.id} />
-                      <Button type="submit" variant="destructive" size="sm">Approve</Button>
-                    </form>
+                    <!-- asked first, since there's no undoing it -->
+                    <AlertDialog.Root>
+                      <AlertDialog.Trigger>
+                        {#snippet child({ props })}<Button {...props} variant="destructive" size="sm">Approve</Button>{/snippet}
+                      </AlertDialog.Trigger>
+                      <AlertDialog.Content>
+                        <AlertDialog.Header>
+                          <AlertDialog.Title>Delete {person.name ?? person.email ?? person.sub}?</AlertDialog.Title>
+                          <AlertDialog.Description
+                            >Their account, devices and every session they've sent are deleted for good. They can sign up again, starting from
+                            nothing.</AlertDialog.Description
+                          >
+                        </AlertDialog.Header>
+                        <AlertDialog.Footer>
+                          <AlertDialog.Cancel>Keep it</AlertDialog.Cancel>
+                          <form method="post" action="?/approve" use:enhance>
+                            <input type="hidden" name="id" value={request.id} />
+                            <Button type="submit" variant="destructive" class="w-full">Delete everything</Button>
+                          </form>
+                        </AlertDialog.Footer>
+                      </AlertDialog.Content>
+                    </AlertDialog.Root>
                     <form method="post" action="?/reject" use:enhance>
                       <input type="hidden" name="id" value={request.id} />
                       <Button type="submit" variant="outline" size="sm">Reject</Button>

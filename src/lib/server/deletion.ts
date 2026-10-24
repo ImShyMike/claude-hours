@@ -1,6 +1,7 @@
 // Data deletion requests: a person asks, an admin approves or rejects.
-// Approving only records the decision for now; nothing gets deleted until
-// there's event data to delete
+// Approving deletes the whole account: everything hangs off the person, so
+// their logins, devices, runs and every event in them (and the request
+// itself) go with it
 import { and, desc, eq } from 'drizzle-orm'
 import { deletionRequests, people, type Db } from './db/index'
 
@@ -35,10 +36,13 @@ export function pendingDeletions(db: Db) {
 
 // false when the request isn't pending anymore (another admin got there first)
 export async function decideDeletion(db: Db, id: number, adminId: number, approve: boolean, now = new Date()) {
-  const rows = await db
-    .update(deletionRequests)
-    .set({ status: approve ? 'approved' : 'rejected', decidedAt: now, decidedBy: adminId })
-    .where(and(eq(deletionRequests.id, id), eq(deletionRequests.status, 'pending')))
-    .returning({ id: deletionRequests.id })
-  return rows.length > 0
+  return db.transaction(async tx => {
+    const [row] = await tx
+      .update(deletionRequests)
+      .set({ status: approve ? 'approved' : 'rejected', decidedAt: now, decidedBy: adminId })
+      .where(and(eq(deletionRequests.id, id), eq(deletionRequests.status, 'pending')))
+      .returning({ personId: deletionRequests.personId })
+    if (row && approve) await tx.delete(people).where(eq(people.id, row.personId))
+    return !!row
+  })
 }

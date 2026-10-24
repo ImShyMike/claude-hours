@@ -87,7 +87,7 @@
   <Card.Root>
     <Card.Header>
       <Card.Title>Delete my data</Card.Title>
-      <Card.Description>Ask for everything you've sent here to be deleted. An admin looks at each request.</Card.Description>
+      <Card.Description>Ask for your account and everything you've sent here to be deleted. An admin looks at each request.</Card.Description>
     </Card.Header>
     <Card.Content>
       {#if data.deletion?.status === 'pending'}

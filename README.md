@@ -44,7 +44,8 @@ curl -fsSL https://claude-hours.k.hackclub.dev/install.sh | sh
   `~/.claude/analytics/config.json` can leave out single files
   ([how](docs/how-it-works.md#choosing-which-files-get-logged)).
 - The server's settings page lists your connected computers, revokes them, and
-  takes requests to delete everything you've sent.
+  takes requests to delete everything you've sent. Once an admin approves one,
+  your account and all of it are gone for good.
 
 ## Uninstall
 
