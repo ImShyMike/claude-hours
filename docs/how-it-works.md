@@ -180,8 +180,10 @@ on unchanged:
 - `prompt.edit` fires on every keystroke in the prompt box. The mod keeps the
   draft in memory (counts and the shape timeline) and writes nothing until
   the prompt is sent or given up, so typing never waits on disk.
-- `prompt.submit`, `turn.start`, `turn.complete`, `tool.call` and
-  `session.compact` give the prompt, turn, tool and compaction lines.
+- `prompt.submit`, `turn.start`, `turn.complete` and `tool.call` give the
+  prompt, turn and tool lines. Compactions and the permission mode come from
+  the session's transcript, grepped at each prompt and turn end, since a
+  security plugin above the mod skips the events that carry them.
   `turn.start` / `turn.complete` also tell it whether a turn is open, which
   is how `midTurn` and `toolsRunning` work.
 - After a Bash call it runs `find` for files newer than the call's start, so

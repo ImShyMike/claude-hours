@@ -6,8 +6,8 @@ export type StartedSessions = string[]
 // so a compaction found there is logged once.
 export type SeenCompactions = string[]
 
-// The last permission mode logged and when, by the classic hooks or from the
-// transcript's prompts, so neither logs it again.
+// The last permission mode logged from the transcript's prompts and when it
+// was sent, so a later look carries on from there.
 export type LastMode = { sessionId: string; at: number; mode: string } | null
 
 // How far into its transcript the session has been read, in bytes, so the

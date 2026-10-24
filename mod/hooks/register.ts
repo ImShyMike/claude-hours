@@ -221,30 +221,6 @@ const runningTools = new Map<string, string>()
 const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
 const askedAt = new Map<string, number>()
 
-// The permission mode (default, acceptEdits, plan, auto, dontAsk,
-// bypassPermissions): only the classic hooks' input carries it, and their
-// events fire for a module whether or not any settings hook is set. A `mode`
-// row each time the main loop's changes, so a prompt in a new mode finds it
-// by the time it's sent and a shift+tab mid-turn by the next tool or the end.
-// A plugin above this one can send those events on past it, and then the
-// transcript's prompts say which mode each was sent in (logFromTranscript)
-async function noteMode($: EngineInterface, e: { permission_mode?: string; agent_id?: string }) {
-  const mode = e.permission_mode
-  if (e.agent_id !== undefined || !mode) return
-  try {
-    const [sessionId, at] = await Promise.all([$.session.id(), $.clock.now()])
-    let changed = false
-    await update($, lastMode, last => {
-      if (last?.sessionId === sessionId && last.mode === mode) return last
-      changed = true
-      return { sessionId, at, mode }
-    })
-    if (changed) await log($, 'mode', { mode })
-  } catch (err) {
-    $.ui.log(`${$.plugin.name}: ${String(err)}`)
-  }
-}
-
 let turnClock: { turnId: string; startedMs: number; questionsMs: number; asked: { tool: string; from: number; to: number }[] } | undefined
 
 // [ms before the turn's end it opened, ms open, tool] per dialog. Several in
@@ -367,11 +343,11 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?
 
 const log = ($: EngineInterface, event: string, fields: Fields = {}) => logAll($, [[event, fields]])
 
-// A security plugin above skips session.compact here, and the session.append
-// of its boundary too, so compactions come from the transcript instead: each
-// leaves a compact_boundary entry, stamped when it finished. It skips the
-// classic hooks too, so the permission mode comes from there as well: each
-// prompt's entry says which mode it was sent in. Grepped, as a transcript
+// Compactions and the permission mode come from the transcript, since a
+// security plugin above skips session.compact (and the session.append of its
+// boundary) and the classic hooks, the only events carrying the mode. Each
+// compaction leaves a compact_boundary entry, stamped when it finished, and
+// each prompt's entry says which mode it was sent in. Grepped, as a transcript
 // runs to tens of MB, and for a prompt only its time and mode, never the
 // line, which holds its text. A subagent's are in its own file. Only what was
 // added since the last look is read, from a little before where that ended,
@@ -414,10 +390,6 @@ async function readTranscript($: EngineInterface) {
   return { boundaries, modes, sessionId }
 }
 
-// when the session.compact hook logged a main-thread compaction itself, where
-// nothing skips it, so its boundary isn't logged a second time
-const hookedCompactions: number[] = []
-const HOOKED_SLACK_MS = 5_000
 let scanning: Promise<void> = Promise.resolve()
 
 // One compact row per boundary not seen yet, at the time it finished, and a
@@ -432,7 +404,7 @@ function logFromTranscript($: EngineInterface) {
       if (fresh.length) await update($, seenCompactions, ids => [...ids, ...fresh.map(b => b.uuid)])
       for (const b of fresh) {
         const at = Date.parse(b.timestamp)
-        if (Number.isNaN(at) || hookedCompactions.some(hooked => Math.abs(hooked - at) < HOOKED_SLACK_MS)) continue
+        if (Number.isNaN(at)) continue
         const m = b.compactMetadata ?? {}
         entries.push([
           'compact',
@@ -440,7 +412,7 @@ function logFromTranscript($: EngineInterface) {
           at,
         ])
       }
-      // prompts up to the last mode logged (by either way) were looked at already
+      // prompts up to the last mode logged were looked at already
       const last = await read($, lastMode)
       let latest = last?.sessionId === sessionId ? last : null
       for (const { at, mode } of modes) {
@@ -1480,10 +1452,6 @@ export const register: Register = on => {
     return changed
   }).catch(($, e, next) => next(e))
 
-  on('classic.UserPromptSubmit', async ($, e, next) => (await noteMode($, e), next(e))).catch(($, e, next) => next(e))
-  on('classic.PostToolUse', async ($, e, next) => (await noteMode($, e), next(e))).catch(($, e, next) => next(e))
-  on('classic.Stop', async ($, e, next) => (await noteMode($, e), next(e))).catch(($, e, next) => next(e))
-
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       openTurns.add(e.turnId)
@@ -1517,26 +1485,6 @@ export const register: Register = on => {
     if (main) syncSession($)
     return next(e)
   })
-
-  // /compact, the threshold, a plugin or a precompute ahead of time. Logged
-  // once it's done, so durationMs is how long the wait was. Where a security
-  // plugin skips this, logFromTranscript finds them in the transcript instead
-  on('session.compact', async ($, e, next) => {
-    const startedMs = await $.clock.now()
-    let fields: Record<string, unknown> = { outcome: 'threw' }
-    try {
-      const result = await next(e)
-      fields =
-        result.skip !== undefined
-          ? { outcome: 'skipped' }
-          : { outcome: 'compacted', tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter, usage: result.usage }
-      return result
-    } finally {
-      const endMs = await $.clock.now()
-      if (e.agentId === undefined) hookedCompactions.push(endMs)
-      await log($, 'compact', { trigger: e.trigger, agentId: e.agentId, messages: e.messages.length, ...fields, durationMs: endMs - startedMs })
-    }
-  }).catch(($, e, next) => next(e))
 
   // one `tool` row when the call ends (its time is the end; durationMs gives
   // the start), then the files it changed. A call that never ends, as when

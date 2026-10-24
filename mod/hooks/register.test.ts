@@ -188,28 +188,6 @@ test('an aborted turn is an interrupt, an answered one a turn_end', async ($, on
   expect(lines[0]).toMatchObject({ durationMs: 1200, turnId: 't1' })
 })
 
-test('the permission mode is logged when the main loop changes it, never for a subagent', async ($, on) => {
-  const { lines } = setup(on)
-  on('classic.UserPromptSubmit', () => ({}))
-  on('classic.PostToolUse', () => ({}))
-  on('classic.Stop', () => ({}))
-
-  await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'default' })
-  await $.classic.PostToolUse({ tool_name: 'Read', tool_input: {}, tool_response: {}, tool_use_id: 'u1', permission_mode: 'default' })
-  await $.classic.PostToolUse({
-    tool_name: 'Read',
-    tool_input: {},
-    tool_response: {},
-    tool_use_id: 'u2',
-    permission_mode: 'plan',
-    agent_id: 'a1',
-  })
-  await $.classic.Stop({ stop_hook_active: false, permission_mode: 'auto' })
-  await $.classic.UserPromptSubmit({ prompt: 'and again', permission_mode: 'auto' })
-
-  expect(lines.filter(l => l.event === 'mode').map(l => l.mode)).toEqual(['default', 'auto'])
-})
-
 test('a tool call logs one row when it ends, then the file it edited', async ($, on) => {
   const { lines, tick } = setup(on)
   on('tool.call', () => (tick(250), { result: {} }))
@@ -666,29 +644,6 @@ test('text already in the box when a draft starts is not counted as pasted', asy
   expect(lines[0]).toMatchObject({ chars: 19, typedChars: 5, pastedChars: 0 })
 })
 
-test('a compaction logs its trigger, sizes and how long it took', async ($, on) => {
-  const { lines, tick } = setup(on)
-  const summary = [{ role: 'user' as const, text: 'the summary', toolUses: [] }]
-  on('session.compact', (_, e) =>
-    e.trigger === 'plugin' ? { skip: 'off' } : (tick(42_000), { messages: summary, tokensBefore: 180_000, tokensAfter: 21_000 }),
-  )
-
-  await $.session.compact({ trigger: 'auto', messages: [...summary, ...summary] })
-  await $.session.compact({ trigger: 'plugin', messages: summary })
-
-  expect(lines).toHaveLength(2)
-  expect(lines[0]).toMatchObject({
-    event: 'compact',
-    trigger: 'auto',
-    outcome: 'compacted',
-    messages: 2,
-    tokensBefore: 180_000,
-    tokensAfter: 21_000,
-    durationMs: 42_000,
-  })
-  expect(lines[1]).toMatchObject({ event: 'compact', trigger: 'plugin', outcome: 'skipped', durationMs: 0 })
-})
-
 // a compact_boundary as the transcript keeps it
 const boundary = (uuid: string, at: number, more: Record<string, unknown> = {}) => ({
   type: 'system',
@@ -700,7 +655,7 @@ const boundary = (uuid: string, at: number, more: Record<string, unknown> = {}) 
   ...more,
 })
 
-test('a compaction the hook never saw is found in the transcript, once, at the time it finished', async ($, on) => {
+test('a compaction is found in the transcript, once, at the time it finished', async ($, on) => {
   const { lines, headers, setTranscript, tick, now } = setup(on)
   on('turn.complete', () => ({ text: '' }))
   const start = now()
@@ -735,22 +690,6 @@ test('a compaction the hook never saw is found in the transcript, once, at the t
   expect(lines.map(l => l.event)).toEqual(['prompt', 'compact', 'turn_end', 'turn_end'])
 })
 
-test('a compaction the hook logged is not logged again from the transcript', async ($, on) => {
-  const { lines, setTranscript, tick, now } = setup(on)
-  on('turn.complete', () => ({ text: '' }))
-  const summary = [{ role: 'user' as const, text: 'the summary', toolUses: [] }]
-  on('session.compact', () => (tick(30_000), { messages: summary, tokensBefore: 100_000, tokensAfter: 20_000 }))
-  await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
-  tick(1_000)
-
-  await $.session.compact({ trigger: 'auto', messages: summary })
-  setTranscript([boundary('c1', now() - 40)])
-  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
-
-  expect(lines.filter(l => l.event === 'compact')).toHaveLength(1)
-  expect(lines.find(l => l.event === 'compact')).toMatchObject({ trigger: 'auto', messages: 1, tokensBefore: 100_000 })
-})
-
 // a prompt as the transcript keeps it, its mode right after its time
 const sent = (at: number, mode: string) => ({
   type: 'user',
@@ -759,7 +698,7 @@ const sent = (at: number, mode: string) => ({
   permissionMode: mode,
 })
 
-test('where the classic hooks are skipped, the mode comes from the prompts in the transcript', async ($, on) => {
+test('the mode comes from the prompts in the transcript, logged where it changed', async ($, on) => {
   const { lines, raw, setTranscript, tick, now } = setup(on)
   on('turn.complete', () => ({ text: '' }))
   const start = now()
@@ -783,26 +722,6 @@ test('where the classic hooks are skipped, the mode comes from the prompts in th
     { event: 'mode', t: 20_000, mode: 'plan' },
   ])
   expect(JSON.stringify(raw)).not.toContain('secret')
-})
-
-test('a mode the classic hooks logged is not logged again from the transcript, nor the other way round', async ($, on) => {
-  const { lines, setTranscript, tick, now } = setup(on)
-  on('turn.complete', () => ({ text: '' }))
-  on('classic.UserPromptSubmit', () => ({}))
-  on('classic.Stop', () => ({}))
-  const start = now()
-  setTranscript([sent(start, 'plan')])
-  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
-  tick(5_000)
-  // the hook agrees, then sees a shift+tab the transcript only shows at the next prompt
-  await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'plan' })
-  tick(5_000)
-  await $.classic.Stop({ stop_hook_active: false, permission_mode: 'acceptEdits' })
-  setTranscript([sent(start, 'plan'), sent(now() + 1_000, 'acceptEdits')])
-  tick(2_000)
-  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
-
-  expect(lines.filter(l => l.event === 'mode').map(l => l.mode)).toEqual(['plan', 'acceptEdits'])
 })
 
 test('each look at the transcript reads only what was added, from a little before', async ($, on) => {
