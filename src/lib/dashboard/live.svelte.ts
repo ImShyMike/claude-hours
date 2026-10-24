@@ -47,15 +47,16 @@ function prefetch(url: URL, want: string, path: string) {
 // comes back). undefined until the first answer, so nothing claims the log
 // is empty early; asked again when the key changes or an admin switches
 // whose dashboard it is. path is worked out on every fetch, so a range
-// ending now moves with now
+// ending now moves with now. Raw, not deep state: an answer is only ever
+// swapped whole, and a session's thousands of events read faster unproxied
 function polled<T>(key: () => string | undefined, path: (key: string) => string) {
-  const live = $state<{ value?: T }>({})
+  let current = $state.raw<T>()
   $effect(() => {
     const want = key()
     if (want === undefined) return
     const cached = `${page.url.searchParams.get('person') ?? ''} ${want}`
     let stale = false
-    live.value = answers.get(cached)?.value as T | undefined
+    current = answers.get(cached)?.value as T | undefined
     let asked = 0
     const refresh = async () => {
       asked = Date.now()
@@ -67,7 +68,7 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
         if (stale || text === answers.get(cached)?.text) return
         const value = JSON.parse(text) as T
         answers.set(cached, { text, value })
-        live.value = value
+        current = value
       } catch (err) {
         console.error(`could not load ${want}`, err)
       }
@@ -82,7 +83,11 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
       document.removeEventListener('visibilitychange', back)
     }
   })
-  return live
+  return {
+    get value() {
+      return current
+    },
+  }
 }
 
 const digestKey = (range: Range, spans: boolean) => `digest ${range}${spans ? ' spans' : ''}`
