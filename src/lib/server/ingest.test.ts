@@ -67,6 +67,12 @@ async function expectRoundTrip(dir: string) {
     expect(got.range).toEqual(summarize(local, { from, to, idleCapMs: 5 * 60_000, tz }))
     expect(got.days).toEqual(ever.days)
     expect(got.projects).toEqual(ever.projects)
+    expect(got.before).toBeUndefined()
+    // without spans it also sums the 3 days before, to compare against:
+    // the 3 days after these have these as theirs
+    const shift = 3 * 24 * 3600_000
+    expect(got.range.totalMs).toBeGreaterThan(0)
+    expect((await digest(db, person, { from: from + shift, to: to + shift, tz })).before).toBe(got.range.totalMs)
   }
 }
 

@@ -14,6 +14,9 @@ export type Digest = {
   // the project each session in range is drawn under on the timeline
   homes: Record<string, string>
   idleCapMs: number
+  // active time in the same stretch of clock whole days earlier (yesterday
+  // up to this time, the 7 days before), for a range with both ends and no spans
+  before?: number
 }
 
 type AllTime = Pick<Summary, 'projects' | 'days' | 'sessions'>
@@ -95,6 +98,8 @@ function allTime(
   return entry.ever
 }
 
+const DAY = 86_400_000
+
 // tz is the viewer's IANA zone, days and hours are theirs; a zone that
 // doesn't exist throws a RangeError. spans (every active stretch) only when
 // asked, since only the timeline draws them
@@ -105,6 +110,10 @@ export async function digest(db: Db, personId: number, window: { from?: number; 
   const ever = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz }, timing)
   const range = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, tz }))
   timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
+  const shift = from !== undefined && to !== undefined && !window.spans ? Math.ceil((to - from) / DAY) * DAY : 0
+  const before = shift
+    ? timed(timing, 'before', () => summarize(events, { from: from! - shift, to: to! - shift, idleCapMs: cap, tz }).totalMs)
+    : undefined
   const home = new Map(ever.sessions.map(s => [s.sessionId, s.project]))
   const ids = new Set([...range.sessions.map(s => s.sessionId), ...range.spans.map(s => s.sessionId)])
   const homes = Object.fromEntries([...ids].map(id => [id, home.get(id) ?? '']))
@@ -114,6 +123,7 @@ export async function digest(db: Db, personId: number, window: { from?: number; 
     days: ever.days,
     homes,
     idleCapMs: cap,
+    before,
   } satisfies Digest
 }
 

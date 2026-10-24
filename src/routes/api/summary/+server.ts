@@ -8,7 +8,8 @@ const msOf = (value: string | null) => (value === null ? undefined : Number(valu
 
 // the dashboard's numbers for ?from to ?to (epoch ms, both optional for all
 // time), with days and hours in ?tz, the viewer's time zone; &spans adds every
-// active stretch, for the timeline
+// active stretch, for the timeline. Without spans, a range with both ends
+// also gets the active time of the same stretch of clock before it
 export const GET: RequestHandler = async ({ locals, url }) => {
   const started = performance.now()
   const timing: Timing = new Map()

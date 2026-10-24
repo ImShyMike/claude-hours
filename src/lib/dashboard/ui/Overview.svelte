@@ -55,6 +55,15 @@
   const colors = $derived(palette(ever?.projects ?? []))
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
+  // the range against the same stretch of clock before it
+  function versus(now: number, before: number) {
+    const then = range.value === 'today' ? 'the same time yesterday' : `the ${range.value} days before`
+    if (!before) return now ? `nothing logged ${then}` : ''
+    const diff = now - before
+    if (Math.abs(diff) < MIN) return `about the same as ${then}`
+    return `${duration(Math.abs(diff))} ${diff > 0 ? 'more' : 'less'} than ${then}`
+  }
+
   function tiles(s: Summary) {
     const w = s.writing
     const totalTurns = s.turns + s.interrupts
@@ -150,6 +159,11 @@
         </Card.Header>
         <Card.Content class="text-sm text-muted-foreground">
           {period.label}{s.sessions.length ? `, across ${plural(s.sessions.length, 'session')}` : ''}
+          <!-- not for someone whose first logged day is in the range: nothing came before to compare -->
+          {#if live.value?.before !== undefined && period.from !== undefined && (ever.days[0]?.day ?? '') < dayKey(period.from)}
+            {@const vs = versus(s.totalMs, live.value.before)}
+            {#if vs}<div>{vs}</div>{/if}
+          {/if}
         </Card.Content>
       </Card.Root>
       <div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
