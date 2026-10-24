@@ -1,6 +1,7 @@
-import type { Handle, ServerInit } from '@sveltejs/kit/hooks'
+import { sequence, type Handle, type ServerInit } from '@sveltejs/kit/hooks'
 import { ADMIN_EMAILS, DATABASE_URL, HCA_CLIENT_ID, HCA_CLIENT_SECRET } from '$app/env/private'
 import { db } from '#lib/server/db/client.js'
+import { gzipped } from '#lib/server/compress.js'
 import { isAdmin } from '#lib/server/people.js'
 import { SESSION_COOKIE, setSessionCookie, validateSession } from '#lib/server/sessions.js'
 
@@ -9,7 +10,7 @@ export const init: ServerInit = () => {
   if (missing.length) throw new Error(`Missing ${missing.map(([name]) => name).join(', ')}, see .env.example`)
 }
 
-export const handle: Handle = async ({ event, resolve }) => {
+const auth: Handle = async ({ event, resolve }) => {
   event.locals.person = null
   event.locals.admin = false
   // the mod's API authenticates with bearer tokens, never the cookie
@@ -25,3 +26,11 @@ export const handle: Handle = async ({ event, resolve }) => {
   }
   return resolve(event)
 }
+
+// the dashboard's answers; the mod's /v1/ ones stay as they are
+const compress: Handle = async ({ event, resolve }) => {
+  const response = await resolve(event)
+  return event.url.pathname.startsWith('/api/') ? gzipped(event.request, response) : response
+}
+
+export const handle = sequence(auth, compress)
