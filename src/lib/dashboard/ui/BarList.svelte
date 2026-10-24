@@ -15,13 +15,18 @@
 {#if !items.length}
   <p class="text-sm text-muted-foreground">Nothing yet</p>
 {:else}
+  <!-- the rows share the list's columns, so the amounts take the widest one's
+       room and every bar in the list starts and ends level -->
   <div
-    class={['grid gap-x-8 gap-y-2', columns === 2 && 'md:grid-flow-col md:grid-cols-2']}
+    class={[
+      'grid grid-cols-[minmax(0,10rem)_1fr_auto] gap-x-8 gap-y-2',
+      columns === 2 && 'md:grid-flow-col md:grid-cols-[minmax(0,10rem)_1fr_auto_minmax(0,10rem)_1fr_auto]',
+    ]}
     style:grid-template-rows={columns === 2 ? `repeat(${Math.ceil(shown.length / 2)}, auto)` : undefined}
   >
     {#each shown as item, i (i)}
       <div
-        class="grid grid-cols-[minmax(0,10rem)_1fr_auto] items-center gap-3 text-sm"
+        class="col-span-3 grid grid-cols-subgrid items-center gap-x-3 text-sm"
         role="presentation"
         onmousemove={e => showTip(e, item.tip)}
         onmouseleave={hideTip}
