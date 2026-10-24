@@ -125,6 +125,7 @@
       {#if tl && box && drawnStrip}
         <div
           class="max-h-80 min-h-24 overflow-y-auto rounded-lg border bg-background px-3.5 py-3 text-[0px] leading-[18px]"
+          role="img"
           aria-label="The prompt box, as shapes"
         >
           {@html box.html}
@@ -151,7 +152,7 @@
           />
           <span class="min-w-24 text-sm text-muted-foreground tabular-nums">{seconds(real)} / {seconds(durationOf(tl))}</span>
           <Select.Root type="single" bind:value={speed}>
-            <Select.Trigger size="sm" aria-label="Speed">{speed}×</Select.Trigger>
+            <Select.Trigger size="sm" aria-label="Speed {speed}×">{speed}×</Select.Trigger>
             <Select.Content>
               {#each SPEEDS as s (s)}
                 <Select.Item value={s} label="{s}×">{s}×</Select.Item>
