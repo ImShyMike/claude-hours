@@ -1,0 +1,58 @@
+import { expect, test } from 'vitest'
+import type { Event } from '../analytics/aggregate'
+import { laneRows } from './session'
+import { palette } from './shared'
+
+const MIN = 60_000
+const START = Date.parse('2026-10-19T12:00:00Z')
+const at = (ms: number, event: string, extra: Partial<Event> = {}): Event => ({
+  ts: new Date(START + ms).toISOString(),
+  sessionId: 's1',
+  cwd: '/code/terra',
+  event,
+  ...extra,
+})
+const rows = (events: Event[]) => laneRows({ events, drafts: [], tracks: [], colors: palette([]), onpick: () => {} }).rows
+const opus = { input_tokens: 1, output_tokens: 1, model: 'claude-opus-5-5' }
+
+test('subagents get a track apiece, shared by ones that never overlap, and their calls leave the Tools lane', () => {
+  const events = [
+    at(1 * MIN, 'tool', { tool: 'Read', durationMs: 1_000, file: '/code/terra/src/a.ts' }),
+    // a and b run side by side, c after a is done
+    at(2 * MIN, 'tool', { tool: 'Grep', durationMs: 1_000, agentId: 'a' }),
+    at(5 * MIN, 'turn_end', { durationMs: 4 * MIN, agentId: 'a', usage: opus }),
+    at(3 * MIN, 'tool', { tool: 'Bash', durationMs: 1_000, agentId: 'b' }),
+    at(8 * MIN, 'turn_end', { durationMs: 6 * MIN, agentId: 'b', usage: opus }),
+    // c never ended a turn, so its calls are its run
+    at(6 * MIN, 'tool', { tool: 'Read', durationMs: 30_000, agentId: 'c' }),
+    at(7 * MIN, 'tool', { tool: 'Read', durationMs: 30_000, agentId: 'c' }),
+    at(10 * MIN, 'turn_end', { durationMs: 10 * MIN, usage: opus }),
+  ]
+  const lanes = rows(events)
+  expect(lanes.map(r => r.key)).toEqual(['you', 'claude', 'agents', 'tools', 'projects'])
+  const agents = lanes.find(r => r.key === 'agents')!
+  expect(agents.sub).toBe('3 ran')
+  const runs = agents.bars.filter(b => !b.plain)
+  expect(runs.map(b => [b.group, b.top, b.from - START, b.to - START])).toEqual([
+    ['a', 0, 1 * MIN, 5 * MIN],
+    ['b', 15, 2 * MIN, 8 * MIN],
+    ['c', 0, 5.5 * MIN, 7 * MIN],
+  ])
+  expect(runs[0]!.tip).toContain('Opus 5.5')
+  expect(agents.bars.filter(b => b.plain)).toHaveLength(4)
+  const tools = lanes.find(r => r.key === 'tools')!.bars
+  expect(tools).toHaveLength(1)
+  expect(tools[0]!.tip).toContain('src/a.ts')
+  expect(tools[0]!.tip).not.toContain('/code/terra')
+})
+
+test('a main-thread compaction marks where the context dropped, with its sizes', () => {
+  const events = [
+    at(1 * MIN, 'turn_end', { durationMs: 1 * MIN, usage: opus }),
+    at(3 * MIN, 'compact', { trigger: 'auto', tokensBefore: 368_000, tokensAfter: 34_000, durationMs: 60_000 }),
+  ]
+  const claude = rows(events).find(r => r.key === 'claude')!
+  expect(claude.marks?.map(m => m.glyph)).toEqual(['368K → 34K'])
+  expect(claude.marks?.[0]?.tip).toContain('91% smaller')
+  expect(rows(events).some(r => r.key === 'agents')).toBe(false)
+})

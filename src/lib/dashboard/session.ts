@@ -3,6 +3,7 @@
 // what, the drafts, and a draft's replay
 import { projectSpans, turnPieces, waitsOf, type Event, type Interval } from '../analytics/aggregate'
 import { apply, countGroups, describe, groupOf, initialState, pausesOf, type Source, type State, type Step, type Timeline } from '../analytics/replay'
+import { toolName } from './overview'
 import { ROW, type Bar, type Mark, type Row } from './rows'
 import { MIN, attachments, clockTime, compact, duration, esc, modelName, seconds, type Palette } from './shared'
 
@@ -18,6 +19,45 @@ export type Draft = {
 
 export const time = (e: Event) => Date.parse(e.ts)
 const num = (v: unknown) => (typeof v === 'number' ? v : 0)
+const modelOf = (e: Event) => {
+  const model = (e.usage as { model?: unknown } | undefined)?.model
+  return typeof model === 'string' ? modelName(model) : undefined
+}
+
+// a tool call's card: the file it worked on and the repo, when the mod knew them
+function toolTip(e: Event, ms: number) {
+  const repo = typeof e.repoName === 'string' ? e.repoName : typeof e.repo === 'string' ? e.repo.split('/').pop() : undefined
+  // the reader makes paths whole again; under the working dir they read better short
+  const path = typeof e.file === 'string' && typeof e.cwd === 'string' && e.file.startsWith(`${e.cwd}/`) ? e.file.slice(e.cwd.length + 1) : e.file
+  const file = typeof path === 'string' ? `<br>${esc(path)}` : ''
+  return `<strong>${esc(toolName(String(e.tool)))}</strong>${seconds(num(e.durationMs))} · ${esc(String(e.outcome ?? ''))}${file}${repo ? `<br>in ${esc(repo)}` : ''}`
+}
+
+// Each subagent's runs (its turns, or the stretch of its tool calls when no
+// turn ended) and its calls, a track apiece; ones that never overlap share
+// a track, so a long session doesn't grow a row per agent
+function subagents(events: Event[], tools: { start: number; end: number; e: Event }[]) {
+  const byId = new Map<string, { runs: { from: number; to: number; model?: string }[]; tools: typeof tools }>()
+  const of = (id: string) => byId.get(id) ?? byId.set(id, { runs: [], tools: [] }).get(id)!
+  for (const t of tools) if (typeof t.e.agentId === 'string') of(t.e.agentId).tools.push(t)
+  for (const e of events) {
+    if ((e.event !== 'turn_end' && e.event !== 'interrupt') || typeof e.agentId !== 'string') continue
+    of(e.agentId).runs.push({ from: time(e) - num(e.durationMs), to: time(e), model: modelOf(e) })
+  }
+  const agents = [...byId].map(([id, a]) => {
+    if (!a.runs.length) a.runs.push({ from: Math.min(...a.tools.map(t => t.start)), to: Math.max(...a.tools.map(t => t.end)) })
+    const ends = [...a.runs.flatMap(r => [r.from, r.to]), ...a.tools.flatMap(t => [t.start, t.end])]
+    return { id, ...a, from: Math.min(...ends), to: Math.max(...ends), track: 0 }
+  })
+  agents.sort((a, b) => a.from - b.from)
+  const tracks: number[] = []
+  for (const a of agents) {
+    a.track = tracks.findIndex(end => end <= a.from)
+    if (a.track < 0) a.track = tracks.length
+    tracks[a.track] = a.to
+  }
+  return { agents, tracks: tracks.length }
+}
 
 // --- data ---------------------------------------------------------------
 
@@ -76,6 +116,8 @@ const ABANDONED = 'border-2 border-(--typed)'
 const PAUSE = 'bg-[repeating-linear-gradient(45deg,var(--typed)_0_2px,var(--card)_2px_4px)]'
 const BREAK = 'bg-[repeating-linear-gradient(45deg,var(--typed)_0_2px,var(--card)_2px_8px)]'
 const MID_TURN = 'border-l-2 border-dashed border-muted-foreground'
+// faint, so the tool calls drawn over it show
+const SUBAGENT = 'bg-(--neutral)/40'
 
 // the lanes' legend: a swatch's classes and what it means
 export const LANES_LEGEND: [string, string][] = [
@@ -86,6 +128,7 @@ export const LANES_LEGEND: [string, string][] = [
   ['bg-(--neutral-2)', 'Claude working'],
   ['bg-foreground/70', 'compacting'],
   ['bg-(--neutral)', 'tool call'],
+  [SUBAGENT, 'subagent running'],
   ['bg-(--critical)', 'interrupt'],
   ['w-[3px] bg-[repeating-linear-gradient(to_bottom,var(--muted-foreground)_0_3px,transparent_3px_5px)]', 'sent mid-turn'],
 ]
@@ -106,6 +149,7 @@ export function laneRows(opts: {
   const compacts = events.filter(e => e.event === 'compact')
   // a tool row is written when the call ends, so it starts durationMs earlier
   const tools = events.filter(e => e.event === 'tool').map(e => ({ start: time(e) - num(e.durationMs), end: time(e), e }))
+  const agents = subagents(events, tools)
 
   // a question or plan waiting on the person is their time: it goes on the
   // You lane, and the turn around it is drawn in pieces on either side
@@ -117,6 +161,7 @@ export function laneRows(opts: {
     ...[...piecesOf.values()].flat(),
     ...compacts.map((c): Interval => [time(c) - num(c.durationMs), time(c)]),
     ...tools.map((t): Interval => [t.start, t.end]),
+    ...agents.agents.flatMap(a => a.runs.map((r): Interval => [r.from, r.to])),
     ...waits.map((w): Interval => [w.from, w.to]),
   ]
 
@@ -151,8 +196,8 @@ export function laneRows(opts: {
     const end = time(t)
     const pieces = piecesOf.get(t)!
     const waited = end - pieces[0]![0] - num(t.durationMs)
-    const model = (t.usage as { model?: unknown } | undefined)?.model
-    const by = typeof model === 'string' ? `<br>${esc(modelName(model))}` : ''
+    const model = modelOf(t)
+    const by = model ? `<br>${esc(model)}` : ''
     const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}${waited ? ` working, ${seconds(waited)} waiting on you` : ''}, ended ${clockTime(end)}${by}`
     for (const [s, e] of pieces) claude.push(bar('bg-(--neutral-2)', s, e, { tip }))
     if (t.event !== 'interrupt') continue
@@ -177,17 +222,40 @@ export function laneRows(opts: {
     const end = time(c)
     const before = num(c.tokensBefore)
     const after = num(c.tokensAfter)
-    const sizes = before ? `<br>${compact(before)} → ${after ? compact(after) : '?'} tokens` : ''
+    const shrunk = before && after ? `, ${Math.round((1 - after / before) * 100)}% smaller` : ''
+    const sizes = before ? `<br>context ${compact(before)} → ${after ? compact(after) : '?'} tokens${shrunk}` : ''
     const who = c.agentId ? ', a subagent' : ''
     const tip = `<strong>Compaction (${esc(String(c.trigger))}${who})</strong>${seconds(num(c.durationMs))}, ${esc(String(c.outcome))}${sizes}`
     const faded = c.agentId || c.trigger === 'precompute'
     claude.push(bar(faded ? 'bg-foreground/30' : 'bg-foreground/70', end - num(c.durationMs), end, { tip }))
+    // where the main thread's context dropped, its size before and after by the line
+    if (!faded && before && after) {
+      claudeMarks.push({
+        at: end,
+        class: 'border-l-2 border-foreground/70',
+        tip,
+        glyph: `${compact(before)} → ${compact(after)}`,
+        glyphClass: 'rounded-sm bg-card px-1 whitespace-nowrap font-medium text-foreground/80',
+      })
+    }
   }
-  const toolBars = tools.map(t =>
-    bar('bg-(--neutral)', t.start, t.end, {
-      tip: `<strong>${esc(String(t.e.tool))}</strong>${seconds(t.end - t.start)} · ${esc(String(t.e.outcome ?? ''))}`,
-    }),
-  )
+  // the main thread's calls; a subagent's go on its own track
+  const toolBars = tools
+    .filter(t => typeof t.e.agentId !== 'string')
+    .map(t => bar('bg-(--neutral)', t.start, t.end, { tip: toolTip(t.e, t.end - t.start) }))
+  // a subagent's run faint, its calls over it, and the lot lit up together
+  const agentBars = agents.agents.flatMap(a => {
+    const top = a.track * (ROW.sub + ROW.gap)
+    const calls = `${a.tools.length} tool ${a.tools.length === 1 ? 'call' : 'calls'}`
+    const runs = a.runs.map(r => {
+      const tip = `<strong>Subagent</strong>${seconds(r.to - r.from)} · ${calls}, ended ${clockTime(r.to)}${r.model ? `<br>${esc(r.model)}` : ''}`
+      return bar(SUBAGENT, r.from, r.to, { top, height: ROW.sub, group: a.id, tip })
+    })
+    const own = a.tools.map(t =>
+      bar('bg-(--neutral)', t.start, t.end, { top, height: ROW.sub, group: a.id, plain: true, tip: toolTip(t.e, t.end - t.start) }),
+    )
+    return [...runs, ...own]
+  })
   const projects = tracks.flatMap((track, k) =>
     track.map(({ project, span }) => ({
       from: span[0],
@@ -201,6 +269,17 @@ export function laneRows(opts: {
   const rows: Row[] = [
     { key: 'you', label: 'You', height: ROW.main, bars: you, marks: youMarks },
     { key: 'claude', label: 'Claude', height: ROW.main, bars: claude, marks: claudeMarks },
+    ...(agents.tracks
+      ? [
+          {
+            key: 'agents',
+            label: 'Subagents',
+            sub: `${agents.agents.length} ran`,
+            height: agents.tracks * ROW.sub + (agents.tracks - 1) * ROW.gap,
+            bars: agentBars,
+          },
+        ]
+      : []),
     { key: 'tools', label: 'Tools', height: ROW.main, bars: toolBars },
     { key: 'projects', label: 'Projects', height: ROW.main + Math.max(0, tracks.length - 1) * (ROW.sub + ROW.gap), bars: projects },
   ]
