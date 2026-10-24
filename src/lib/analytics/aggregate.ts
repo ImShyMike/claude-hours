@@ -167,6 +167,12 @@ function time(e: Event) {
   if (at === undefined) Object.defineProperty(e, TIME, { value: (at = Date.parse(typeof e.endedAt === 'string' ? e.endedAt : e.ts)) })
   return at
 }
+// when a session's last line was: none of its spans end after it
+export function lastAt(events: Event[]) {
+  let end = -Infinity
+  for (const e of events) end = Math.max(end, time(e))
+  return end
+}
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')
 // subagent turns overlap the main thread's, so only main-thread turns make spans
 const isMainTurn = (e: Event) => (e.event === 'turn_end' || e.event === 'interrupt') && !e.agentId
@@ -556,11 +562,9 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   let totalMs = 0
   const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
   for (const [sessionId, events] of sessionsOf) {
-    // none of a session's spans end after its last line, so one over before
-    // the window has nothing in it, and a short range skips most of history
-    let end = -Infinity
-    for (const e of events) end = Math.max(end, time(e))
-    if (end < lo) continue
+    // a session over before the window has nothing in it, so a short range
+    // skips most of history
+    if (lastAt(events) < lo) continue
     const byProject = projectSpans(events, idleCapMs)
     const inside: [string, Interval[]][] = []
     const mine = new Map<string, number>()
@@ -735,14 +739,16 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   }
   return {
     totalMs,
-    days: valid.length
-      ? dayRange(lo, hi, clock).map(day => ({
-          day,
-          ms: dayMs.get(day) ?? 0,
-          prompts: dayPrompts.get(day) ?? 0,
-          projects: dayProjects.get(day) ?? {},
-        }))
-      : [],
+    // a range with a start has its days, logged in or not
+    days:
+      valid.length || from !== undefined
+        ? dayRange(lo, hi, clock).map(day => ({
+            day,
+            ms: dayMs.get(day) ?? 0,
+            prompts: dayPrompts.get(day) ?? 0,
+            projects: dayProjects.get(day) ?? {},
+          }))
+        : [],
     hours,
     hourProjects,
     projects: sorted(projectMs).map(([project, ms]) => ({ project, ms })),

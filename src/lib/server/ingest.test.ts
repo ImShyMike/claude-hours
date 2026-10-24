@@ -73,6 +73,13 @@ async function expectRoundTrip(dir: string) {
     const shift = 3 * 24 * 3600_000
     expect(got.range.totalMs).toBeGreaterThan(0)
     expect((await digest(db, person, { from: from + shift, to: to + shift, tz })).before).toBe(got.range.totalMs)
+    // a late window skips the sessions over before it, an empty one past
+    // everything still has its days, and both sum as all of history would
+    const newest = ever.sessions[0]!.start
+    for (const late of [newest - 2 * 24 * 3600_000, newest + 30 * 24 * 3600_000]) {
+      const window = { from: late, to: late + 3 * 24 * 3600_000 }
+      expect((await digest(db, person, { ...window, tz, spans: true })).range).toEqual(summarize(local, { ...window, idleCapMs: 5 * 60_000, tz }))
+    }
   }
 }
 

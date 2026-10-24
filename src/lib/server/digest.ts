@@ -2,7 +2,7 @@
 // range's summary, plus what all time decides whatever the range (each
 // project's color by rank, the calendar's days, each session's home project).
 // The browser gets these few numbers, not every event
-import { summarize, type Event, type Summary } from '../analytics/aggregate'
+import { lastAt, summarize, type Event, type Summary } from '../analytics/aggregate'
 import type { Db } from './db/index'
 import { sessionsOf, timed, type Timing } from './history'
 import { idleCapMs } from './settings'
@@ -100,17 +100,27 @@ function allTime(
 
 const DAY = 86_400_000
 
+// each session's last moment, for as long as history.ts keeps its events
+const ends = new WeakMap<Event[], number>()
+function endOf(events: Event[]) {
+  let end = ends.get(events)
+  if (end === undefined) ends.set(events, (end = lastAt(events)))
+  return end
+}
+
 // tz is the viewer's IANA zone, days and hours are theirs; a zone that
 // doesn't exist throws a RangeError. spans (every active stretch) only when
 // asked, since only the timeline draws them
 export async function digest(db: Db, personId: number, window: { from?: number; to?: number; tz?: string; spans?: boolean }, timing?: Timing) {
   const { from, to, tz } = window
   const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db)])
-  const events = [...sessions.values()].flat()
   const ever = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz }, timing)
+  const shift = from !== undefined && to !== undefined && !window.spans ? Math.ceil((to - from) / DAY) * DAY : 0
+  // only sessions still going when the earliest window starts can add to it
+  const since = from === undefined ? -Infinity : from - shift
+  const events = [...sessions.values()].filter(events => endOf(events) >= since).flat()
   const range = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, tz }))
   timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
-  const shift = from !== undefined && to !== undefined && !window.spans ? Math.ceil((to - from) / DAY) * DAY : 0
   const before = shift
     ? timed(timing, 'before', () => summarize(events, { from: from! - shift, to: to! - shift, idleCapMs: cap, tz }).totalMs)
     : undefined
