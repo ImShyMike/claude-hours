@@ -1,7 +1,7 @@
 // The session page's drawing, worked out as rows, shapes and strings for
 // its Svelte components to put on the page: the lanes of who was doing
 // what, the drafts, and a draft's replay
-import { projectSpans, turnPieces, waitsOf, type Event, type Interval } from '../analytics/aggregate'
+import { turnPieces, waitsOf, type Event, type Interval } from '../analytics/aggregate'
 import { apply, countGroups, describe, groupOf, initialState, pausesOf, type Source, type State, type Step, type Timeline } from '../analytics/replay'
 import { toolName } from './overview'
 import { ROW, type Bar, type Mark, type Row } from './rows'
@@ -81,11 +81,20 @@ export function buildDrafts(events: Event[], timelines: Timeline[]): Draft[] {
 
 export type ProjectPiece = { project: string; span: Interval }
 
+// a session's active stretches by project (projectSpans), summed per project
+// as the overview's sessions list does, most first
+export function projectSplit(spans: Map<string, Interval[]>) {
+  return [...spans]
+    .map(([project, spans]) => ({ project, ms: spans.reduce((sum, [start, end]) => sum + Math.max(0, end - start), 0) }))
+    .filter(p => p.ms > 0)
+    .sort((a, b) => b.ms - a.ms)
+}
+
 // Where the session's time went, by project, for the Projects lane: tracks of
 // stretches that don't overlap, home project first, so a fork working in
 // another repo at the same time drops to a thin track under it
-export function projectTracks(events: Event[], idleCapMs: number, home: string): ProjectPiece[][] {
-  const byProject = [...projectSpans(events, idleCapMs)].flatMap(([project, spans]) => spans.map(span => ({ project, span })))
+export function projectTracks(spans: Map<string, Interval[]>, home: string): ProjectPiece[][] {
+  const byProject = [...spans].flatMap(([project, spans]) => spans.map(span => ({ project, span })))
   byProject.sort((a, b) => Number(b.project === home) - Number(a.project === home) || a.span[0] - b.span[0])
   const tracks: ProjectPiece[][] = []
   for (const piece of byProject) {

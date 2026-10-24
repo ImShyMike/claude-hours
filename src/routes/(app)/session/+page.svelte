@@ -3,13 +3,13 @@
   import PlayIcon from '@lucide/svelte/icons/play'
   import SquareIcon from '@lucide/svelte/icons/square'
   import { page } from '$app/state'
-  import { summarize } from '#lib/analytics/aggregate.js'
+  import { projectSpans } from '#lib/analytics/aggregate.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
   import { liveSession } from '#lib/dashboard/live.svelte.js'
-  import { DRAFT_HEAD, buildDrafts, draftRow, projectTracks, time } from '#lib/dashboard/session.js'
+  import { DRAFT_HEAD, buildDrafts, draftRow, projectSplit, projectTracks, time } from '#lib/dashboard/session.js'
   import { duration, palette } from '#lib/dashboard/shared.js'
   import Pager from '#lib/dashboard/ui/Pager.svelte'
   import ProjectChip from '#lib/dashboard/ui/ProjectChip.svelte'
@@ -27,11 +27,12 @@
   const ready = $derived(!!live.value)
   const drafts = $derived(live.value ? buildDrafts(events, live.value.timelines) : [])
   // named after where most of its time went, with the rest under it
-  const split = $derived(summarize(events, { idleCapMs }).sessions[0]?.projects ?? [])
+  const spans = $derived(projectSpans(events, idleCapMs))
+  const split = $derived(projectSplit(spans))
   const project = $derived(split[0]?.project ?? events.find(e => e.project)?.project ?? 'session')
   // the same colors as the overview, from all of the person's sessions
   const colors = $derived(palette(live.value?.projects ?? []))
-  const tracks = $derived(projectTracks(events, idleCapMs, String(project)))
+  const tracks = $derived(projectTracks(spans, String(project)))
 
   // the draft being replayed, by id so a refresh keeps it; until one's
   // picked, the last one with a replay

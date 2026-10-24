@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
-import type { Event } from '../analytics/aggregate'
-import { laneRows, mostlyQuiet } from './session'
+import { projectSpans, summarize, type Event } from '../analytics/aggregate'
+import { laneRows, mostlyQuiet, projectSplit } from './session'
 import { palette } from './shared'
 
 const MIN = 60_000
@@ -85,4 +85,22 @@ test('a session is mostly quiet when gaps over 5 minutes are more than half its 
     ]),
   ).toBe(false)
   expect(mostlyQuiet([])).toBe(false)
+})
+
+test("a session's split by project is the one its row on the overview gets", () => {
+  const events = [
+    at(0, 'prompt', { typingMs: 20_000 }),
+    // the main thread moves to hub and back, while a fork works in docs
+    at(2 * MIN, 'tool', { tool: 'Edit', durationMs: 1 * MIN, workProject: 'hub' }),
+    at(3 * MIN, 'tool', { agentId: 'a1', tool: 'Edit', durationMs: 1000, workProject: 'docs' }),
+    at(9 * MIN, 'turn_end', { agentId: 'a1', durationMs: 7 * MIN }),
+    at(7 * MIN, 'tool', { tool: 'Bash', durationMs: 1 * MIN, workProject: 'terra' }),
+    at(10 * MIN, 'turn_end', { durationMs: 10 * MIN }),
+    // a quiet hour, then a quick one back in terra
+    at(70 * MIN, 'prompt', { typingMs: 5000 }),
+    at(72 * MIN, 'turn_end', { durationMs: 2 * MIN }),
+  ]
+  const split = projectSplit(projectSpans(events, 5 * MIN))
+  expect(split.map(p => p.project)).toEqual(['terra', 'docs', 'hub'])
+  expect(split).toEqual(summarize(events, { idleCapMs: 5 * MIN }).sessions[0]!.projects)
 })
