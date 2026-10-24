@@ -204,6 +204,24 @@ test('the window clips time and counts', () => {
   expect(s.prompts.count).toBe(0)
 })
 
+test('a session over before the window adds nothing, one running into it still counts', () => {
+  const old = [
+    at('2026-10-18T09:00:00Z', 'prompt', { sessionId: 'old' }),
+    at('2026-10-18T09:30:00Z', 'turn_end', { sessionId: 'old', durationMs: 30 * MIN }),
+  ]
+  // a turn from 11:40 to 12:20 across the window's start
+  const across = [
+    at('2026-10-19T11:40:00Z', 'prompt', { sessionId: 'across' }),
+    at('2026-10-19T12:20:00Z', 'turn_end', { sessionId: 'across', durationMs: 40 * MIN }),
+  ]
+  const window = { idleCapMs: 5 * MIN, from: Date.parse('2026-10-19T12:00:00Z'), to: Date.parse('2026-10-19T13:00:00Z') }
+  const s = summarize([...old, ...across], window)
+  expect(s.totalMs).toBe(20 * MIN)
+  expect(s.spans).toEqual([{ sessionId: 'across', project: 'terra', from: window.from, to: Date.parse('2026-10-19T12:20:00Z') }])
+  expect(s.days.map(d => d.day)).toEqual(['2026-10-19'])
+  expect(summarize(across, window)).toEqual(s)
+})
+
 test('projects are timed separately, even in one session', () => {
   const events = [
     at('2026-10-19T12:00:00Z', 'tool'),

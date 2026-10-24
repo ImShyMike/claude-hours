@@ -551,6 +551,11 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   let totalMs = 0
   const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
   for (const [sessionId, events] of sessionsOf) {
+    // none of a session's spans end after its last line, so one over before
+    // the window has nothing in it, and a short range skips most of history
+    let end = -Infinity
+    for (const e of events) end = Math.max(end, time(e))
+    if (end < lo) continue
     const byProject = projectSpans(events, idleCapMs)
     const inside: [string, Interval[]][] = []
     const mine = new Map<string, number>()
