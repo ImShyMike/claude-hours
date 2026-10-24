@@ -115,6 +115,14 @@ const setup = (on: On) => {
     if (cmd === 'sh' && e.argv[2]?.includes('umask 077')) files.set(e.argv[4]!, e.init?.stdin ?? '')
     if (cmd === 'uname') stdout = 'miggys-laptop\n'
     let exitCode = 0
+    // gitignored paths are whatever sits under a build/ or .cache/ folder
+    if (cmd === 'git' && e.argv[3] === 'check-ignore') {
+      stdout = (e.init?.stdin ?? '')
+        .split('\n')
+        .filter(path => /\/(build|\.cache)\//.test(path))
+        .join('\n')
+      return { value: { exitCode: stdout ? 0 : 1, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (cmd === 'git' && e.argv[3] === 'remote') {
       stdout = remotes[e.argv[2]!] ?? ''
       return { value: { exitCode: stdout ? 0 : 2, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -239,6 +247,18 @@ test('files a Bash call touched show up through the find window', async ($, on) 
   expect(changed.map(l => l.path)).toEqual(['out.json', 'data/x.csv'])
   expect(changed[0]).toMatchObject({ via: 'bash-window', tool: 'Bash' })
   expect(lines.find(l => l.event === 'tool')).toMatchObject({ commandChars: 14 })
+})
+
+test("a repo's gitignored files aren't counted as a Bash call's changes", async ($, on) => {
+  const { lines, setFind } = setup(on)
+  setFind('/proj/.cache/types.d.ts\n/proj/src/app.ts\n')
+  on('tool.call', () => ({ result: {} }))
+
+  await $.tool.call({ tool: 'Bash', command: 'bun run build' })
+
+  await settled()
+
+  expect(lines.filter(l => l.event === 'file_changed').map(l => l.path)).toEqual(['src/app.ts'])
 })
 
 test('session start logs once across reloads, session end logs its reason', async ($, on) => {

@@ -465,10 +465,22 @@ async function filesChangedSince($: EngineInterface, startedMs: number, repo?: s
     ),
   )
   const noisy = NOISY_HOME_DIRS.map(sub => `${dir}/${sub}/`)
-  return found
-    .flatMap(({ stdout }) => stdout.split('\n'))
-    .filter(path => path && !noisy.some(prefix => path.startsWith(prefix)))
-    .slice(0, MAX_PATHS_PER_CALL)
+  // a repo's gitignored files are build output and caches (.svelte-kit,
+  // .pytest_cache), not work, so they go before the cap can fill with them.
+  // check-ignore exits 1 when it ignores none; any other failure keeps them all
+  const kept = await Promise.all(
+    scans.map(async ([root, depth], i) => {
+      const paths = found[i]!.stdout.split('\n').filter(path => path && !noisy.some(prefix => path.startsWith(prefix)))
+      if (depth.length || !paths.length) return paths
+      const check = await $.process
+        .run(['git', '-C', root, 'check-ignore', '--stdin'], { stdin: `${paths.join('\n')}\n`, timeoutMs: 2_000 })
+        .catch(() => undefined)
+      if (check?.exitCode !== 0) return paths
+      const ignored = new Set(check.stdout.split('\n'))
+      return paths.filter(path => !ignored.has(path))
+    }),
+  )
+  return kept.flat().slice(0, MAX_PATHS_PER_CALL)
 }
 
 // Where a call worked when that's another repo than the cwd's: the git root
