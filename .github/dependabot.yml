@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # a version is only picked up a week after it's published, and the small
+  # bumps come together in one PR
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
