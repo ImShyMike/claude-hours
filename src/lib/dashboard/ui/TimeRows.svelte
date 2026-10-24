@@ -94,7 +94,9 @@
 
   // Pressing and moving pans it, with a mouse or pen (a finger already does).
   // A press that hardly moves is still a click; one that moved isn't, so
-  // letting go over a bar doesn't open it
+  // letting go over a bar doesn't open it. A press never starts a text
+  // selection, and while it drags, one layer over the rows carries the
+  // grabbing cursor: a class on the scroller would restyle every bar in it
   const DRAG_PX = 4
   let dragging = $state(false)
   const pannable = $derived(labelW + trackW > scrollW + 1)
@@ -132,12 +134,14 @@
       e.stopPropagation()
     }
     const noNativeDrag = (e: DragEvent) => e.preventDefault()
+    const noSelecting = (e: Event) => press && e.preventDefault()
     el.addEventListener('pointerdown', onDown)
     el.addEventListener('pointermove', onMove)
     el.addEventListener('pointerup', onUp)
     el.addEventListener('pointercancel', onUp)
     el.addEventListener('click', onClick, true)
     el.addEventListener('dragstart', noNativeDrag)
+    el.addEventListener('selectstart', noSelecting)
     return () => {
       el.removeEventListener('pointerdown', onDown)
       el.removeEventListener('pointermove', onMove)
@@ -145,6 +149,7 @@
       el.removeEventListener('pointercancel', onUp)
       el.removeEventListener('click', onClick, true)
       el.removeEventListener('dragstart', noNativeDrag)
+      el.removeEventListener('selectstart', noSelecting)
     }
   })
 
@@ -183,12 +188,13 @@
     </div>
   </div>
   <div
-    class={['overflow-x-auto', pannable && 'cursor-grab', dragging && 'cursor-grabbing select-none [&_*]:cursor-grabbing']}
+    class={['overflow-x-auto', pannable && 'cursor-grab']}
     bind:this={scroller}
     bind:clientWidth={scrollW}
     onscroll={e => (scrolled = e.currentTarget.scrollLeft > 0)}
   >
     <div class="relative min-w-full overflow-x-clip text-xs" style:width="{labelW + trackW}px">
+      {#if dragging}<div class="absolute inset-0 z-30 cursor-grabbing"></div>{/if}
       <!-- behind the rows: a hairline at every tick, and each squashed stretch hatched -->
       <div class="pointer-events-none absolute top-5 bottom-0" style:left="{labelW}px" style:width="{trackW}px">
         {#each g.ticks as t (t.left)}
