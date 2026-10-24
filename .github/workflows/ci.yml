@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # the Dockerfile's bun, and a node for the tools whose bins ask for one
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run check
+      - run: bun run test
+      - run: bun run build
+
+  mod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # the latest Claude Code, since that's what loads the mod on a computer.
+      # `tsc -p mod` isn't run: its types are laid down by a session that
+      # loads the mod, and nothing here starts one
+      - run: curl -fsSL https://claude.ai/install.sh | bash -s latest
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: claude plugin validate mod
+      - run: claude plugin test mod
