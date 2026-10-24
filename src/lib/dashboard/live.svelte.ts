@@ -27,14 +27,17 @@ const meCache = new Map<string, Me>()
 const ahead = new Map<string, { at: number; value: Promise<string> }>()
 const AHEAD_MS = 10_000
 
-function prefetch(url: URL, want: string, path: string) {
+// a page's load hands over its own fetch, which SvelteKit wants used there
+type Ahead = { url: URL; fetch: typeof fetch }
+
+function prefetch({ url, fetch: get }: Ahead, want: string, path: string) {
   const person = url.searchParams.get('person') ?? ''
   // the fetch asks for whoever's dashboard is open now (withPerson)
   if (person !== (new URLSearchParams(location.search).get('person') ?? '')) return
   // the load runs again when the click comes, and the hover's is on its way
   const key = `${person} ${want}`
   if (Date.now() - (ahead.get(key)?.at ?? 0) < AHEAD_MS) return
-  const value = fetch(withPerson(path)).then(res => {
+  const value = get(withPerson(path)).then(res => {
     if (!res.ok) throw new Error(`${path} answered ${res.status}`)
     return res.text()
   })
@@ -110,13 +113,14 @@ export function liveDigest(range: () => Range, spans = false) {
 }
 
 // for a page's load: the summary its stored range will ask for
-export function prefetchDigest(url: URL, spans = false) {
+export function prefetchDigest(from: Ahead, spans = false) {
   const range = load<Range>('range', '7')
-  prefetch(url, digestKey(range, spans), digestPath(range, spans))
+  prefetch(from, digestKey(range, spans), digestPath(range, spans))
 }
 
 // for a range picker's option, pointed at or focused before it's picked
-export const prefetchRange = (range: Range, spans = false) => prefetch(new URL(location.href), digestKey(range, spans), digestPath(range, spans))
+export const prefetchRange = (range: Range, spans = false) =>
+  prefetch({ url: new URL(location.href), fetch }, digestKey(range, spans), digestPath(range, spans))
 
 const sessionPath = (id: string) => `/api/session/${encodeURIComponent(id)}?tz=${encodeURIComponent(tz())}`
 
@@ -125,9 +129,9 @@ export function liveSession(id: () => string) {
   return polled<SessionDigest>(() => id() || undefined, sessionPath)
 }
 
-export function prefetchSession(url: URL) {
-  const id = url.searchParams.get('id')
-  if (id) prefetch(url, id, sessionPath(id))
+export function prefetchSession(from: Ahead) {
+  const id = from.url.searchParams.get('id')
+  if (id) prefetch(from, id, sessionPath(id))
 }
 
 export function whoIsLooking() {

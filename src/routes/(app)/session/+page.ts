@@ -5,6 +5,6 @@ import type { PageLoad } from './$types'
 
 export const ssr = false
 
-export const load: PageLoad = ({ url }) => {
-  prefetchSession(url)
+export const load: PageLoad = ({ url, fetch }) => {
+  prefetchSession({ url, fetch })
 }
