@@ -59,6 +59,8 @@ const setup = (on: On) => {
     '/tmp/scratch/ts-clone': 'https://github.com/hackclub/telescreen.git',
   }
   let sweepOutput = ''
+  // the session's transcript, for the grep that finds its compactions
+  let transcript: Record<string, unknown>[] = []
   let cwd = '/proj'
   let now = 1_790_000_000_000
   on('clock.now', () => ({ value: now }))
@@ -94,6 +96,11 @@ const setup = (on: On) => {
       stdout = new TextDecoder().decode(all.subarray(0, Number(bytes)))
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
+    if (cmd === 'sh' && e.argv[2]?.includes('/projects/'))
+      stdout = transcript
+        .map(entry => JSON.stringify(entry))
+        .filter(line => line.includes(e.argv[4]!))
+        .join('\n')
     // the config, written where only its owner can read it
     if (cmd === 'sh' && e.argv[2]?.includes('umask 077')) files.set(e.argv[4]!, e.init?.stdin ?? '')
     if (cmd === 'uname') stdout = 'miggys-laptop\n'
@@ -146,6 +153,8 @@ const setup = (on: On) => {
     timelineFiles,
     setFind: (out: string) => (findOutput = out),
     setSweep: (out: string) => (sweepOutput = out),
+    setTranscript: (entries: Record<string, unknown>[]) => (transcript = entries),
+    now: () => now,
     cd: (dir: string) => (cwd = dir),
     tick: (ms: number) => (now += ms),
   }
@@ -674,6 +683,59 @@ test('a compaction logs its trigger, sizes and how long it took', async ($, on) 
   expect(lines[1]).toMatchObject({ event: 'compact', trigger: 'plugin', outcome: 'skipped', durationMs: 0 })
 })
 
+// a compact_boundary as the transcript keeps it
+const boundary = (uuid: string, at: number, more: Record<string, unknown> = {}) => ({
+  type: 'system',
+  subtype: 'compact_boundary',
+  uuid,
+  timestamp: new Date(at).toISOString(),
+  isSidechain: false,
+  compactMetadata: { trigger: 'manual', preTokens: 150_000, postTokens: 36_000, durationMs: 40_000 },
+  ...more,
+})
+
+test('a compaction the hook never saw is found in the transcript, once, at the time it finished', async ($, on) => {
+  const { lines, headers, setTranscript, tick, now } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  const start = now()
+  await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
+  tick(60_000)
+  setTranscript([
+    boundary('before', start - 1_000),
+    boundary('side', now() - 500, { isSidechain: true }),
+    { type: 'user', message: { content: 'a "subtype":"compact_boundary" typed in a prompt' } },
+    boundary('c1', now() - 2_000),
+  ])
+  tick(5_000)
+
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
+
+  expect(headers[0]).toMatchObject({ start })
+  const compacts = lines.filter(l => l.event === 'compact')
+  expect(compacts).toEqual([
+    { event: 'compact', t: 58_000, trigger: 'manual', outcome: 'compacted', tokensBefore: 150_000, tokensAfter: 36_000, durationMs: 40_000, uuid: 'c1' },
+  ])
+  // in ahead of the turn's own row
+  expect(lines.map(l => l.event)).toEqual(['prompt', 'compact', 'turn_end', 'turn_end'])
+})
+
+test('a compaction the hook logged is not logged again from the transcript', async ($, on) => {
+  const { lines, setTranscript, tick, now } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  const summary = [{ role: 'user' as const, text: 'the summary', toolUses: [] }]
+  on('session.compact', () => (tick(30_000), { messages: summary, tokensBefore: 100_000, tokensAfter: 20_000 }))
+  await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
+  tick(1_000)
+
+  await $.session.compact({ trigger: 'auto', messages: summary })
+  setTranscript([boundary('c1', now() - 40)])
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
+
+  expect(lines.filter(l => l.event === 'compact')).toHaveLength(1)
+  expect(lines.find(l => l.event === 'compact')).toMatchObject({ trigger: 'auto', messages: 1, tokensBefore: 100_000 })
+})
+
 test('a prompt sent while a turn runs is marked midTurn', async ($, on) => {
   const { lines } = setup(on)
   on('turn.start', () => ({ turnId: 't1' }))
@@ -915,10 +977,11 @@ test('a session ending gzips its files behind the last row', async ($, on) => {
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-1', resume: { command: 'claude --resume sess-1' } as never })
 
   expect(lines.map(l => l.event)).toEqual(['session_end'])
-  const pack = runs.find(argv => argv[0] === 'sh')!
+  const isPack = (argv: string[]) => argv[0] === 'sh' && !!argv[2]?.includes('gzip')
+  const pack = runs.find(isPack)!
   expect(pack.slice(4)).toEqual(['/home/test/.claude/analytics/events/sess-1.jsonl', '/home/test/.claude/analytics/drafts/sess-1.jsonl'])
   // after every tee, never before
-  expect(runs.findIndex(argv => argv[0] === 'sh')).toBeGreaterThan(runs.findLastIndex(argv => argv[0] === 'tee'))
+  expect(runs.findIndex(isPack)).toBeGreaterThan(runs.findLastIndex(argv => argv[0] === 'tee'))
 })
 
 // A hub that follows the real one's rules (src/lib/server/ingest.ts in

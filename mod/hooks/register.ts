@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptEditInput, PromptSubmitAttachment, Register } from 'claude-code'
-import type { StartedSessions } from '../types'
+import type { SeenCompactions, StartedSessions } from '../types'
 
 // One JSON object per line, one file per session, under $HOME. Prompt text
 // and file contents are never written: only sizes, tool names and paths.
@@ -88,6 +88,7 @@ const NOISY_HOME_DIRS = ['.claude/projects', '.claude/state', '.claude/analytics
 type Fields = Record<string, unknown>
 
 const startedSessions = atom({ plugin: 'time-track', key: 'startedSessions' } as const, [] as StartedSessions)
+const seenCompactions = atom({ plugin: 'time-track', key: 'seenCompactions' } as const, [] as SeenCompactions)
 
 // `find -newermt` wants whole seconds on both GNU find and bfs
 const isoSeconds = (ms: number) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -317,8 +318,10 @@ async function headFor($: EngineInterface, path: string, sessionId: string, now:
 
 // Appends go through one queue so parallel tool calls never interleave lines.
 // The time and cwd are read when the event happens, not when it is written.
-// Several entries go out in one append, and draft timelines in one more
-function logAll($: EngineInterface, entries: [event: string, fields: Fields][], timelines: Fields[] = []) {
+// Several entries go out in one append, and draft timelines in one more. An
+// entry can bring its own time (epoch ms), for something found after it
+// happened; one from before this file began belongs to an earlier file
+function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?: number][], timelines: Fields[] = []) {
   const at = $.clock.now()
   const session = $.session.id()
   const where = $.session.cwd()
@@ -339,8 +342,10 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields][], 
       const stamp = h.start === undefined ? { at: now } : { t: now - h.start }
       if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd, ...rooted })
       h.cwd = cwd
-      for (const [event, fields] of entries) {
-        rows.push({ ...stamp, event, ...compactRow(event, { ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) }) })
+      for (const [event, fields, when] of entries) {
+        if (when !== undefined && (h.start === undefined || when < h.start)) continue
+        const at = when === undefined ? stamp : { t: when - h.start! }
+        rows.push({ ...at, event, ...compactRow(event, { ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) }) })
       }
       if (timelines.length) await append($, `${dir}/${DRAFTS_DIR}/${sessionId}.jsonl`, timelines)
       await append($, path, rows)
@@ -350,6 +355,54 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields][], 
 }
 
 const log = ($: EngineInterface, event: string, fields: Fields = {}) => logAll($, [[event, fields]])
+
+// A security plugin above skips session.compact here, and the session.append
+// of its boundary too, so compactions come from the transcript instead: each
+// leaves a compact_boundary entry, stamped when it finished. Grepped, as a
+// transcript runs to tens of MB. A subagent's compactions are in its own file
+const BOUNDARY = '"subtype":"compact_boundary"'
+type Boundary = { uuid: string; timestamp: string; compactMetadata?: Record<string, unknown> }
+
+async function boundaries($: EngineInterface) {
+  const [configDir, home, sessionId] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), homeDir($), $.session.id()])
+  const script = 'grep -shF -e "$1" "$2"/projects/*/"$3".jsonl'
+  const { stdout } = await $.process.run(['sh', '-c', script, 'sh', BOUNDARY, configDir || `${home}/.claude`, sessionId], { timeoutMs: 2_000 })
+  const found: Boundary[] = []
+  for (const line of stdout.split('\n')) {
+    try {
+      const entry = JSON.parse(line)
+      if (entry.type === 'system' && entry.subtype === 'compact_boundary' && !entry.isSidechain && typeof entry.uuid === 'string') found.push(entry)
+    } catch {}
+  }
+  return found
+}
+
+// when the session.compact hook logged a main-thread compaction itself, where
+// nothing skips it, so its boundary isn't logged a second time
+const hookedCompactions: number[] = []
+const HOOKED_SLACK_MS = 5_000
+let scanning: Promise<void> = Promise.resolve()
+
+// one compact row per boundary not seen yet, at the time it finished
+function logCompactions($: EngineInterface) {
+  scanning = scanning
+    .then(async () => {
+      const seen = new Set(await read($, seenCompactions))
+      const fresh = (await boundaries($)).filter(b => !seen.has(b.uuid))
+      if (!fresh.length) return
+      await update($, seenCompactions, ids => [...ids, ...fresh.map(b => b.uuid)])
+      const entries: [string, Fields, number][] = []
+      for (const b of fresh) {
+        const at = Date.parse(b.timestamp)
+        if (Number.isNaN(at) || hookedCompactions.some(hooked => Math.abs(hooked - at) < HOOKED_SLACK_MS)) continue
+        const m = b.compactMetadata ?? {}
+        entries.push(['compact', { trigger: m.trigger, tokensBefore: m.preTokens, tokensAfter: m.postTokens, durationMs: m.durationMs, uuid: b.uuid }, at])
+      }
+      if (entries.length) await logAll($, entries)
+    })
+    .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
+  return scanning
+}
 
 // Bash (and python run from it) can touch anything, so look for files under
 // the working dir modified since the call started. Can't tell who did it.
@@ -1294,6 +1347,7 @@ export const register: Register = on => {
     if (draft) noteEmptied(await $.clock.now(), 'exit')
     settleEmptied()
     const { entries, timelines } = takeAbandoned()
+    await logCompactions($)
     await logAll($, [...entries, ['session_end', { reason: e.reason }]], timelines)
     await packSession($)
     return next(e)
@@ -1333,6 +1387,8 @@ export const register: Register = on => {
         },
       ])
       if (typed) timelines.push(timelineOf(typed, 'sent', at))
+      // a /compact since the last turn, found without holding the prompt up
+      logCompactions($)
       await logAll($, entries, timelines)
     }
     return entered
@@ -1394,6 +1450,8 @@ export const register: Register = on => {
     // the text) and any tools still running
     const cut = aborted && main ? { answerChars: [...e.answer].length, toolsRunning: runningTools.size ? [...runningTools.values()] : undefined } : {}
     if (main) runningTools.clear()
+    // an auto compaction mid-turn, in before the sync below
+    if (main) await logCompactions($)
     await log($, aborted ? 'interrupt' : 'turn_end', {
       turnId: e.turnId,
       agentId: e.agentId,
@@ -1408,7 +1466,8 @@ export const register: Register = on => {
   })
 
   // /compact, the threshold, a plugin or a precompute ahead of time. Logged
-  // once it's done, so durationMs is how long the wait was
+  // once it's done, so durationMs is how long the wait was. Where a security
+  // plugin skips this, logCompactions finds them in the transcript instead
   on('session.compact', async ($, e, next) => {
     const startedMs = await $.clock.now()
     let fields: Record<string, unknown> = { outcome: 'threw' }
@@ -1420,8 +1479,9 @@ export const register: Register = on => {
           : { outcome: 'compacted', tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter, usage: result.usage }
       return result
     } finally {
-      const durationMs = (await $.clock.now()) - startedMs
-      await log($, 'compact', { trigger: e.trigger, agentId: e.agentId, messages: e.messages.length, ...fields, durationMs })
+      const endMs = await $.clock.now()
+      if (e.agentId === undefined) hookedCompactions.push(endMs)
+      await log($, 'compact', { trigger: e.trigger, agentId: e.agentId, messages: e.messages.length, ...fields, durationMs: endMs - startedMs })
     }
   }).catch(($, e, next) => next(e))
 
