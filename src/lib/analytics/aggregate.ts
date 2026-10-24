@@ -157,11 +157,14 @@ const HUMAN_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 
 // a draft_abandoned line is written late, so it carries its own end. Parsing
 // costs more than the rest of what's done with an event, and the hub keeps
-// the same events between requests, so each one is parsed once
-const times = new WeakMap<Event, number>()
+// the same events between requests, so each one is parsed once. The time
+// sits on the event itself, which reads faster than a WeakMap; it's not
+// enumerable, so JSON and spreads never see it (and it can't go on a deep
+// $state proxy, which refuses such properties)
+const TIME = Symbol('time')
 function time(e: Event) {
-  let at = times.get(e)
-  if (at === undefined) times.set(e, (at = Date.parse(typeof e.endedAt === 'string' ? e.endedAt : e.ts)))
+  let at = (e as { [TIME]?: number })[TIME]
+  if (at === undefined) Object.defineProperty(e, TIME, { value: (at = Date.parse(typeof e.endedAt === 'string' ? e.endedAt : e.ts)) })
   return at
 }
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')
