@@ -342,7 +342,7 @@ export function strip(tl: Timeline, clock: Clock, fit: number) {
       y: 0,
       width: 8,
       height: STRIP_H,
-      tip: `<strong>${esc(describe(st))}</strong>at ${seconds(st[0])}`,
+      tip: `<strong>${esc(describe(st))}</strong>${seconds(st[0])} in`,
     })
   }
   return { width, height: STRIP_H, shapes }
@@ -397,7 +397,7 @@ export function boxHtml(tl: Timeline, state: State, real: number) {
   if (state.cursor >= cells.length) word += cursor
   flush()
   if (state.cells.length > MAX_CELLS) html += `<span class="text-xs text-muted-foreground"> +${state.cells.length - MAX_CELLS} more</span>`
-  return { html, step: last ? `${describe(last)} · at ${seconds(last[0])}` : 'the box as the draft began' }
+  return { html, step: last ? `${describe(last)} · ${seconds(last[0])} in` : 'the box as the draft began' }
 }
 
 export function draftStats(d: Draft) {

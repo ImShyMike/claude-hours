@@ -4,7 +4,7 @@
   import ChevronsRightIcon from '@lucide/svelte/icons/chevrons-right'
   import PauseIcon from '@lucide/svelte/icons/pause'
   import PlayIcon from '@lucide/svelte/icons/play'
-  import { durationOf, squash } from '#lib/analytics/replay.js'
+  import { countGroups, durationOf, squash } from '#lib/analytics/replay.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Checkbox } from '#lib/components/ui/checkbox/index.js'
@@ -29,6 +29,9 @@
   const d = untrack(() => draft)
   const tl = d.timeline
   const replay = tl && replayer(tl)
+  // edits as the drafts table counts them, then the cursor moves
+  const edits = typeof d.line.edits === 'number' ? d.line.edits : 0
+  const moves = tl ? countGroups(tl).move : 0
   const SPEEDS = ['1', '2', '5', '20']
 
   // squashed: pauses cut to 1.5 s, so a replay doesn't sit through a tea break
@@ -115,7 +118,7 @@
           ? 'Logged before replays existed, so stats only'
           : tl.truncated
             ? 'A very long draft: the replay stops where the recording did'
-            : `${tl.steps.length} edits`}
+            : `${edits} edits${moves ? `, ${moves} cursor moves` : ''}`}
       </Card.Description>
     </Card.Header>
     <Card.Content class="flex flex-col gap-4">

@@ -129,12 +129,12 @@ export function countGroups(tl: Timeline) {
 export function describe(step: Step) {
   const [, kind, pos, removed = 0, shape = ''] = step
   const name = KIND_NAMES[kind] ?? kind
-  if (kind === 'm') return `${name} to ${pos}`
+  if (kind === 'm') return `${name} to char ${pos}`
   if (kind === 'c') return `${name} (${step[5] ?? 'engine'}), now ${shape.length} chars`
   const parts = [name]
   if (shape) parts.push(`+${shape.length}`)
   if (removed) parts.push(`−${removed}`)
-  return `${parts.join(' ')} at ${pos}`
+  return `${parts.join(' ')} at char ${pos}`
 }
 
 // --- the stored format -------------------------------------------------

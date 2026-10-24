@@ -88,8 +88,8 @@ test('pauses, group counts and descriptions', () => {
     { from: 6000, to: 10_000 },
   ])
   expect(countGroups(tl)).toEqual({ typed: 1, deleted: 1, pasted: 1, move: 1, changed: 0 })
-  expect(describe([5000, 'w', 3, 6])).toBe('word delete −6 at 3')
-  expect(describe([0, 'r', 1, 2, 'aaa'])).toBe('typed over a selection +3 −2 at 1')
+  expect(describe([5000, 'w', 3, 6])).toBe('word delete −6 at char 3')
+  expect(describe([0, 'r', 1, 2, 'aaa'])).toBe('typed over a selection +3 −2 at char 1')
 })
 
 test('parseTimelines skips junk', () => {
