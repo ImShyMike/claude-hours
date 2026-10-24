@@ -118,6 +118,9 @@ const BREAK = 'bg-[repeating-linear-gradient(45deg,var(--typed)_0_2px,var(--card
 const MID_TURN = 'border-l-2 border-dashed border-muted-foreground'
 // faint, so the tool calls drawn over it show
 const SUBAGENT = 'bg-(--neutral)/40'
+// in the text's color, a little taller than a turn and never thinner than a few px, so a
+// minute's compaction stands out in an hour's session
+const COMPACTING = 'min-w-1.5! bg-foreground'
 
 // the lanes' legend: a swatch's classes and what it means
 export const LANES_LEGEND: [string, string][] = [
@@ -126,7 +129,7 @@ export const LANES_LEGEND: [string, string][] = [
   [PAUSE, 'paused while writing'],
   ['bg-(--typed)/45', 'answering Claude'],
   ['bg-(--neutral-2)', 'Claude working'],
-  ['bg-foreground/70', 'compacting'],
+  [COMPACTING, 'compacting'],
   ['bg-(--neutral)', 'tool call'],
   [SUBAGENT, 'subagent running'],
   ['bg-(--critical)', 'interrupt'],
@@ -217,7 +220,8 @@ export function laneRows(opts: {
     claudeMarks.push(mark)
   }
   // over the Claude lane, since an auto compaction lands mid-turn; its card
-  // ring keeps it apart from the turn under it
+  // ring keeps it apart from the turn under it. The context's size before
+  // and after is in its card
   for (const c of compacts) {
     const end = time(c)
     const before = num(c.tokensBefore)
@@ -227,17 +231,8 @@ export function laneRows(opts: {
     const who = c.agentId ? ', a subagent' : ''
     const tip = `<strong>Compaction (${esc(String(c.trigger))}${who})</strong>${seconds(num(c.durationMs))}, ${esc(String(c.outcome))}${sizes}`
     const faded = c.agentId || c.trigger === 'precompute'
-    claude.push(bar(faded ? 'bg-foreground/30' : 'bg-foreground/70', end - num(c.durationMs), end, { tip }))
-    // where the main thread's context dropped, its size before and after by the line
-    if (!faded && before && after) {
-      claudeMarks.push({
-        at: end,
-        class: 'border-l-2 border-foreground/70',
-        tip,
-        glyph: `${compact(before)} → ${compact(after)}`,
-        glyphClass: 'rounded-sm bg-card px-1 whitespace-nowrap font-medium text-foreground/80',
-      })
-    }
+    const from = end - num(c.durationMs)
+    claude.push(faded ? bar('bg-foreground/30', from, end, { tip }) : bar(COMPACTING, from, end, { tip, top: -3, height: ROW.main + 6 }))
   }
   // the main thread's calls; a subagent's go on its own track
   const toolBars = tools

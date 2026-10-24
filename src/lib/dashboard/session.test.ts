@@ -46,13 +46,17 @@ test('subagents get a track apiece, shared by ones that never overlap, and their
   expect(tools[0]!.tip).not.toContain('/code/terra')
 })
 
-test('a main-thread compaction marks where the context dropped, with its sizes', () => {
+test("a main-thread compaction stands taller than the turns, with the context's sizes in its card", () => {
   const events = [
     at(1 * MIN, 'turn_end', { durationMs: 1 * MIN, usage: opus }),
     at(3 * MIN, 'compact', { trigger: 'auto', tokensBefore: 368_000, tokensAfter: 34_000, durationMs: 60_000 }),
+    at(5 * MIN, 'compact', { trigger: 'precompute', tokensBefore: 90_000, tokensAfter: 20_000, durationMs: 30_000 }),
   ]
   const claude = rows(events).find(r => r.key === 'claude')!
-  expect(claude.marks?.map(m => m.glyph)).toEqual(['368K → 34K'])
-  expect(claude.marks?.[0]?.tip).toContain('91% smaller')
+  const [auto, precompute] = claude.bars.filter(b => b.tip?.includes('Compaction'))
+  expect(auto!.tip).toContain('context 368K → 34K tokens, 91% smaller')
+  expect(auto!.height).toBeGreaterThan(claude.height)
+  expect(precompute!.height).toBe(claude.height)
+  expect(claude.marks).toEqual([])
   expect(rows(events).some(r => r.key === 'agents')).toBe(false)
 })
