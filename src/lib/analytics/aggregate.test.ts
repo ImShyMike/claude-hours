@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { activeIntervals, dayKey, languageOf, summarize, type Event } from './aggregate'
+import { activeIntervals, dayKey, firstAt, languageOf, lastAt, projectSpans, summarize, type Event } from './aggregate'
 
 const MIN = 60_000
 const at = (iso: string, event: string, extra: Partial<Event> = {}): Event => ({
@@ -47,6 +47,20 @@ test('a turn that asked the person something works around the wait, judged like 
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(5 * MIN)
   // a wait under the cap still counts, like the gap before a next prompt
   expect(summarize(events, { idleCapMs: 15 * MIN }).totalMs).toBe(15 * MIN)
+})
+
+test("a session's first and last moments hold its spans, waits and all", () => {
+  // a turn with no prompt before it, as a resumed session can start: its
+  // work began before both its own row and the question's say
+  const events = [
+    at('2026-10-19T12:12:00Z', 'tool', { tool: 'AskUserQuestion', durationMs: 10 * MIN }),
+    at('2026-10-19T12:15:00Z', 'turn_end', { durationMs: 5 * MIN }),
+    at('2026-10-19T12:30:00Z', 'turn_end', { durationMs: 5 * MIN, waits: [[4 * MIN, 2 * MIN, 'Bash']] }),
+  ]
+  const spans = [...projectSpans(events, 5 * MIN).values()].flat()
+  expect(Math.min(...spans.map(s => s[0]))).toBe(Date.parse('2026-10-19T12:00:00Z'))
+  expect(firstAt(events)).toBeLessThanOrEqual(Date.parse('2026-10-19T12:00:00Z'))
+  expect(lastAt(events)).toBe(Math.max(...spans.map(s => s[1])))
 })
 
 test('a permission dialog on the turn row is stepped over the same way', () => {

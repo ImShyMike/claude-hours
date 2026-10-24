@@ -174,14 +174,12 @@ export function lastAt(events: Event[]) {
   return end
 }
 // and a moment none of its spans start before: a span reaches back from its
-// line by its turn's or tool's run, its typing, and any waits it steps over
+// line by its turn's or tool's run or its typing, and a turn further, over
+// the waits it steps across (all of them, to be safe)
 export function firstAt(events: Event[]) {
   let start = Infinity
-  for (const e of events) {
-    let back = (Number(e.durationMs) || 0) + (Number(e.typingMs) || 0)
-    if (Array.isArray(e.waits)) for (const w of e.waits) back += Array.isArray(w) ? Number(w[1]) || 0 : 0
-    start = Math.min(start, time(e) - back)
-  }
+  for (const e of events) start = Math.min(start, time(e) - (Number(e.durationMs) || 0) - (Number(e.typingMs) || 0))
+  for (const w of waitsOf(events)) start -= Math.max(0, w.to - w.from)
   return start
 }
 const projectOf = (e: Event) => e.project ?? (e.cwd.split('/').filter(Boolean).pop() || '/')

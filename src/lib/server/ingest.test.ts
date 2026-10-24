@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, test } from 'vitest'
-import { summarize } from '../analytics/aggregate'
+import { firstAt, lastAt, projectSpans, summarize } from '../analytics/aggregate'
 import { loadEvents, sessionParts } from '../analytics/load'
 import { rowsOf, splitRuns } from '../analytics/runs'
 import { deviceTokens, people, quarantine, type Db } from './db/index'
@@ -73,8 +73,16 @@ async function expectRoundTrip(dir: string) {
     const shift = 3 * 24 * 3600_000
     expect(got.range.totalMs).toBeGreaterThan(0)
     expect((await digest(db, person, { from: from + shift, to: to + shift, tz })).before).toBe(got.range.totalMs)
-    // which leaves out the sessions that began after it, so check it where
-    // sessions start and end too
+    // which leaves out the sessions that began after it: none of a
+    // session's spans start before its firstAt or end after its lastAt
+    for (const s of ever.sessions) {
+      const events = local.filter(e => e.sessionId === s.sessionId)
+      for (const [start, end] of [...projectSpans(events, 5 * 60_000).values()].flat()) {
+        expect(start).toBeGreaterThanOrEqual(firstAt(events))
+        expect(end).toBeLessThanOrEqual(lastAt(events))
+      }
+    }
+    // and check it where sessions start and end too
     for (const s of ever.sessions.slice(0, 20)) {
       for (const at of [s.start - 3600_000, s.start + 60_000, s.end - 60_000]) {
         const earlier = { from: at - shift, to: at, idleCapMs: 5 * 60_000, tz }
