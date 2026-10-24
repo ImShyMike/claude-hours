@@ -407,7 +407,8 @@ async function readTranscript($: EngineInterface) {
         continue
       }
       const entry = JSON.parse(line)
-      if (entry.type === 'system' && entry.subtype === 'compact_boundary' && !entry.isSidechain && typeof entry.uuid === 'string') boundaries.push(entry)
+      if (entry.type === 'system' && entry.subtype === 'compact_boundary' && !entry.isSidechain && typeof entry.uuid === 'string')
+        boundaries.push(entry)
     } catch {}
   }
   return { boundaries, modes, sessionId }
@@ -433,7 +434,11 @@ function logFromTranscript($: EngineInterface) {
         const at = Date.parse(b.timestamp)
         if (Number.isNaN(at) || hookedCompactions.some(hooked => Math.abs(hooked - at) < HOOKED_SLACK_MS)) continue
         const m = b.compactMetadata ?? {}
-        entries.push(['compact', { trigger: m.trigger, tokensBefore: m.preTokens, tokensAfter: m.postTokens, durationMs: m.durationMs, uuid: b.uuid }, at])
+        entries.push([
+          'compact',
+          { trigger: m.trigger, tokensBefore: m.preTokens, tokensAfter: m.postTokens, durationMs: m.durationMs, uuid: b.uuid },
+          at,
+        ])
       }
       // prompts up to the last mode logged (by either way) were looked at already
       const last = await read($, lastMode)
@@ -444,7 +449,8 @@ function logFromTranscript($: EngineInterface) {
         latest = { sessionId, at, mode }
       }
       if (latest && latest !== last) await update($, lastMode, () => latest)
-      if (entries.length) await logAll($, entries.sort((a, b) => a[2] - b[2]))
+      entries.sort((a, b) => a[2] - b[2])
+      if (entries.length) await logAll($, entries)
     })
     .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
   return scanning

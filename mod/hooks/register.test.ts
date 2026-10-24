@@ -720,7 +720,16 @@ test('a compaction the hook never saw is found in the transcript, once, at the t
   expect(headers[0]).toMatchObject({ start })
   const compacts = lines.filter(l => l.event === 'compact')
   expect(compacts).toEqual([
-    { event: 'compact', t: 58_000, trigger: 'manual', outcome: 'compacted', tokensBefore: 150_000, tokensAfter: 36_000, durationMs: 40_000, uuid: 'c1' },
+    {
+      event: 'compact',
+      t: 58_000,
+      trigger: 'manual',
+      outcome: 'compacted',
+      tokensBefore: 150_000,
+      tokensAfter: 36_000,
+      durationMs: 40_000,
+      uuid: 'c1',
+    },
   ])
   // in ahead of the turn's own row
   expect(lines.map(l => l.event)).toEqual(['prompt', 'compact', 'turn_end', 'turn_end'])
