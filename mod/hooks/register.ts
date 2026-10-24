@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptEditInput, PromptSubmitAttachment, Register } from 'claude-code'
-import type { SeenCompactions, StartedSessions } from '../types'
+import type { LastMode, SeenCompactions, StartedSessions } from '../types'
 
 // One JSON object per line, one file per session, under $HOME. Prompt text
 // and file contents are never written: only sizes, tool names and paths.
@@ -89,6 +89,7 @@ type Fields = Record<string, unknown>
 
 const startedSessions = atom({ plugin: 'time-track', key: 'startedSessions' } as const, [] as StartedSessions)
 const seenCompactions = atom({ plugin: 'time-track', key: 'seenCompactions' } as const, [] as SeenCompactions)
+const lastMode = atom({ plugin: 'time-track', key: 'lastMode' } as const, null as LastMode)
 
 // `find -newermt` wants whole seconds on both GNU find and bfs
 const isoSeconds = (ms: number) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -218,23 +219,26 @@ const runningTools = new Map<string, string>()
 // ends, so the left-out time is what tells how long it stayed open
 const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
 const askedAt = new Map<string, number>()
-// the last permission mode logged, for the session it was in
-let mode: { sessionId: string; mode: string } | undefined
 
 // The permission mode (default, acceptEdits, plan, auto, dontAsk,
 // bypassPermissions): only the classic hooks' input carries it, and their
 // events fire for a module whether or not any settings hook is set. A `mode`
 // row each time the main loop's changes, so a prompt in a new mode finds it
 // by the time it's sent and a shift+tab mid-turn by the next tool or the end.
-// A plugin above this one can send those events on past it, and then there's
-// no row at all
+// A plugin above this one can send those events on past it, and then the
+// transcript's prompts say which mode each was sent in (logFromTranscript)
 async function noteMode($: EngineInterface, e: { permission_mode?: string; agent_id?: string }) {
-  if (e.agent_id !== undefined || !e.permission_mode) return
+  const mode = e.permission_mode
+  if (e.agent_id !== undefined || !mode) return
   try {
-    const sessionId = await $.session.id()
-    if (mode?.sessionId === sessionId && mode.mode === e.permission_mode) return
-    mode = { sessionId, mode: e.permission_mode }
-    await log($, 'mode', { mode: e.permission_mode })
+    const [sessionId, at] = await Promise.all([$.session.id(), $.clock.now()])
+    let changed = false
+    await update($, lastMode, last => {
+      if (last?.sessionId === sessionId && last.mode === mode) return last
+      changed = true
+      return { sessionId, at, mode }
+    })
+    if (changed) await log($, 'mode', { mode })
   } catch (err) {
     $.ui.log(`${$.plugin.name}: ${String(err)}`)
   }
@@ -320,8 +324,9 @@ async function headFor($: EngineInterface, path: string, sessionId: string, now:
 // The time and cwd are read when the event happens, not when it is written.
 // Several entries go out in one append, and draft timelines in one more. An
 // entry can bring its own time (epoch ms), for something found after it
-// happened; one from before this file began belongs to an earlier file
-function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?: number][], timelines: Fields[] = []) {
+// happened; one from before this file began belongs to an earlier file,
+// unless it carries on (a mode), and then the latest such holds from the start
+function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?: number, carries?: boolean][], timelines: Fields[] = []) {
   const at = $.clock.now()
   const session = $.session.id()
   const where = $.session.cwd()
@@ -342,11 +347,16 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?
       const stamp = h.start === undefined ? { at: now } : { t: now - h.start }
       if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd, ...rooted })
       h.cwd = cwd
-      for (const [event, fields, when] of entries) {
-        if (when !== undefined && (h.start === undefined || when < h.start)) continue
-        const at = when === undefined ? stamp : { t: when - h.start! }
-        rows.push({ ...at, event, ...compactRow(event, { ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) }) })
+      const later: Fields[] = []
+      let carried: { when: number; row: Fields } | undefined
+      for (const [event, fields, when, carries] of entries) {
+        const row = { event, ...compactRow(event, { ...fields, file: relative(fields.file, cwd), path: relative(fields.path, cwd) }) }
+        if (when === undefined) later.push({ ...stamp, ...row })
+        else if (h.start !== undefined && when >= h.start) later.push({ t: when - h.start, ...row })
+        else if (carries && h.start !== undefined && (!carried || when >= carried.when)) carried = { when, row }
       }
+      if (carried) rows.push({ t: 0, ...carried.row })
+      rows.push(...later)
       if (timelines.length) await append($, `${dir}/${DRAFTS_DIR}/${sessionId}.jsonl`, timelines)
       await append($, path, rows)
     })
@@ -358,23 +368,37 @@ const log = ($: EngineInterface, event: string, fields: Fields = {}) => logAll($
 
 // A security plugin above skips session.compact here, and the session.append
 // of its boundary too, so compactions come from the transcript instead: each
-// leaves a compact_boundary entry, stamped when it finished. Grepped, as a
-// transcript runs to tens of MB. A subagent's compactions are in its own file
+// leaves a compact_boundary entry, stamped when it finished. It skips the
+// classic hooks too, so the permission mode comes from there as well: each
+// prompt's entry says which mode it was sent in. Grepped, as a transcript
+// runs to tens of MB, and for a prompt only its time and mode, never the
+// line, which holds its text. A subagent's are in its own file
 const BOUNDARY = '"subtype":"compact_boundary"'
+const PROMPT_MODE = '","permissionMode":"'
+const PROMPT_MODE_PAIR = '"timestamp":"[^"]*","permissionMode":"[A-Za-z]*"'
 type Boundary = { uuid: string; timestamp: string; compactMetadata?: Record<string, unknown> }
 
-async function boundaries($: EngineInterface) {
+async function readTranscript($: EngineInterface) {
   const [configDir, home, sessionId] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), homeDir($), $.session.id()])
-  const script = 'grep -shF -e "$1" "$2"/projects/*/"$3".jsonl'
-  const { stdout } = await $.process.run(['sh', '-c', script, 'sh', BOUNDARY, configDir || `${home}/.claude`, sessionId], { timeoutMs: 2_000 })
-  const found: Boundary[] = []
+  const script =
+    'for f in "$2"/projects/*/"$3".jsonl; do [ -f "$f" ] || continue; grep -F -e "$1" "$f"; grep -F -e "$4" "$f" | grep -oE -e "$5"; done'
+  const argv = ['sh', '-c', script, 'sh', BOUNDARY, configDir || `${home}/.claude`, sessionId, PROMPT_MODE, PROMPT_MODE_PAIR]
+  const { stdout } = await $.process.run(argv, { timeoutMs: 2_000 })
+  const boundaries: Boundary[] = []
+  const modes: { at: number; mode: string }[] = []
   for (const line of stdout.split('\n')) {
     try {
+      if (line.startsWith('"timestamp"')) {
+        const { timestamp, permissionMode } = JSON.parse(`{${line}}`)
+        const at = Date.parse(timestamp)
+        if (!Number.isNaN(at) && permissionMode) modes.push({ at, mode: permissionMode })
+        continue
+      }
       const entry = JSON.parse(line)
-      if (entry.type === 'system' && entry.subtype === 'compact_boundary' && !entry.isSidechain && typeof entry.uuid === 'string') found.push(entry)
+      if (entry.type === 'system' && entry.subtype === 'compact_boundary' && !entry.isSidechain && typeof entry.uuid === 'string') boundaries.push(entry)
     } catch {}
   }
-  return found
+  return { boundaries, modes, sessionId }
 }
 
 // when the session.compact hook logged a main-thread compaction itself, where
@@ -383,22 +407,32 @@ const hookedCompactions: number[] = []
 const HOOKED_SLACK_MS = 5_000
 let scanning: Promise<void> = Promise.resolve()
 
-// one compact row per boundary not seen yet, at the time it finished
-function logCompactions($: EngineInterface) {
+// One compact row per boundary not seen yet, at the time it finished, and a
+// mode row at each prompt sent in another mode than the last one logged
+function logFromTranscript($: EngineInterface) {
   scanning = scanning
     .then(async () => {
+      const { boundaries, modes, sessionId } = await readTranscript($)
+      const entries: [string, Fields, number, boolean?][] = []
       const seen = new Set(await read($, seenCompactions))
-      const fresh = (await boundaries($)).filter(b => !seen.has(b.uuid))
-      if (!fresh.length) return
-      await update($, seenCompactions, ids => [...ids, ...fresh.map(b => b.uuid)])
-      const entries: [string, Fields, number][] = []
+      const fresh = boundaries.filter(b => !seen.has(b.uuid))
+      if (fresh.length) await update($, seenCompactions, ids => [...ids, ...fresh.map(b => b.uuid)])
       for (const b of fresh) {
         const at = Date.parse(b.timestamp)
         if (Number.isNaN(at) || hookedCompactions.some(hooked => Math.abs(hooked - at) < HOOKED_SLACK_MS)) continue
         const m = b.compactMetadata ?? {}
         entries.push(['compact', { trigger: m.trigger, tokensBefore: m.preTokens, tokensAfter: m.postTokens, durationMs: m.durationMs, uuid: b.uuid }, at])
       }
-      if (entries.length) await logAll($, entries)
+      // prompts up to the last mode logged (by either way) were looked at already
+      const last = await read($, lastMode)
+      let latest = last?.sessionId === sessionId ? last : null
+      for (const { at, mode } of modes) {
+        if (latest && at <= latest.at) continue
+        if (latest?.mode !== mode) entries.push(['mode', { mode }, at, true])
+        latest = { sessionId, at, mode }
+      }
+      if (latest && latest !== last) await update($, lastMode, () => latest)
+      if (entries.length) await logAll($, entries.sort((a, b) => a[2] - b[2]))
     })
     .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
   return scanning
@@ -1347,7 +1381,7 @@ export const register: Register = on => {
     if (draft) noteEmptied(await $.clock.now(), 'exit')
     settleEmptied()
     const { entries, timelines } = takeAbandoned()
-    await logCompactions($)
+    await logFromTranscript($)
     await logAll($, [...entries, ['session_end', { reason: e.reason }]], timelines)
     await packSession($)
     return next(e)
@@ -1387,8 +1421,9 @@ export const register: Register = on => {
         },
       ])
       if (typed) timelines.push(timelineOf(typed, 'sent', at))
-      // a /compact since the last turn, found without holding the prompt up
-      logCompactions($)
+      // a /compact since the last turn, or this prompt's mode if it's in the
+      // transcript yet, found without holding the prompt up
+      logFromTranscript($)
       await logAll($, entries, timelines)
     }
     return entered
@@ -1450,8 +1485,8 @@ export const register: Register = on => {
     // the text) and any tools still running
     const cut = aborted && main ? { answerChars: [...e.answer].length, toolsRunning: runningTools.size ? [...runningTools.values()] : undefined } : {}
     if (main) runningTools.clear()
-    // an auto compaction mid-turn, in before the sync below
-    if (main) await logCompactions($)
+    // an auto compaction mid-turn or the prompt's mode, in before the sync below
+    if (main) await logFromTranscript($)
     await log($, aborted ? 'interrupt' : 'turn_end', {
       turnId: e.turnId,
       agentId: e.agentId,
@@ -1467,7 +1502,7 @@ export const register: Register = on => {
 
   // /compact, the threshold, a plugin or a precompute ahead of time. Logged
   // once it's done, so durationMs is how long the wait was. Where a security
-  // plugin skips this, logCompactions finds them in the transcript instead
+  // plugin skips this, logFromTranscript finds them in the transcript instead
   on('session.compact', async ($, e, next) => {
     const startedMs = await $.clock.now()
     let fields: Record<string, unknown> = { outcome: 'threw' }

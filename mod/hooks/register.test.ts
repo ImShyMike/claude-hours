@@ -96,11 +96,14 @@ const setup = (on: On) => {
       stdout = new TextDecoder().decode(all.subarray(0, Number(bytes)))
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
-    if (cmd === 'sh' && e.argv[2]?.includes('/projects/'))
-      stdout = transcript
-        .map(entry => JSON.stringify(entry))
-        .filter(line => line.includes(e.argv[4]!))
-        .join('\n')
+    // the grep for compaction boundaries, whole lines, then for each prompt's time and mode alone
+    if (cmd === 'sh' && e.argv[2]?.includes('/projects/')) {
+      const lines = transcript.map(entry => JSON.stringify(entry))
+      stdout = [
+        ...lines.filter(line => line.includes(e.argv[4]!)),
+        ...lines.filter(line => line.includes(e.argv[7]!)).flatMap(line => line.match(new RegExp(e.argv[8]!, 'g')) ?? []),
+      ].join('\n')
+    }
     // the config, written where only its owner can read it
     if (cmd === 'sh' && e.argv[2]?.includes('umask 077')) files.set(e.argv[4]!, e.init?.stdin ?? '')
     if (cmd === 'uname') stdout = 'miggys-laptop\n'
@@ -734,6 +737,60 @@ test('a compaction the hook logged is not logged again from the transcript', asy
 
   expect(lines.filter(l => l.event === 'compact')).toHaveLength(1)
   expect(lines.find(l => l.event === 'compact')).toMatchObject({ trigger: 'auto', messages: 1, tokensBefore: 100_000 })
+})
+
+// a prompt as the transcript keeps it, its mode right after its time
+const sent = (at: number, mode: string) => ({
+  type: 'user',
+  message: { role: 'user', content: 'the secret prompt' },
+  timestamp: new Date(at).toISOString(),
+  permissionMode: mode,
+})
+
+test('where the classic hooks are skipped, the mode comes from the prompts in the transcript', async ($, on) => {
+  const { lines, raw, setTranscript, tick, now } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  const start = now()
+  await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
+  setTranscript([
+    // before this file began: the latest still holds at its start
+    sent(start - 2_000, 'default'),
+    sent(start - 1_000, 'auto'),
+    { type: 'permission-mode', permissionMode: 'auto', sessionId: 'sess-1' },
+    sent(start + 10_000, 'auto'),
+    sent(start + 20_000, 'plan'),
+    sent(start + 30_000, 'plan'),
+  ])
+  tick(40_000)
+
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
+
+  expect(lines.filter(l => l.event === 'mode')).toEqual([
+    { event: 'mode', t: 0, mode: 'auto' },
+    { event: 'mode', t: 20_000, mode: 'plan' },
+  ])
+  expect(JSON.stringify(raw)).not.toContain('secret')
+})
+
+test('a mode the classic hooks logged is not logged again from the transcript, nor the other way round', async ($, on) => {
+  const { lines, setTranscript, tick, now } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.UserPromptSubmit', () => ({}))
+  on('classic.Stop', () => ({}))
+  const start = now()
+  setTranscript([sent(start, 'plan')])
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
+  tick(5_000)
+  // the hook agrees, then sees a shift+tab the transcript only shows at the next prompt
+  await $.classic.UserPromptSubmit({ prompt: 'hi', permission_mode: 'plan' })
+  tick(5_000)
+  await $.classic.Stop({ stop_hook_active: false, permission_mode: 'acceptEdits' })
+  setTranscript([sent(start, 'plan'), sent(now() + 1_000, 'acceptEdits')])
+  tick(2_000)
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
+
+  expect(lines.filter(l => l.event === 'mode').map(l => l.mode)).toEqual(['plan', 'acceptEdits'])
 })
 
 test('a prompt sent while a turn runs is marked midTurn', async ($, on) => {

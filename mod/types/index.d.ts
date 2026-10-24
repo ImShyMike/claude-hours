@@ -6,8 +6,12 @@ export type StartedSessions = string[]
 // so a compaction found there is logged once.
 export type SeenCompactions = string[]
 
+// The last permission mode logged and when, by the classic hooks or from the
+// transcript's prompts, so neither logs it again.
+export type LastMode = { sessionId: string; at: number; mode: string } | null
+
 declare module 'claude-code' {
   interface PluginState {
-    'time-track': { startedSessions: StartedSessions; seenCompactions: SeenCompactions }
+    'time-track': { startedSessions: StartedSessions; seenCompactions: SeenCompactions; lastMode: LastMode }
   }
 }
