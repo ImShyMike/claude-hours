@@ -290,8 +290,9 @@
         </Card.Root>
         {#if modesSeen || modelsSeen}
           <div class="flex flex-col gap-4">
+            <!-- the last card in the column grows to the Tools card's height -->
             {#if modesSeen}
-              <Card.Root>
+              <Card.Root class={modelsSeen ? undefined : 'flex-1'}>
                 <Card.Header>
                   <Card.Title>Permission modes</Card.Title>
                   <Card.Description>Active time in each</Card.Description>
@@ -310,7 +311,7 @@
               </Card.Root>
             {/if}
             {#if modelsSeen}
-              <Card.Root>
+              <Card.Root class="flex-1">
                 <Card.Header>
                   <Card.Title>Models</Card.Title>
                   <Card.Description>Claude's working time with each</Card.Description>
