@@ -67,6 +67,30 @@ const HEAT_STEPS = [30 * MIN, 60 * MIN, 120 * MIN, 240 * MIN]
 const heatLevel = (ms: number) => (ms <= 0 ? 0 : 1 + HEAT_STEPS.filter(step => ms >= step).length)
 export const HEAT_LABELS = ['under 30m', '30m to 1h', '1h to 2h', '2h to 4h', '4h or more']
 
+// a range's days averaged by weekday, Monday first: each weekday's active
+// time and split over how many of it the range has, quiet ones included
+const WEEKDAY = new Intl.DateTimeFormat(undefined, { weekday: 'short' })
+export function weekdays(days: Summary['days']) {
+  const out = Array.from({ length: 7 }, (_, i) => ({
+    label: WEEKDAY.format(new Date(2026, 0, 5 + i)),
+    ms: 0,
+    projects: {} as Record<string, number>,
+    count: 0,
+  }))
+  for (const d of days) {
+    const w = out[(new Date(`${d.day}T12:00:00`).getDay() + 6) % 7]!
+    w.count++
+    w.ms += d.ms
+    for (const [project, ms] of Object.entries(d.projects)) w.projects[project] = (w.projects[project] ?? 0) + ms
+  }
+  for (const w of out) {
+    if (!w.count) continue
+    w.ms /= w.count
+    for (const project in w.projects) w.projects[project]! /= w.count
+  }
+  return out
+}
+
 // days in a row with any active time: the longest run ever, and the one
 // going now, which a quiet today doesn't break until it's over
 export function streaks(days: Summary['days'], today: string) {

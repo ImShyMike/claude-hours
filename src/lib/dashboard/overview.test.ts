@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { streaks, toolName } from './overview'
+import { streaks, toolName, weekdays } from './overview'
 
 test('MCP tools read as their server and tool, prefixes dropped', () => {
   expect(toolName('mcp__helium-devtools__take_screenshot')).toBe('helium-devtools · take screenshot')
@@ -19,4 +19,19 @@ test('streaks count days in a row with active time, the current one alive throug
   // a today with no active time yet, only a prompt, doesn't break it either
   expect(streaks([...days, { day: '2026-10-18', ms: 0, prompts: 1, projects: {} }], '2026-10-18')).toEqual({ longest: 3, current: 2 })
   expect(streaks([], '2026-10-15')).toEqual({ longest: 0, current: 0 })
+})
+
+test('weekdays average each weekday over how many the range has, Monday first', () => {
+  // Mon Oct 5 to Mon Oct 12 2026: two Mondays, one of each other day
+  const days = [60, 0, 0, 0, 0, 0, 30, 20].map((m, i) => ({
+    day: `2026-10-${String(5 + i).padStart(2, '0')}`,
+    ms: m * 60_000,
+    prompts: 0,
+    projects: (m ? { terra: m * 60_000 } : {}) as Record<string, number>,
+  }))
+  const w = weekdays(days)
+  expect(w.map(d => d.count)).toEqual([2, 1, 1, 1, 1, 1, 1])
+  expect(w[0]).toMatchObject({ ms: 40 * 60_000, projects: { terra: 40 * 60_000 } })
+  expect(w[6]).toMatchObject({ ms: 30 * 60_000 })
+  expect(w[1]!.ms).toBe(0)
 })

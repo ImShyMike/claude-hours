@@ -4,8 +4,9 @@
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
+  import * as ToggleGroup from '#lib/components/ui/toggle-group/index.js'
   import { liveDigest, stored, whoIsLooking } from '../live.svelte'
-  import { HEAT_LABELS, hourLabel, longDay, modeName, series, shortDay, streaks, tipLines, toolName } from '../overview'
+  import { HEAT_LABELS, hourLabel, longDay, modeName, series, shortDay, streaks, tipLines, toolName, weekdays } from '../overview'
   import {
     MIN,
     attachments,
@@ -35,6 +36,8 @@
   // the overview of someone logged in; the page shows a welcome otherwise
   const who = whoIsLooking()
   const range = stored<Range>('range', '7')
+  // the rhythm card by hour, or by weekday once the range has more than a week
+  const rhythm = stored<'hours' | 'weekdays'>('rhythm', 'hours')
   const live = liveDigest(() => range.value)
   const person = $derived(page.url.searchParams.get('person') ?? '')
   // the sessions table a page at a time, back to the newest whenever the
@@ -251,18 +254,49 @@
 
       <div class="grid gap-4 md:grid-cols-2">
         <Card.Root>
+          {@const byWeekday = s.days.length > 7 && rhythm.value === 'weekdays'}
           <Card.Header>
-            <Card.Title>Time of day</Card.Title>
+            <Card.Title>{byWeekday ? 'Day of the week' : 'Time of day'}</Card.Title>
             <Legend {colors} projects={s.projects.map(p => p.project)} />
+            {#if s.days.length > 7}
+              <Card.Action>
+                <ToggleGroup.Root
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  aria-label="By hour or weekday"
+                  bind:value={() => rhythm.value, (next: string) => next && (rhythm.value = next as 'hours' | 'weekdays')}
+                >
+                  <ToggleGroup.Item value="hours">Hours</ToggleGroup.Item>
+                  <ToggleGroup.Item value="weekdays">Weekdays</ToggleGroup.Item>
+                </ToggleGroup.Root>
+              </Card.Action>
+            {/if}
           </Card.Header>
           <!-- as tall as the card beside it -->
           <Card.Content class="flex flex-1 flex-col">
-            <Columns
-              fill
-              labels={s.hours.map((_, h) => hourLabel(h))}
-              series={series(colors, s.hourProjects)}
-              tips={s.hours.map((ms, h) => `<strong>${hourLabel(h)}</strong>${duration(ms)} active${tipLines(colors, s.hourProjects[h]!)}`)}
-            />
+            {#if byWeekday}
+              {@const week = weekdays(s.days)}
+              <Columns
+                fill
+                labels={week.map(w => w.label)}
+                series={series(
+                  colors,
+                  week.map(w => w.projects),
+                )}
+                tips={week.map(
+                  w =>
+                    `<strong>${w.label}</strong>${duration(w.ms)} active on average, over ${plural(w.count, 'day')}${tipLines(colors, w.projects)}`,
+                )}
+              />
+            {:else}
+              <Columns
+                fill
+                labels={s.hours.map((_, h) => hourLabel(h))}
+                series={series(colors, s.hourProjects)}
+                tips={s.hours.map((ms, h) => `<strong>${hourLabel(h)}</strong>${duration(ms)} active${tipLines(colors, s.hourProjects[h]!)}`)}
+              />
+            {/if}
           </Card.Content>
         </Card.Root>
         {#if s.writing.measured}
