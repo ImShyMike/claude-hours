@@ -29,8 +29,9 @@ export const withPerson = (path: string) => {
 // The hub answers 401 once the session runs out (or just after logging out,
 // to a fetch already on its way). The pages ask the server again rather than
 // leave: the overview turns into its welcome, and the pages that need a
-// login send you to it from there
-export async function api<T>(path: string): Promise<T> {
+// login send you to it from there. The answer as it came, for telling a
+// refresh that changed nothing from one that did
+export async function apiText(path: string): Promise<string> {
   const res = await fetch(withPerson(path))
   if (res.status === 401) {
     await refreshAll()
@@ -38,8 +39,10 @@ export async function api<T>(path: string): Promise<T> {
   }
   // an error's body isn't the answer, so nothing keeps it as one
   if (!res.ok) throw new Error(`${path} answered ${res.status}`)
-  return res.json() as Promise<T>
+  return res.text()
 }
+
+export const api = async <T>(path: string): Promise<T> => JSON.parse(await apiText(path))
 
 export type Range = 'today' | '7' | '30' | 'all'
 

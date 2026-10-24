@@ -4,7 +4,7 @@ import { page } from '$app/state'
 import type { Event } from '../analytics/aggregate'
 import type { Timeline } from '../analytics/replay'
 import type { Digest } from '../server/digest'
-import { api, load, rangeWindow, save, withPerson, type Me, type Range } from './shared'
+import { api, apiText, load, rangeWindow, save, withPerson, type Me, type Range } from './shared'
 
 export type { Digest }
 export type SessionDigest = { events: Event[]; projects: Digest['projects']; idleCapMs: number; timelines: Timeline[]; devices: string[] }
@@ -15,14 +15,16 @@ const REFRESH_MS = 30_000
 export const tz = () => Intl.DateTimeFormat().resolvedOptions().timeZone
 
 // The last answers by ?person and key, so moving between the overview and
-// the timeline shows what's already here while it refreshes
-const answers = new Map<string, unknown>()
+// the timeline shows what's already here while it refreshes, with the text
+// each came as: a refresh that brings the same text changes nothing, so
+// nothing is drawn again
+const answers = new Map<string, { text: string; value: unknown }>()
 const meCache = new Map<string, Me>()
 
 // Answers asked for ahead, by the same key: a page's load starts its fetch
 // when a link to it is hovered, and the page takes it up if it opens soon
 // after. Not api(): its 401 reruns every load, and so this again
-const ahead = new Map<string, { at: number; value: Promise<unknown> }>()
+const ahead = new Map<string, { at: number; value: Promise<string> }>()
 const AHEAD_MS = 10_000
 
 function prefetch(url: URL, want: string, path: string) {
@@ -34,7 +36,7 @@ function prefetch(url: URL, want: string, path: string) {
   if (Date.now() - (ahead.get(key)?.at ?? 0) < AHEAD_MS) return
   const value = fetch(withPerson(path)).then(res => {
     if (!res.ok) throw new Error(`${path} answered ${res.status}`)
-    return res.json() as Promise<unknown>
+    return res.text()
   })
   value.catch(() => {})
   ahead.set(key, { at: Date.now(), value })
@@ -51,15 +53,16 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
     if (want === undefined) return
     const cached = `${page.url.searchParams.get('person') ?? ''} ${want}`
     let stale = false
-    live.value = answers.get(cached) as T | undefined
+    live.value = answers.get(cached)?.value as T | undefined
     const refresh = async () => {
       try {
         const early = ahead.get(cached)
         ahead.delete(cached)
-        const fresh = () => api<T>(path(want))
-        const value = early && Date.now() - early.at < AHEAD_MS ? await (early.value as Promise<T>).catch(fresh) : await fresh()
-        if (stale) return
-        answers.set(cached, value)
+        const fresh = () => apiText(path(want))
+        const text = early && Date.now() - early.at < AHEAD_MS ? await early.value.catch(fresh) : await fresh()
+        if (stale || text === answers.get(cached)?.text) return
+        const value = JSON.parse(text) as T
+        answers.set(cached, { text, value })
         live.value = value
       } catch (err) {
         console.error(`could not load ${want}`, err)
