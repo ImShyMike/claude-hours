@@ -242,6 +242,7 @@
                     ? 'z-10 shadow-[0_0_0_1px_var(--card),0_0_0_2px_var(--foreground)]'
                     : 'shadow-[0_0_0_1px_var(--card)]'}
                 <!-- a bar to click picks something the page also offers by keyboard (the drafts table) -->
+                <!-- placed in CSS against the track's width, so a zoom doesn't restyle every bar -->
                 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                 <svelte:element
                   this={b.href ? 'a' : 'div'}
@@ -253,8 +254,8 @@
                   ]}
                   href={b.href}
                   aria-label={b.label}
-                  style:left="{axis.x(b.from)}px"
-                  style:width="{axis.x(b.to) - axis.x(b.from)}px"
+                  style:left={axis.css(b.from)}
+                  style:width={axis.cssLength(b.from, b.to)}
                   style:top="{b.top}px"
                   style:height="{b.height}px"
                   style:background={b.color}
