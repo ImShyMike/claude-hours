@@ -3,8 +3,17 @@ import { dayKey, type Summary } from '../analytics/aggregate'
 import type { Cell, Series } from './charts'
 import { MIN, duration, esc, type Palette } from './shared'
 
-// mcp__helium-devtools__new_page reads better as "helium-devtools · new_page"
-export const toolName = (tool: string) => tool.replace(/^mcp__(.+?)__(.+)$/, '$1 · $2')
+// mcp__helium-devtools__new_page reads better as "helium-devtools · new page",
+// and mcp__plugin_engineering_slack__slack_read_thread as "slack · read thread":
+// a plugin's or claude.ai's prefix goes, and so does the server's name
+// repeated at the start of the tool's
+export function toolName(tool: string) {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(tool)
+  if (!mcp) return tool
+  const server = mcp[1]!.replace(/^plugin_[^_]+_/, '').replace(/^claude_ai_/, '')
+  const name = mcp[2]!.startsWith(`${server}_`) ? mcp[2]!.slice(server.length + 1) : mcp[2]!
+  return `${server.replaceAll('_', ' ')} · ${name.replaceAll('_', ' ')}`
+}
 
 // a permission mode as Claude Code's footer names it; one it adds later as is
 const MODES: Record<string, string> = {
