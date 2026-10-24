@@ -100,6 +100,21 @@ export function projectTracks(events: Event[], idleCapMs: number, home: string):
 
 // With gaps collapsed, a quiet stretch longer than this is squashed into a break
 export const GAP_MS = 5 * MIN
+
+// whether quiet stretches over GAP_MS take up most of a session's length, as
+// when it was left open overnight: then its gaps start out collapsed
+export function mostlyQuiet(spans: Interval[]) {
+  const sorted = [...spans].sort((a, b) => a[0] - b[0])
+  if (!sorted.length) return false
+  let quiet = 0
+  let reach = sorted[0]![1]
+  for (const [from, to] of sorted) {
+    if (from - reach > GAP_MS) quiet += from - reach
+    reach = Math.max(reach, to)
+  }
+  return quiet > (reach - sorted[0]![0]) / 2
+}
+
 // the mod's own thresholds: a gap this long is a pause, and one this long a
 // break that stops counting as typing time
 const PAUSE_MS = 2_000

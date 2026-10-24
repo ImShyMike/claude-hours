@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { Event } from '../analytics/aggregate'
-import { laneRows } from './session'
+import { laneRows, mostlyQuiet } from './session'
 import { palette } from './shared'
 
 const MIN = 60_000
@@ -59,4 +59,30 @@ test("a main-thread compaction stands taller than the turns, with the context's 
   expect(precompute!.height).toBe(claude.height)
   expect(claude.marks).toEqual([])
   expect(rows(events).some(r => r.key === 'agents')).toBe(false)
+})
+
+test('a session is mostly quiet when gaps over 5 minutes are more than half its length', () => {
+  // an hour of work, a night away, and another hour
+  expect(
+    mostlyQuiet([
+      [0, 60 * MIN],
+      [10 * 60 * MIN, 11 * 60 * MIN],
+    ]),
+  ).toBe(true)
+  // short pauses don't count, however many
+  expect(
+    mostlyQuiet([
+      [0, 10 * MIN],
+      [14 * MIN, 20 * MIN],
+      [24 * MIN, 30 * MIN],
+    ]),
+  ).toBe(false)
+  // nor does a long gap in a long day of work
+  expect(
+    mostlyQuiet([
+      [0, 4 * 60 * MIN],
+      [5 * 60 * MIN, 9 * 60 * MIN],
+    ]),
+  ).toBe(false)
+  expect(mostlyQuiet([])).toBe(false)
 })

@@ -4,8 +4,8 @@
   import { Checkbox } from '#lib/components/ui/checkbox/index.js'
   import { Label } from '#lib/components/ui/label/index.js'
   import { stored } from '../../live.svelte'
-  import { GAP_MS, LANES_LEGEND, laneRows, type Draft, type ProjectPiece } from '../../session'
-  import { clockTime, duration, type Palette } from '../../shared'
+  import { GAP_MS, LANES_LEGEND, laneRows, mostlyQuiet, type Draft, type ProjectPiece } from '../../session'
+  import { clockTime, duration, load, type Palette } from '../../shared'
   import TimeRows from '../TimeRows.svelte'
 
   let {
@@ -18,8 +18,11 @@
   }: { events: Event[]; drafts: Draft[]; tracks: ProjectPiece[][]; colors: Palette; selected?: string; onpick: (draft: string) => void } = $props()
 
   const zoom = stored<string>('zoom', '1')
-  const collapse = stored<'0' | '1'>('collapse', '0')
+  // auto collapses a session that's mostly quiet; the checkbox pins it either
+  // way (the old setting carries over when it was on)
+  const gaps = stored<'auto' | '0' | '1'>('gaps', load<string>('collapse', '0') === '1' ? '1' : 'auto')
   const lanes = $derived(laneRows({ events, drafts, tracks, colors, selected, onpick }))
+  const collapsed = $derived(gaps.value === 'auto' ? mostlyQuiet(lanes.spans) : gaps.value === '1')
   const gapTip = (from: number, to: number) => `<strong>Nothing for ${duration(to - from)}</strong>${clockTime(from)} to ${clockTime(to)}, collapsed`
 </script>
 
@@ -32,7 +35,7 @@
     <TimeRows
       rows={lanes.rows}
       spans={lanes.spans}
-      gapMs={collapse.value === '1' ? GAP_MS : Infinity}
+      gapMs={collapsed ? GAP_MS : Infinity}
       {gapTip}
       bind:zoom={() => Number(zoom.value) || 1, next => (zoom.value = String(next))}
       maxZoom={256}
@@ -46,7 +49,7 @@
       {/snippet}
       {#snippet controls()}
         <div class="flex items-center gap-2">
-          <Checkbox id="collapse" bind:checked={() => collapse.value === '1', on => (collapse.value = on ? '1' : '0')} />
+          <Checkbox id="collapse" bind:checked={() => collapsed, on => (gaps.value = on ? '1' : '0')} />
           <Label for="collapse" class="font-normal text-muted-foreground">Collapse gaps</Label>
         </div>
       {/snippet}
