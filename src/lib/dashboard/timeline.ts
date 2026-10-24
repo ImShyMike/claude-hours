@@ -21,7 +21,8 @@ export const nextDay = (ms: number) => {
   const d = new Date(ms)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
 }
-export const hm = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+const HM = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+export const hm = (ms: number) => HM.format(ms)
 
 // a span cut at local midnights, each piece in its own day's row
 function* byDay(span: Piece): Generator<[number, Piece]> {

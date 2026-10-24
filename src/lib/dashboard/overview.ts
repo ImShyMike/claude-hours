@@ -18,10 +18,15 @@ const MODES: Record<string, string> = {
 }
 export const modeName = (mode: string) => MODES[mode] ?? mode
 
-export const shortDay = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-export const longDay = (day: string) =>
-  new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
-export const hourLabel = (h: number) => new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' })
+// a formatter is made once: toLocaleDateString makes one on every call,
+// which a year of days adds up to on each redraw
+const SHORT_DAY = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
+const LONG_DAY = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+const HOUR = new Intl.DateTimeFormat(undefined, { hour: 'numeric' })
+const MONTH = new Intl.DateTimeFormat(undefined, { month: 'short' })
+export const shortDay = (day: string) => SHORT_DAY.format(new Date(`${day}T12:00:00`))
+export const longDay = (day: string) => LONG_DAY.format(new Date(`${day}T12:00:00`))
+export const hourLabel = (h: number) => HOUR.format(new Date(2000, 0, 1, h))
 
 // a day's or hour's split grouped by palette slot
 function grouped(colors: Palette, split: Record<string, number>) {
@@ -72,7 +77,7 @@ export function heatCells(width: number, colors: Palette, days: Summary['days'])
       const day = dayKey(d.getTime())
       if (day > today) continue
       if (dow === 0 && d.getMonth() !== lastMonth) {
-        if (lastMonth !== -1 || d.getDate() <= 7) months[week] = d.toLocaleDateString(undefined, { month: 'short' })
+        if (lastMonth !== -1 || d.getDate() <= 7) months[week] = MONTH.format(d)
         lastMonth = d.getMonth()
       }
       const x = byDay.get(day)

@@ -41,6 +41,11 @@ const TICK_PX = 64
 // a break this wide has its length on the axis
 const BREAK_LABEL_PX = 30
 
+// tick labels, each formatter made once since a zoom labels hundreds of ticks
+const SECONDS = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+const MINUTES = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+const HOURS = new Intl.DateTimeFormat(undefined, { hour: 'numeric' })
+
 const startOfDay = (ms: number) => {
   const d = new Date(ms)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
@@ -58,12 +63,7 @@ export function guides(axis: Axis, trackW: number, clock: (v: number) => number)
     return { from, to, left, width, label: width >= BREAK_LABEL_PX ? duration(to - from) : '' }
   })
   const labelled = breaks.filter(b => b.label).map(b => b.left + b.width / 2)
-  const format: Intl.DateTimeFormatOptions =
-    step < MIN
-      ? { hour: 'numeric', minute: '2-digit', second: '2-digit' }
-      : step < HOUR
-        ? { hour: 'numeric', minute: '2-digit' }
-        : { hour: 'numeric' }
+  const format = step < MIN ? SECONDS : step < HOUR ? MINUTES : HOURS
   const ticks: { left: number; label: string }[] = []
   let last = -Infinity
   for (const [from, to] of axis.segments) {
@@ -75,7 +75,7 @@ export function guides(axis: Axis, trackW: number, clock: (v: number) => number)
       // labels, and with room for the label inside the track
       if (left - last < TICK_PX - 8 || left > trackW - 48 || labelled.some(c => c > left - 32 && c < left + TICK_PX + 12)) continue
       last = left
-      ticks.push({ left, label: new Date(clock(t)).toLocaleTimeString(undefined, format) })
+      ticks.push({ left, label: format.format(clock(t)) })
     }
   }
   return { ticks, breaks }

@@ -106,7 +106,8 @@ export function attachments(counts: Record<string, unknown>) {
     .join(', ')
 }
 
-export const clockTime = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+const CLOCK = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+export const clockTime = (ms: number) => CLOCK.format(ms)
 
 export function showTip(e: MouseEvent, html: string) {
   const tooltip = $('tooltip')
