@@ -202,6 +202,10 @@ describe('digest', () => {
       /^runs;dur=[\d.]+, rows;dur=[\d.]+;desc="1 of 1 sessions, 1 runs", decode;dur=[\d.]+, ever;dur=[\d.]+, sum;dur=[\d.]+;desc="2 events"$/,
     )
     expect(first.idleCapMs).toBe(5 * 60_000)
+    // all of it again, with nothing new, is the summary already summed
+    const again: Timing = new Map()
+    expect((await digest(db, person, {}, again)).range).toEqual(first.range)
+    expect(again.has('sum')).toBe(false)
 
     await ingest(db, person, [run(2, [prompt(180_000)]), run(0, [prompt(1)], { session: 's2' })])
     const second = await digest(db, person, {})

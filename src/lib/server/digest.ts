@@ -22,9 +22,11 @@ export type Digest = {
 type AllTime = Pick<Summary, 'projects' | 'days' | 'sessions'>
 
 // all time changes only when the person's sessions do, so it's kept per
-// person until then; a range is cheap next to it
+// person until then, and so is the summary of the range that's all of it;
+// a range with ends is cheap next to them
 const MAX_PEOPLE = 50
-const kept = new WeakMap<Db, Map<number, { key: string; ever: AllTime }>>()
+type Kept = { key: string; ever: AllTime; whole?: Summary }
+const kept = new WeakMap<Db, Map<number, Kept>>()
 
 // and when they do, it's mostly one session, the one being worked in. Each
 // session's own all time is kept for as long as history.ts keeps its events
@@ -85,7 +87,7 @@ function allTime(
   options: { idleCapMs: number; tz?: string },
   timing?: Timing,
 ) {
-  const people = kept.get(db) ?? new Map<number, { key: string; ever: AllTime }>()
+  const people = kept.get(db) ?? new Map<number, Kept>()
   kept.set(db, people)
   let entry = people.get(personId)
   if (entry?.key !== key) {
@@ -95,7 +97,7 @@ function allTime(
   people.delete(personId)
   people.set(personId, entry)
   if (people.size > MAX_PEOPLE) people.delete(people.keys().next().value!)
-  return entry.ever
+  return entry
 }
 
 const DAY = 86_400_000
@@ -114,13 +116,18 @@ function endOf(events: Event[]) {
 export async function digest(db: Db, personId: number, window: { from?: number; to?: number; tz?: string; spans?: boolean }, timing?: Timing) {
   const { from, to, tz } = window
   const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db)])
-  const ever = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz }, timing)
+  const entry = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz }, timing)
+  const ever = entry.ever
   const shift = from !== undefined && to !== undefined && !window.spans ? Math.ceil((to - from) / DAY) * DAY : 0
   // only sessions still going when the earliest window starts can add to it
   const since = from === undefined ? -Infinity : from - shift
   const events = [...sessions.values()].filter(events => endOf(events) >= since).flat()
-  const range = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, tz }))
-  timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
+  const sum = () => {
+    const summary = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, tz }))
+    timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
+    return summary
+  }
+  const range = from === undefined && to === undefined ? (entry.whole ??= sum()) : sum()
   const before = shift
     ? timed(timing, 'before', () => summarize(events, { from: from! - shift, to: to! - shift, idleCapMs: cap, tz }).totalMs)
     : undefined
@@ -140,6 +147,6 @@ export async function digest(db: Db, personId: number, window: { from?: number; 
 // one session's events, with what the page needs from all time to color them
 export async function sessionDigest(db: Db, personId: number, session: string, tz?: string) {
   const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId), idleCapMs(db)])
-  const ever = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz })
+  const { ever } = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz })
   return { events: sessions.get(session) ?? [], projects: ever.projects, idleCapMs: cap }
 }
