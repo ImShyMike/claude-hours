@@ -18,10 +18,10 @@ export type Axis = {
   gaps: Interval[]
   // px per ms inside a segment
   scale: number
-  // a moment's left edge, as CSS against the width of the box it sits in,
-  // and the length of a stretch the same way
-  css: (ms: number) => string
-  cssLength: (from: number, to: number) => string
+  // a moment's left edge, as CSS against the width of the box it sits in (or
+  // `whole`), and the length of a stretch the same way
+  css: (ms: number, whole?: string) => string
+  cssLength: (from: number, to: number, whole?: string) => string
 }
 
 export function axisOf(spans: Interval[], left: number, plotW: number, gapMs: number, gapPx: number, minMs = 10_000): Axis {
@@ -57,15 +57,18 @@ export function axisOf(spans: Interval[], left: number, plotW: number, gapMs: nu
     const [share, breaks] = unit(ms)
     return left + share * (plotW - gaps.length * breakPx) + breaks * breakPx
   }
-  // the same in CSS, where 100% is the width: a break is gapPx, or less when
-  // there are many, and the segments share what's left
-  const brk = gaps.length ? `min(${gapPx}px, 100% * ${0.3 / gaps.length})` : '0px'
-  const cssOf = (share: number, breaks: number) => `calc((100% - ${gaps.length} * ${brk}) * ${share} + ${brk} * ${breaks})`
-  const css = (ms: number) => cssOf(...unit(ms))
-  const cssLength = (from: number, to: number) => {
+  // the same in CSS, where `whole` is the width (100% of the box, or 100cqw
+  // inside something on it): a break is gapPx, or less when there are many,
+  // and the segments share what's left
+  const cssOf = (share: number, breaks: number, whole: string) => {
+    const brk = gaps.length ? `min(${gapPx}px, ${whole} * ${0.3 / gaps.length})` : '0px'
+    return `calc((${whole} - ${gaps.length} * ${brk}) * ${share} + ${brk} * ${breaks})`
+  }
+  const css = (ms: number, whole = '100%') => cssOf(...unit(ms), whole)
+  const cssLength = (from: number, to: number, whole = '100%') => {
     const [a, i] = unit(from)
     const [b, j] = unit(to)
-    return cssOf(b - a, j - i)
+    return cssOf(b - a, j - i, whole)
   }
   const at = (px: number) => {
     for (let i = segments.length - 1; i >= 0; i--) {

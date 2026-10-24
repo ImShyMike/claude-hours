@@ -100,6 +100,11 @@ function dayRow(day: number, bySession: Map<string, Piece[]>, look: Look): Row {
   let top = 0
   for (const lane of lanesOf(bySession, look.home)) {
     for (const s of lane.sessions) {
+      // every piece opens the session, so they share one name for it
+      const pieces = s.tracks.flat()
+      const from = Math.min(...pieces.map(p => p.from))
+      const to = Math.max(...pieces.map(p => p.to))
+      const label = `${look.home(s.id) || pieces[0]!.project} session, ${hm(from)} to ${hm(to)}, ${duration(activeMs(new Map([[s.id, pieces]])))} active`
       s.tracks.forEach((track, k) => {
         const y = top + (k ? ROW.main + ROW.gap + (k - 1) * (ROW.sub + ROW.gap) : 0)
         for (const piece of track)
@@ -110,7 +115,7 @@ function dayRow(day: number, bySession: Map<string, Piece[]>, look: Look): Row {
             height: k ? ROW.sub : ROW.main,
             color: look.color(piece.project),
             tip: tip(piece, look.home(piece.sessionId)),
-            label: `${piece.project}, ${hm(piece.from)} to ${hm(piece.to)}`,
+            label,
             href: look.link(piece.sessionId),
             group: piece.sessionId,
           })

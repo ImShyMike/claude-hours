@@ -5,7 +5,7 @@
   import type { Interval } from '#lib/analytics/aggregate.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import { axisOf } from '../axis'
-  import { guides, type Row } from '../rows'
+  import { guides, type Bar, type Row } from '../rows'
   import { hideTip, showTip } from '../shared'
 
   // The chart the timeline and the session page share: a sticky label per
@@ -154,6 +154,48 @@
   })
 
   const tipOf = (html?: string) => (html ? (e: MouseEvent) => showTip(e, html) : undefined)
+
+  const ringOf = (b: Bar, rest = '') =>
+    b.plain
+      ? 'z-[11]'
+      : b.selected || (b.group && b.group === lit)
+        ? 'z-10 shadow-[0_0_0_1px_var(--card),0_0_0_2px_var(--foreground)]'
+        : `${rest} shadow-[0_0_0_1px_var(--card)]`
+
+  // The bars that open the same place make one link around them, so a
+  // session is one Tab stop and one target for a finger however many pieces
+  // it has, and the link is never under 24px a side: thinner ones grow
+  // around their middle. Its bars sit over every link's grown edge, so a
+  // bar always opens its own session. Bars that only pick something stay loose
+  const TARGET_PX = 24
+  type Link = { href: string; label?: string; from: number; to: number; top: number; height: number; bars: Bar[] }
+  function linksOf(bars: Bar[]) {
+    const loose: Bar[] = []
+    const links = new Map<string, Link>()
+    for (const b of bars) {
+      if (!b.href) {
+        loose.push(b)
+        continue
+      }
+      const l = links.get(b.href)
+      if (!l) {
+        links.set(b.href, { href: b.href, label: b.label, from: b.from, to: b.to, top: b.top, height: b.height, bars: [b] })
+        continue
+      }
+      const bottom = Math.max(l.top + l.height, b.top + b.height)
+      l.from = Math.min(l.from, b.from)
+      l.to = Math.max(l.to, b.to)
+      l.top = Math.min(l.top, b.top)
+      l.height = bottom - l.top
+      l.bars.push(b)
+    }
+    for (const l of links.values()) {
+      const grow = Math.max(0, TARGET_PX - l.height)
+      l.top -= grow / 2
+      l.height += grow
+    }
+    return { loose, links: [...links.values()] }
+  }
 </script>
 
 <svelte:window bind:innerWidth />
@@ -235,30 +277,20 @@
             <div class={[label, 'py-1 text-muted-foreground']} style:width="{labelW}px">{row.label}</div>
           </div>
         {:else}
+          {@const { loose, links } = linksOf(row.bars)}
           <div class="flex border-t">
             <div class={[label, 'flex flex-col justify-center py-1.5 tabular-nums']} style:width="{labelW}px">
               <span>{row.label}</span>
               {#if row.sub}<span class="text-muted-foreground">{row.sub}</span>{/if}
             </div>
-            <div class="pointer-events-none relative my-1.5 flex-1" style:height="{row.height}px">
-              {#each row.bars as b, i (i)}
-                {@const ring = b.plain
-                  ? 'z-[11]'
-                  : b.selected || (b.group && b.group === lit)
-                    ? 'z-10 shadow-[0_0_0_1px_var(--card),0_0_0_2px_var(--foreground)]'
-                    : 'shadow-[0_0_0_1px_var(--card)]'}
+            <!-- a container, so a bar inside a link can still be placed against the track's width (cqw) -->
+            <div class="@container pointer-events-none relative my-1.5 flex-1" style:height="{row.height}px">
+              {#each loose as b, i (i)}
                 <!-- a bar to click picks something the page also offers by keyboard (the drafts table) -->
                 <!-- placed in CSS against the track's width, so a zoom doesn't restyle every bar -->
                 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-                <svelte:element
-                  this={b.href ? 'a' : 'div'}
-                  class={[
-                    'pointer-events-auto absolute min-w-0.5 rounded-[3px] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-foreground',
-                    (b.href || b.onclick) && 'cursor-pointer',
-                    ring,
-                    b.class,
-                  ]}
-                  href={b.href}
+                <div
+                  class={['pointer-events-auto absolute min-w-0.5 rounded-[3px]', b.onclick && 'cursor-pointer', ringOf(b), b.class]}
                   aria-label={b.label}
                   style:left={axis.css(b.from)}
                   style:width={axis.cssLength(b.from, b.to)}
@@ -272,7 +304,39 @@
                     if (b.group) lit = undefined
                     if (b.tip) hideTip()
                   }}
-                ></svelte:element>
+                ></div>
+              {/each}
+              {#each links as l (l.href)}
+                {@const length = axis.cssLength(l.from, l.to, '100cqw')}
+                <!-- how far a thin link grows each side to reach TARGET_PX -->
+                {@const grow = `max(0px, (${TARGET_PX}px - ${length}) / 2)`}
+                {@const start = `calc(${axis.css(l.from, '100cqw')} - ${grow})`}
+                <!-- no z-index of its own, so the rings of the bars in it still stack over other links' bars -->
+                <a
+                  class="pointer-events-auto absolute cursor-pointer rounded-[3px] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-foreground"
+                  href={l.href}
+                  aria-label={l.label}
+                  style:left={start}
+                  style:width="max({TARGET_PX}px, {length})"
+                  style:top="{l.top}px"
+                  style:height="{l.height}px"
+                  onmouseenter={l.bars[0]!.group ? () => (lit = l.bars[0]!.group) : undefined}
+                  onmouseleave={l.bars[0]!.group ? () => (lit = undefined) : undefined}
+                >
+                  {#each l.bars as b, i (i)}
+                    <div
+                      class={['absolute min-w-0.5 rounded-[3px]', ringOf(b, 'z-[1]'), b.class]}
+                      role="presentation"
+                      style:left="calc({axis.css(b.from, '100cqw')} - {start})"
+                      style:width={axis.cssLength(b.from, b.to, '100cqw')}
+                      style:top="{b.top - l.top}px"
+                      style:height="{b.height}px"
+                      style:background={b.color}
+                      onmousemove={tipOf(b.tip)}
+                      onmouseleave={b.tip ? hideTip : undefined}
+                    ></div>
+                  {/each}
+                </a>
               {/each}
               {#each row.marks ?? [] as m, i (i)}
                 {#if m.at >= ends[0]! && m.at <= ends[1]!}

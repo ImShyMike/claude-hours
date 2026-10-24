@@ -4,12 +4,12 @@ import { axisOf } from './axis'
 const MIN = 60_000
 const H = 60 * MIN
 
-// what a CSS length comes to at a width, the browser's way
+// what a CSS length comes to at a width (of the box, or of the container), the browser's way
 function resolve(css: string, width: number) {
   const js = css
     .replaceAll('calc', '')
     .replace(/min\(([^,]+), ([^)]+)\)/g, 'Math.min($1, $2)')
-    .replaceAll('100%', String(width))
+    .replace(/100(%|cqw)/g, String(width))
     .replace(/(\d+)px/g, '$1')
   return Function(`return ${js}`)() as number
 }
@@ -25,6 +25,7 @@ test('bars placed in CSS land where the axis puts them, at any width', () => {
     const axis = axisOf(spans, 0, width, 20 * MIN, 48)
     for (const ms of [0, 30 * MIN, 5 * H, 10 * H + 15 * MIN, 11 * H + 10 * MIN, 12 * H]) {
       expect(resolve(axis.css(ms), width)).toBeCloseTo(axis.x(ms), 6)
+      expect(resolve(axis.css(ms, '100cqw'), width)).toBeCloseTo(axis.x(ms), 6)
     }
     expect(resolve(axis.cssLength(30 * MIN, 10 * H + 15 * MIN), width)).toBeCloseTo(axis.x(10 * H + 15 * MIN) - axis.x(30 * MIN), 6)
     expect(axis.at(axis.x(10 * H + 15 * MIN))).toBeCloseTo(10 * H + 15 * MIN, 0)

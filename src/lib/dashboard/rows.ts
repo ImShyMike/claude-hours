@@ -11,7 +11,8 @@ const HOUR = 60 * MIN
 
 // A stretch of time on a row's track. Its look is Tailwind classes, or a
 // project color; hovering lights up every bar of the same group, and a
-// plain bar (laid over another, like a pause over its draft) has no ring
+// plain bar (laid over another, like a pause over its draft) has no ring.
+// Bars in a row that open the same href are one link, named by their label
 export type Bar = {
   from: number
   to: number
