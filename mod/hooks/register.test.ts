@@ -98,6 +98,9 @@ const setup = (on: On) => {
       const lines = ((files.get(`${path}.gz`) ?? '') + (files.get(path) ?? '')).split(/(?<=\n)/)
       const all = new TextEncoder().encode(lines.slice(Number(from), Number(from) + Number(most)).join(''))
       stdout = new TextDecoder().decode(all.subarray(0, Number(bytes)))
+      // or how big the next line is, and whether it's whole
+      const next = lines[Number(from)] ?? ''
+      if (e.argv[2].includes('wc -lc')) stdout = `      ${next.endsWith('\n') ? 1 : 0} ${new TextEncoder().encode(next).length}\n`
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
     // the grep for compaction boundaries, whole lines, then for each prompt's time and mode alone
@@ -1306,6 +1309,23 @@ test('only whole lines go up', async ($, on) => {
     { v: 1, draftId: 'a' },
     { v: 1, draftId: 'b' },
   ])
+})
+
+test('a line too big to send goes as a note of its size, and the lines after it still go', async ($, on) => {
+  const { files } = setup(on)
+  const { stored } = hub(on)
+  on('turn.complete', () => ({ text: '' }))
+  files.set(CONFIG, JSON.stringify(SERVER))
+  const big = JSON.stringify({ v: 1, draftId: 'big', steps: 'a'.repeat(300 * 1024) })
+  files.set(DRAFTS, `{"v":1,"draftId":"a"}\n${big}\n{"v":1,"draftId":"b"}\n`)
+  await endTurn($)
+  await settle()
+  expect(stored.get('sess-1/drafts/0')).toEqual([
+    { v: 1, draftId: 'a' },
+    `a line of ${big.length + 1} bytes, too big to send`,
+    { v: 1, draftId: 'b' },
+  ])
+  expect(JSON.parse(files.get(SENT)!).drafts).toEqual({ lines: 3, acked: 3 })
 })
 
 test('a long stream goes up a request at a time', async ($, on) => {

@@ -654,15 +654,22 @@ async function readSent($: EngineInterface, server: Server, dir: string, session
   }
 }
 
+// a session file as one stream, its gzipped part first, from line $2 on
+const STREAM = '{ [ -f "$1.gz" ] && gzip -dc "$1.gz" 2>/dev/null; [ -f "$1" ] && cat "$1"; } | tail -n +$(($2 + 1))'
+
 // the stream's lines from line `from` on, as many as one request takes; a
-// last line with no newline is still being written, so it waits
+// last line with no newline is still being written, so it waits. A whole
+// line too big for any request goes as a note of its size instead, which
+// the hub quarantines, so the lines after it still go up
 async function linesFrom($: EngineInterface, path: string, from: number) {
-  const script = '{ [ -f "$1.gz" ] && gzip -dc "$1.gz" 2>/dev/null; [ -f "$1" ] && cat "$1"; } | tail -n +$(($2 + 1)) | head -n $3 | head -c $4'
-  const argv = ['sh', '-c', script, 'sh', path, String(from), String(CHUNK_LINES), String(CHUNK_BYTES)]
+  const argv = ['sh', '-c', `${STREAM} | head -n $3 | head -c $4`, 'sh', path, String(from), String(CHUNK_LINES), String(CHUNK_BYTES)]
   const { stdout } = await $.process.run(argv, { timeoutMs: 5_000 })
   const lines = stdout.split('\n')
   lines.pop()
-  return lines
+  if (lines.length || !stdout) return lines
+  const size = await $.process.run(['sh', '-c', `${STREAM} | head -n 1 | wc -lc`, 'sh', path, String(from)], { timeoutMs: 5_000 })
+  const [whole, bytes] = size.stdout.trim().split(/\s+/).map(Number)
+  return whole === 1 && bytes! > CHUNK_BYTES ? [`a line of ${bytes} bytes, too big to send`] : []
 }
 
 // a line that isn't JSON goes as it is, so it keeps its place (the hub
