@@ -2,6 +2,11 @@ import type { On, PromptChangeInput, PromptEditInput, PromptEditResult } from 'c
 import { expect, test, type Engine } from 'claude-code/testing'
 import { dialogWaits } from './register'
 
+// $.tool.call's typed overload is a union over every tool the engine knows
+// here, MCP ones included, and with enough of those tsc runs out of depth
+// resolving it. The tests only need the call made, so they go untyped
+const callTool = ($: Engine, input: Record<string, unknown>) => ($.tool as unknown as { call: (input: unknown) => Promise<unknown> }).call(input)
+
 // a tool row is worked out after the call returns: the stubs below answer
 // at once, so it's in by the next timer
 const settled = () => new Promise<void>(resolve => setTimeout(resolve, 0))
@@ -207,7 +212,7 @@ test('a tool call logs one row when it ends, then the file it edited', async ($,
   const { lines, tick } = setup(on)
   on('tool.call', () => (tick(250), { result: {} }))
 
-  await $.tool.call({ tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
+  await callTool($, { tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
 
   await settled()
 
@@ -226,7 +231,7 @@ test("a tool call's row is worked out after Claude has the result, timed at the 
   await $.prompt.submit({ text: 'make it', wait: false, origin: { kind: 'composer' } })
   tick(1_000)
 
-  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await callTool($, { tool: 'Bash', command: 'make' })
   const ended = now()
   expect(lines.map(l => l.event)).toEqual(['prompt'])
   // the find and the append ran late, but the row says when the call ended
@@ -242,7 +247,7 @@ test('files a Bash call touched show up through the find window', async ($, on) 
   setFind('/proj/out.json\n/proj/data/x.csv\n')
   on('tool.call', () => ({ result: {} }))
 
-  await $.tool.call({ tool: 'Bash', command: 'python3 gen.py' })
+  await callTool($, { tool: 'Bash', command: 'python3 gen.py' })
 
   await settled()
 
@@ -257,7 +262,7 @@ test("a repo's gitignored files aren't counted as a Bash call's changes", async 
   setFind('/proj/.cache/types.d.ts\n/proj/src/app.ts\n')
   on('tool.call', () => ({ result: {} }))
 
-  await $.tool.call({ tool: 'Bash', command: 'bun run build' })
+  await callTool($, { tool: 'Bash', command: 'bun run build' })
 
   await settled()
 
@@ -815,7 +820,7 @@ test('an interrupt records how much answer had shown and the tools cut off', asy
   })
 
   await $.turn.start({ text: 'hi', turnId: 't1' })
-  await $.tool.call({ tool: 'Bash', command: 'sleep 99' })
+  await callTool($, { tool: 'Bash', command: 'sleep 99' })
   await settled()
   await $.turn.start({ text: 'hi again', turnId: 't2' })
   await $.turn.complete({ ...esc, turnId: 't2', answer: 'só' })
@@ -866,7 +871,7 @@ test('an ask the test engine cannot answer is refused, and leaves no wait', asyn
 
   await $.turn.start({ text: 'hi', turnId: 't1' })
   tick(2_000)
-  await $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 'tu1' } as never)
+  await callTool($, { tool: 'Bash', command: 'make', tool_use_id: 'tu1' })
   await settled()
   tick(3_000)
   await $.turn.complete({ answer: '', durationMs: 5_000, turnId: 't1', reason: 'answer', isAborted: false })
@@ -891,7 +896,7 @@ test('a cwd below its repo root, or in a worktree, says which repo it is', async
   await $.turn.complete(turn)
   // a worktree of the cwd's own repo isn't another repo
   cd('/proj')
-  await $.tool.call({ tool: 'Edit', file_path: '/proj/.claude/worktrees/w1/a.ts', old_string: 'a', new_string: 'b' })
+  await callTool($, { tool: 'Edit', file_path: '/proj/.claude/worktrees/w1/a.ts', old_string: 'a', new_string: 'b' })
   await settled()
 
   expect(lines.filter(l => l.event === 'cwd_changed').map(l => [l.cwd, l.root])).toEqual([
@@ -908,7 +913,7 @@ test('a repo cloned under another folder name goes by its origin', async ($, on)
   on('tool.call', () => ({ result: {} }))
   on('turn.complete', () => ({ text: '' }))
 
-  await $.tool.call({ tool: 'Bash', command: 'cd /tmp/scratch/ts-clone && bun test' })
+  await callTool($, { tool: 'Bash', command: 'cd /tmp/scratch/ts-clone && bun test' })
 
   await settled()
   cd('/tmp/scratch/ts-clone/server')
@@ -919,7 +924,7 @@ test('a repo cloned under another folder name goes by its origin', async ($, on)
   const moved = lines.find(l => l.event === 'cwd_changed')!
   expect([moved.root, moved.rootName]).toEqual(['/tmp/scratch/ts-clone', 'telescreen'])
   // the origin matching the folder adds nothing
-  await $.tool.call({ tool: 'Bash', command: 'cd /proj && ls' })
+  await callTool($, { tool: 'Bash', command: 'cd /proj && ls' })
   await settled()
   expect(lines.filter(l => l.event === 'tool')[1]!.repoName).toBeUndefined()
 })
@@ -928,17 +933,17 @@ test('a call working in another repo logs that repo, never the command', async (
   const { lines, runs } = setup(on)
   on('tool.call', () => ({ result: {} }))
 
-  await $.tool.call({ tool: 'Bash', command: 'cd ../code/hub && make deploy' })
+  await callTool($, { tool: 'Bash', command: 'cd ../code/hub && make deploy' })
 
   await settled()
-  await $.tool.call({ tool: 'Edit', file_path: '/code/hub/src/a.ts', old_string: 'a', new_string: 'b' })
+  await callTool($, { tool: 'Edit', file_path: '/code/hub/src/a.ts', old_string: 'a', new_string: 'b' })
   await settled()
   // inside the cwd, in no repo at all, or a Bash with no cd: no repo
-  await $.tool.call({ tool: 'Bash', command: 'cd src && ls' })
+  await callTool($, { tool: 'Bash', command: 'cd src && ls' })
   await settled()
-  await $.tool.call({ tool: 'Read', file_path: '/etc/hosts' })
+  await callTool($, { tool: 'Read', file_path: '/etc/hosts' })
   await settled()
-  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await callTool($, { tool: 'Bash', command: 'make' })
   await settled()
 
   const tools = lines.filter(l => l.event === 'tool')
@@ -952,11 +957,11 @@ test('a working dir in no repo is only looked at two folders deep', async ($, on
   const { runs, cd } = setup(on)
   on('tool.call', () => ({ result: {} }))
 
-  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await callTool($, { tool: 'Bash', command: 'make' })
 
   await settled()
   cd('/home/test/Documents')
-  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await callTool($, { tool: 'Bash', command: 'make' })
   await settled()
 
   const finds = runs.filter(r => r[0] === 'find')
@@ -970,10 +975,10 @@ test("an MCP tool's file_path argument is never logged", async ($, on) => {
   const { lines } = setup(on)
   on('tool.call', () => ({ result: {} }))
 
-  await $.tool.call({ tool: 'mcp__drive__upload', file_path: '/home/me/secret-plans.pdf' } as never)
+  await callTool($, { tool: 'mcp__drive__upload', file_path: '/home/me/secret-plans.pdf' })
 
   await settled()
-  await $.tool.call({ tool: 'Read', file_path: '/elsewhere/a.txt' })
+  await callTool($, { tool: 'Read', file_path: '/elsewhere/a.txt' })
   await settled()
 
   expect(JSON.stringify(lines)).not.toContain('secret-plans')
@@ -1004,7 +1009,7 @@ test('rows leave out fields at their usual value', async ($, on) => {
   on('tool.call', () => ({ result: {} }))
   on('turn.complete', () => ({ text: '' }))
 
-  await $.tool.call({ tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
+  await callTool($, { tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
 
   await settled()
   await $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false })
@@ -1024,9 +1029,9 @@ test('the config file keeps excluded paths out, and limits to included ones', as
 
   config({ exclude: ['fixtures', '*.log', 'src/gen/**', '~/secret'] })
   setFind('/proj/fixtures/a.json\n/proj/app.log\n/proj/src/gen/x.ts\n/proj/src/main.ts\n/proj/notes/fixtures.md\n')
-  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await callTool($, { tool: 'Bash', command: 'make' })
   await settled()
-  await $.tool.call({ tool: 'Write', file_path: '/home/test/secret/plan.md', content: 'x' })
+  await callTool($, { tool: 'Write', file_path: '/home/test/secret/plan.md', content: 'x' })
   await settled()
   // a folder name matches the folder, never a file that only starts the same
   expect(logged()).toEqual(['src/main.ts', 'notes/fixtures.md'])
@@ -1034,14 +1039,14 @@ test('the config file keeps excluded paths out, and limits to included ones', as
 
   lines.length = 0
   config({ include: ['src/**/*.ts'], exclude: ['src/gen'] })
-  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await callTool($, { tool: 'Bash', command: 'make' })
   await settled()
   expect(logged()).toEqual(['src/main.ts'])
 
   // a broken config logs everything rather than nothing
   lines.length = 0
   files.set('/home/test/.claude/analytics/config.json', '{nope')
-  await $.tool.call({ tool: 'Bash', command: 'make' })
+  await callTool($, { tool: 'Bash', command: 'make' })
   await settled()
   expect(logged()).toHaveLength(5)
 })
@@ -1486,14 +1491,14 @@ test('ignore leaves the repo out of the log, files in it too, until it is run ag
   expect((await command($, 'ignore')).text).toContain('ignoring /proj:')
   expect(JSON.parse(files.get(CONFIG)!)).toEqual({ files: { exclude: ['*.log'] }, ignore: ['/proj'] })
   await $.prompt.submit({ text: 'secret plans', wait: false, origin: { kind: 'composer' } })
-  await $.tool.call({ tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
+  await callTool($, { tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
   await settled()
   expect(lines).toEqual([])
   expect(headers).toEqual([])
 
   // from another repo, a call into the ignored one keeps its row but not the file
   cd('/code/hub')
-  await $.tool.call({ tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
+  await callTool($, { tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
   await settled()
   expect(lines.map(l => l.event)).toEqual(['tool'])
   expect(lines[0]).toMatchObject({ tool: 'Write' })
