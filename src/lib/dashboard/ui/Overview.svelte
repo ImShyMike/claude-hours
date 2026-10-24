@@ -272,65 +272,63 @@
         </Card.Content>
       </Card.Root>
 
-      <div class={['grid gap-4', (modesSeen || modelsSeen) && 'lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]']}>
-        <Card.Root>
-          <Card.Header><Card.Title>Tools</Card.Title></Card.Header>
-          <Card.Content>
-            <BarList
-              limit={12}
-              columns={2}
-              items={s.tools.map(t => ({
-                name: toolName(t.tool),
-                value: t.calls,
-                amount: compact(t.calls),
-                tip: `<strong>${esc(toolName(t.tool))}</strong>${t.calls} calls · avg ${t.avgMs < 1000 ? `${Math.round(t.avgMs)}ms` : `${(t.avgMs / 1000).toFixed(1)}s`}<span class="muted">${t.errors} errors · ${t.denied} denied</span>`,
-              }))}
-            />
-          </Card.Content>
-        </Card.Root>
-        {#if modesSeen || modelsSeen}
-          <div class="flex flex-col gap-4">
-            <!-- the last card in the column grows to the Tools card's height -->
-            {#if modesSeen}
-              <Card.Root class={modelsSeen ? undefined : 'flex-1'}>
-                <Card.Header>
-                  <Card.Title>Permission modes</Card.Title>
-                  <Card.Description>Active time in each</Card.Description>
-                </Card.Header>
-                <Card.Content>
-                  <BarList
-                    items={s.modes.map(m => ({
-                      name: modeName(m.mode),
-                      value: m.ms,
-                      amount: duration(m.ms),
-                      color: m.mode === 'unknown' ? 'var(--muted-foreground)' : undefined,
-                      tip: `<strong>${esc(modeName(m.mode))}</strong>${duration(m.ms)} · ${Math.round((m.ms / s.totalMs) * 100)}%${m.mode === 'unknown' ? '<span class="muted">sessions where the mod could not see the mode</span>' : ''}`,
-                    }))}
-                  />
-                </Card.Content>
-              </Card.Root>
-            {/if}
-            {#if modelsSeen}
-              <Card.Root class="flex-1">
-                <Card.Header>
-                  <Card.Title>Models</Card.Title>
-                  <Card.Description>Claude's working time with each</Card.Description>
-                </Card.Header>
-                <Card.Content>
-                  <BarList
-                    items={s.models.map(m => ({
-                      name: modelName(m.model),
-                      value: m.ms,
-                      amount: duration(m.ms),
-                      tip: `<strong>${esc(modelName(m.model))}</strong>${duration(m.ms)} · ${m.turns} ${m.turns === 1 ? 'turn' : 'turns'}<span class="muted">${esc(m.model)}</span>`,
-                    }))}
-                  />
-                </Card.Content>
-              </Card.Root>
-            {/if}
-          </div>
-        {/if}
-      </div>
+      <Card.Root>
+        <Card.Header><Card.Title>Tools</Card.Title></Card.Header>
+        <Card.Content>
+          <BarList
+            limit={12}
+            columns={2}
+            items={s.tools.map(t => ({
+              name: toolName(t.tool),
+              value: t.calls,
+              amount: compact(t.calls),
+              tip: `<strong>${esc(toolName(t.tool))}</strong>${t.calls} calls · avg ${t.avgMs < 1000 ? `${Math.round(t.avgMs)}ms` : `${(t.avgMs / 1000).toFixed(1)}s`}<span class="muted">${t.errors} errors · ${t.denied} denied</span>`,
+            }))}
+          />
+        </Card.Content>
+      </Card.Root>
+      {#if modesSeen || modelsSeen}
+        <!-- side by side, or one across the width when only one has anything -->
+        <div class={['grid gap-4', modesSeen && modelsSeen && 'md:grid-cols-2']}>
+          {#if modesSeen}
+            <Card.Root>
+              <Card.Header>
+                <Card.Title>Permission modes</Card.Title>
+                <Card.Description>Active time in each</Card.Description>
+              </Card.Header>
+              <Card.Content>
+                <BarList
+                  items={s.modes.map(m => ({
+                    name: modeName(m.mode),
+                    value: m.ms,
+                    amount: duration(m.ms),
+                    color: m.mode === 'unknown' ? 'var(--muted-foreground)' : undefined,
+                    tip: `<strong>${esc(modeName(m.mode))}</strong>${duration(m.ms)} · ${Math.round((m.ms / s.totalMs) * 100)}%${m.mode === 'unknown' ? '<span class="muted">sessions where the mod could not see the mode</span>' : ''}`,
+                  }))}
+                />
+              </Card.Content>
+            </Card.Root>
+          {/if}
+          {#if modelsSeen}
+            <Card.Root>
+              <Card.Header>
+                <Card.Title>Models</Card.Title>
+                <Card.Description>Claude's working time with each</Card.Description>
+              </Card.Header>
+              <Card.Content>
+                <BarList
+                  items={s.models.map(m => ({
+                    name: modelName(m.model),
+                    value: m.ms,
+                    amount: duration(m.ms),
+                    tip: `<strong>${esc(modelName(m.model))}</strong>${duration(m.ms)} · ${m.turns} ${m.turns === 1 ? 'turn' : 'turns'}<span class="muted">${esc(m.model)}</span>`,
+                  }))}
+                />
+              </Card.Content>
+            </Card.Root>
+          {/if}
+        </div>
+      {/if}
 
       <Card.Root>
         <Card.Header>
