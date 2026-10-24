@@ -6,10 +6,11 @@
 <script lang="ts">
   import { hideTip, showTip } from '../shared'
 
-  // the top items as bars against the biggest; two columns read top to
-  // bottom, then over
+  // the top items as bars against the biggest, the rest a click away; two
+  // columns read top to bottom, then over
   let { items, limit = 10, columns = 1 }: { items: BarItem[]; limit?: number; columns?: 1 | 2 } = $props()
-  const shown = $derived(items.slice(0, limit))
+  let all = $state(false)
+  const shown = $derived(all ? items : items.slice(0, limit))
   const max = $derived(Math.max(...items.map(i => i.value), 1))
 </script>
 
@@ -49,6 +50,11 @@
     {/each}
   </div>
   {#if items.length > limit}
-    <p class="mt-3 text-xs text-muted-foreground">+ {items.length - limit} more</p>
+    <button
+      class="mt-3 self-start text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+      onclick={() => (all = !all)}
+    >
+      {all ? 'Show fewer' : `+ ${items.length - limit} more`}
+    </button>
   {/if}
 {/if}
