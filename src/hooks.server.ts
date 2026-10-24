@@ -6,7 +6,7 @@ import { SESSION_COOKIE, setSessionCookie, validateSession } from '#lib/server/s
 
 export const init: ServerInit = () => {
   const missing = Object.entries({ DATABASE_URL, HCA_CLIENT_ID, HCA_CLIENT_SECRET }).filter(([, value]) => !value)
-  if (missing.length) throw new Error(`Missing ${missing.map(([name]) => name).join(', ')}, see apps/web/.env.example`)
+  if (missing.length) throw new Error(`Missing ${missing.map(([name]) => name).join(', ')}, see .env.example`)
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
