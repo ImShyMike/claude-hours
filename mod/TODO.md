@@ -34,7 +34,7 @@ Prompt text and file contents are never written.
 - [x] **See a real interrupt.** Seen live on 2026-10-20: Esc 1.4 s into a turn logged one `interrupt` (no `agentId`), and the prompt went back into the box.
 - [x] **Check Bash latency.** Every Bash result waits for a `find` (3 s timeout, prunes `.git`, `node_modules`, `target`, `.venv`, `venv`, `__pycache__`, `dist`, `build`). Inside a repo it's quick, but a session started in a folder full of repos (`~/Documents`) walked all of them and could hit the timeout, which also logs nothing. Since 2026-10-21 a working dir in no repo is only scanned two folders deep.
 - [x] **Check the session_start dedupe live.** Seen on 2026-10-21: a session hot-reloaded several times by mod syncs kept one `session_start` (each reload shows as a `cwd_changed` to the same cwd). Several starts in one file are resumes, each after its own `session_end` and header.
-- [x] **Something to read it with.** `~/Documents/GitHub/claude-hours`: local Bun dashboard (`bun run dev`, http://127.0.0.1:4747). It reads every file in `events/`.
+- [x] **Something to read it with.** The hub in this repo: the mod syncs each session's rows to it, and its dashboard (`bun run dev` locally, http://localhost:5173) reads them from Postgres.
 
 ## Known limits (by design, for now)
 
@@ -56,9 +56,9 @@ Prompt text and file contents are never written.
 
 ## Dev loop
 
-- `claude plugin validate ~/.claude/mods/time-track`
-- `claude plugin test ~/.claude/mods/time-track` (tests in `hooks/register.test.ts`, mocks answer `$` calls with `{ value }`)
-- type-check: once a session has loaded the mod, the engine lays types in `.claude-plugin/types/` and `tsc -p ~/.claude/mods/time-track` works. The API reference is `.claude-plugin/types/claude-code/index.d.ts` (grep it for event names)
+- `claude plugin validate mod` (from the repo root; with `CLAUDE_CODE_PLUGIN_DIRS` naming this folder, a save goes live at the next turn)
+- `claude plugin test mod` (tests in `hooks/register.test.ts`, mocks answer `$` calls with `{ value }`)
+- type-check: once a session has loaded the mod, the engine lays types in `.claude-plugin/types/` and `tsc -p mod` works. The API reference is `.claude-plugin/types/claude-code/index.d.ts` (grep it for event names)
 - headless smoke run from a scratch dir: `claude -p "<prompt>" --allowedTools Bash` (the prompt goes BEFORE `--allowedTools`, which swallows the args after it), then `jq -c . ~/.claude/analytics/events.jsonl`
 - helpers that take `$` must be top-level functions, or validate refuses the module
 - `find` in Claude's Bash shell is `bfs`, so `-newermt` gets whole-second ISO (`2026-10-19T21:32:40Z`), never `@epoch`
