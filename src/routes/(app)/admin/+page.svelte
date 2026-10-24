@@ -113,6 +113,8 @@
             <Table.Head>Name</Table.Head>
             <Table.Head>Email</Table.Head>
             <Table.Head>Devices</Table.Head>
+            <Table.Head class="text-right">Sessions</Table.Head>
+            <Table.Head>Last sync</Table.Head>
             <Table.Head>Joined</Table.Head>
             <Table.Head>Last login</Table.Head>
           </Table.Row>
@@ -120,9 +122,14 @@
         <Table.Body>
           {#each data.people as person (person.id)}
             <Table.Row>
-              <Table.Cell class="font-medium">{person.name ?? ''}</Table.Cell>
+              <!-- their dashboard, as an admin sees anyone's -->
+              <Table.Cell class="font-medium">
+                <a class="underline-offset-4 hover:underline" href="/?person={person.id}">{person.name ?? person.email ?? person.sub}</a>
+              </Table.Cell>
               <Table.Cell>{person.email ?? ''}</Table.Cell>
               <Table.Cell>{person.devices}</Table.Cell>
+              <Table.Cell class="text-right tabular-nums">{person.sessions ?? 0}</Table.Cell>
+              <Table.Cell>{day(person.lastSync)}</Table.Cell>
               <Table.Cell>{day(person.createdAt)}</Table.Cell>
               <Table.Cell>{day(person.lastLoginAt)}</Table.Cell>
             </Table.Row>
