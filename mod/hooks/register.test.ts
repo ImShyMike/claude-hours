@@ -2,6 +2,10 @@ import type { On, PromptChangeInput, PromptEditInput, PromptEditResult } from 'c
 import { expect, test, type Engine } from 'claude-code/testing'
 import { dialogWaits } from './register'
 
+// a tool row is worked out after the call returns: the stubs below answer
+// at once, so it's in by the next timer
+const settled = () => new Promise<void>(resolve => setTimeout(resolve, 0))
+
 // What the mod leaves out at its usual value, put back the way the dashboard
 // does (src/eventlog.ts), so tests read rows whole
 const DEFAULTS: Record<string, Record<string, unknown>> = {
@@ -194,11 +198,32 @@ test('a tool call logs one row when it ends, then the file it edited', async ($,
 
   await $.tool.call({ tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
 
+  await settled()
+
   expect(lines.map(l => l.event)).toEqual(['tool', 'file_changed'])
   // paths under the cwd are written relative to it
   expect(lines[0]).toMatchObject({ tool: 'Write', outcome: 'ok', durationMs: 250, file: 'a.txt' })
   expect(lines[1]).toMatchObject({ path: 'a.txt', via: 'tool' })
   expect(lines[0]!.toolUseId).toBeUndefined()
+})
+
+test("a tool call's row is worked out after Claude has the result, timed at the call's end, and in before the turn's", async ($, on) => {
+  const { lines, raw, headers, tick, now } = setup(on)
+  on('tool.call', () => (tick(250), { result: {} }))
+  on('turn.complete', () => ({ text: '' }))
+  // a prompt first, so the file and its header are there before the call
+  await $.prompt.submit({ text: 'make it', wait: false, origin: { kind: 'composer' } })
+  tick(1_000)
+
+  await $.tool.call({ tool: 'Bash', command: 'make' })
+  const ended = now()
+  expect(lines.map(l => l.event)).toEqual(['prompt'])
+  // the find and the append ran late, but the row says when the call ended
+  tick(5_000)
+  await $.turn.complete({ answer: '', durationMs: 1200, turnId: 't1', reason: 'answer', isAborted: false })
+
+  expect(lines.map(l => l.event)).toEqual(['prompt', 'tool', 'turn_end'])
+  expect(raw[1]!.t).toBe(ended - Number(headers[0]!.start))
 })
 
 test('files a Bash call touched show up through the find window', async ($, on) => {
@@ -207,6 +232,8 @@ test('files a Bash call touched show up through the find window', async ($, on) 
   on('tool.call', () => ({ result: {} }))
 
   await $.tool.call({ tool: 'Bash', command: 'python3 gen.py' })
+
+  await settled()
 
   const changed = lines.filter(l => l.event === 'file_changed')
   expect(changed.map(l => l.path)).toEqual(['out.json', 'data/x.csv'])
@@ -766,6 +793,7 @@ test('an interrupt records how much answer had shown and the tools cut off', asy
 
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await $.tool.call({ tool: 'Bash', command: 'sleep 99' })
+  await settled()
   await $.turn.start({ text: 'hi again', turnId: 't2' })
   await $.turn.complete({ ...esc, turnId: 't2', answer: 'só' })
 
@@ -816,6 +844,7 @@ test('an ask the test engine cannot answer is refused, and leaves no wait', asyn
   await $.turn.start({ text: 'hi', turnId: 't1' })
   tick(2_000)
   await $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 'tu1' } as never)
+  await settled()
   tick(3_000)
   await $.turn.complete({ answer: '', durationMs: 5_000, turnId: 't1', reason: 'answer', isAborted: false })
 
@@ -840,6 +869,7 @@ test('a cwd below its repo root, or in a worktree, says which repo it is', async
   // a worktree of the cwd's own repo isn't another repo
   cd('/proj')
   await $.tool.call({ tool: 'Edit', file_path: '/proj/.claude/worktrees/w1/a.ts', old_string: 'a', new_string: 'b' })
+  await settled()
 
   expect(lines.filter(l => l.event === 'cwd_changed').map(l => [l.cwd, l.root])).toEqual([
     ['/proj/packages/api', '/proj'],
@@ -856,6 +886,8 @@ test('a repo cloned under another folder name goes by its origin', async ($, on)
   on('turn.complete', () => ({ text: '' }))
 
   await $.tool.call({ tool: 'Bash', command: 'cd /tmp/scratch/ts-clone && bun test' })
+
+  await settled()
   cd('/tmp/scratch/ts-clone/server')
   await $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false })
 
@@ -865,6 +897,7 @@ test('a repo cloned under another folder name goes by its origin', async ($, on)
   expect([moved.root, moved.rootName]).toEqual(['/tmp/scratch/ts-clone', 'telescreen'])
   // the origin matching the folder adds nothing
   await $.tool.call({ tool: 'Bash', command: 'cd /proj && ls' })
+  await settled()
   expect(lines.filter(l => l.event === 'tool')[1]!.repoName).toBeUndefined()
 })
 
@@ -873,11 +906,17 @@ test('a call working in another repo logs that repo, never the command', async (
   on('tool.call', () => ({ result: {} }))
 
   await $.tool.call({ tool: 'Bash', command: 'cd ../code/hub && make deploy' })
+
+  await settled()
   await $.tool.call({ tool: 'Edit', file_path: '/code/hub/src/a.ts', old_string: 'a', new_string: 'b' })
+  await settled()
   // inside the cwd, in no repo at all, or a Bash with no cd: no repo
   await $.tool.call({ tool: 'Bash', command: 'cd src && ls' })
+  await settled()
   await $.tool.call({ tool: 'Read', file_path: '/etc/hosts' })
+  await settled()
   await $.tool.call({ tool: 'Bash', command: 'make' })
+  await settled()
 
   const tools = lines.filter(l => l.event === 'tool')
   expect(tools.map(l => l.repo)).toEqual(['/code/hub', '/code/hub', undefined, undefined, undefined])
@@ -891,8 +930,11 @@ test('a working dir in no repo is only looked at two folders deep', async ($, on
   on('tool.call', () => ({ result: {} }))
 
   await $.tool.call({ tool: 'Bash', command: 'make' })
+
+  await settled()
   cd('/home/test/Documents')
   await $.tool.call({ tool: 'Bash', command: 'make' })
+  await settled()
 
   const finds = runs.filter(r => r[0] === 'find')
   expect(finds.map(r => r.slice(1, 4))).toEqual([
@@ -906,7 +948,10 @@ test("an MCP tool's file_path argument is never logged", async ($, on) => {
   on('tool.call', () => ({ result: {} }))
 
   await $.tool.call({ tool: 'mcp__drive__upload', file_path: '/home/me/secret-plans.pdf' } as never)
+
+  await settled()
   await $.tool.call({ tool: 'Read', file_path: '/elsewhere/a.txt' })
+  await settled()
 
   expect(JSON.stringify(lines)).not.toContain('secret-plans')
   // outside the cwd, a path stays absolute
@@ -937,6 +982,8 @@ test('rows leave out fields at their usual value', async ($, on) => {
   on('turn.complete', () => ({ text: '' }))
 
   await $.tool.call({ tool: 'Write', file_path: '/proj/a.txt', content: 'x' })
+
+  await settled()
   await $.turn.complete({ answer: '', durationMs: 1, turnId: 't', reason: 'answer', isAborted: false })
 
   expect(raw.map(r => Object.keys(r).sort())).toEqual([
@@ -955,7 +1002,9 @@ test('the config file keeps excluded paths out, and limits to included ones', as
   config({ exclude: ['fixtures', '*.log', 'src/gen/**', '~/secret'] })
   setFind('/proj/fixtures/a.json\n/proj/app.log\n/proj/src/gen/x.ts\n/proj/src/main.ts\n/proj/notes/fixtures.md\n')
   await $.tool.call({ tool: 'Bash', command: 'make' })
+  await settled()
   await $.tool.call({ tool: 'Write', file_path: '/home/test/secret/plan.md', content: 'x' })
+  await settled()
   // a folder name matches the folder, never a file that only starts the same
   expect(logged()).toEqual(['src/main.ts', 'notes/fixtures.md'])
   expect(lines.find(l => l.event === 'tool' && l.tool === 'Write')!.file).toBeUndefined()
@@ -963,12 +1012,14 @@ test('the config file keeps excluded paths out, and limits to included ones', as
   lines.length = 0
   config({ include: ['src/**/*.ts'], exclude: ['src/gen'] })
   await $.tool.call({ tool: 'Bash', command: 'make' })
+  await settled()
   expect(logged()).toEqual(['src/main.ts'])
 
   // a broken config logs everything rather than nothing
   lines.length = 0
   files.set('/home/test/.claude/analytics/config.json', '{nope')
   await $.tool.call({ tool: 'Bash', command: 'make' })
+  await settled()
   expect(logged()).toHaveLength(5)
 })
 
@@ -1396,12 +1447,14 @@ test('ignore leaves the repo out of the log, files in it too, until it is run ag
   expect(JSON.parse(files.get(CONFIG)!)).toEqual({ files: { exclude: ['*.log'] }, ignore: ['/proj'] })
   await $.prompt.submit({ text: 'secret plans', wait: false, origin: { kind: 'composer' } })
   await $.tool.call({ tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
+  await settled()
   expect(lines).toEqual([])
   expect(headers).toEqual([])
 
   // from another repo, a call into the ignored one keeps its row but not the file
   cd('/code/hub')
   await $.tool.call({ tool: 'Write', file_path: '/proj/src/a.ts', content: 'x' })
+  await settled()
   expect(lines.map(l => l.event)).toEqual(['tool'])
   expect(lines[0]).toMatchObject({ tool: 'Write' })
   expect(lines[0]!.file).toBeUndefined()

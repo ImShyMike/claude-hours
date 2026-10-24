@@ -302,9 +302,15 @@ async function headFor($: EngineInterface, path: string, sessionId: string, now:
 // Several entries go out in one append, and draft timelines in one more. An
 // entry can bring its own time (epoch ms), for something found after it
 // happened; one from before this file began belongs to an earlier file,
-// unless it carries on (a mode), and then the latest such holds from the start
-function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?: number, carries?: boolean][], timelines: Fields[] = []) {
-  const at = $.clock.now()
+// unless it carries on (a mode), and then the latest such holds from the start.
+// `when` is the moment the whole lot happened, for rows worked out after it
+function logAll(
+  $: EngineInterface,
+  entries: [event: string, fields: Fields, at?: number, carries?: boolean][],
+  timelines: Fields[] = [],
+  when?: number,
+) {
+  const at = when ?? $.clock.now()
   const session = $.session.id()
   const where = $.session.cwd()
   queue = queue
@@ -321,7 +327,8 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?
       const ignored = await ignoredFolders($, dir)
       if (under(ignored, cwd) || (root && under(ignored, root))) return
       const h = await headFor($, path, sessionId, now, cwd, rows, rooted)
-      const stamp = h.start === undefined ? { at: now } : { t: now - h.start }
+      // a row worked out late can find a header written after it happened
+      const stamp = h.start === undefined ? { at: now } : { t: Math.max(0, now - h.start) }
       if (h.cwd !== cwd) rows.push({ ...stamp, event: 'cwd_changed', cwd, ...rooted })
       h.cwd = cwd
       const later: Fields[] = []
@@ -342,6 +349,18 @@ function logAll($: EngineInterface, entries: [event: string, fields: Fields, at?
 }
 
 const log = ($: EngineInterface, event: string, fields: Fields = {}) => logAll($, [[event, fields]])
+
+// A tool row's details (the config's file rules, the repo it worked in, a
+// find for what a Bash call touched) take a few process runs, so they're
+// worked out after Claude has the call's result. A turn's end and the
+// session's wait for them, so the rows still land before the turn_end and
+// the sync after it
+const working = new Set<Promise<void>>()
+function behind(work: Promise<void>) {
+  working.add(work)
+  void work.finally(() => working.delete(work))
+}
+const settled = () => Promise.all([...working])
 
 // Compactions and the permission mode come from the transcript, since a
 // security plugin above skips session.compact (and the session.append of its
@@ -1371,6 +1390,7 @@ export const register: Register = on => {
     if (draft) noteEmptied(await $.clock.now(), 'exit')
     settleEmptied()
     const { entries, timelines } = takeAbandoned()
+    await settled()
     await logFromTranscript($)
     await logAll($, [...entries, ['session_end', { reason: e.reason }]], timelines)
     await packSession($)
@@ -1471,7 +1491,9 @@ export const register: Register = on => {
     // the text) and any tools still running
     const cut = aborted && main ? { answerChars: [...e.answer].length, toolsRunning: runningTools.size ? [...runningTools.values()] : undefined } : {}
     if (main) runningTools.clear()
-    // an auto compaction mid-turn or the prompt's mode, in before the sync below
+    // the turn's tool rows, and an auto compaction mid-turn or the prompt's
+    // mode, in before the sync below
+    if (main) await settled()
     if (main) await logFromTranscript($)
     await log($, aborted ? 'interrupt' : 'turn_end', {
       turnId: e.turnId,
@@ -1503,7 +1525,7 @@ export const register: Register = on => {
       return result
     } finally {
       runningTools.delete(e.tool_use_id)
-      const endedMs = await $.clock.now()
+      const [endedMs, cwd] = await Promise.all([$.clock.now(), $.session.cwd()])
       const durationMs = endedMs - startedMs
       const asked = askedAt.get(e.tool_use_id)
       askedAt.delete(e.tool_use_id)
@@ -1511,27 +1533,30 @@ export const register: Register = on => {
         if (QUESTION_TOOLS.has(tool)) turnClock.questionsMs += durationMs
         else if (asked !== undefined) turnClock.asked.push({ tool, from: asked, to: endedMs })
       }
-      const [cwd, dir] = await Promise.all([$.session.cwd(), homeDir($)])
-      const [rules, ignored] = await Promise.all([fileRules($, dir), ignoredFolders($, dir)])
-      const keep = (path: string | undefined) =>
-        path && allowed(rules, path, cwd, dir) && !under(ignored, resolvePath(cwd, path)) ? path : undefined
-      const file = keep(typeof named === 'string' ? named : undefined)
-      const where = file ? resolvePath(cwd, file).replace(/\/[^/]*$/, '') : e.tool === 'Bash' ? cdTarget(e.command, cwd, dir) : undefined
-      const repo = keep(await workRepo($, where, cwd))
-      const repoName = repo ? await remoteName($, repo) : undefined
-      const entries: [string, Fields][] = [
-        ['tool', { ...ids, file, repo, repoName, commandChars: e.tool === 'Bash' ? e.command.length : undefined, outcome, durationMs }],
-      ]
-      if (outcome === 'ok' && EDIT_TOOLS.has(tool)) {
-        if (file) entries.push(['file_changed', { ...ids, path: file, via: 'tool' }])
-      } else if (e.tool === 'Bash' && outcome !== 'denied') {
-        const paths = await filesChangedSince($, startedMs, repo).catch(err => {
-          $.ui.log(`${$.plugin.name}: ${String(err)}`)
-          return []
-        })
-        for (const path of paths) if (keep(path)) entries.push(['file_changed', { ...ids, path, via: 'bash-window' }])
-      }
-      await logAll($, entries)
+      const command = e.tool === 'Bash' ? e.command : undefined
+      behind(
+        (async () => {
+          const dir = await homeDir($)
+          const [rules, ignored] = await Promise.all([fileRules($, dir), ignoredFolders($, dir)])
+          const keep = (path: string | undefined) =>
+            path && allowed(rules, path, cwd, dir) && !under(ignored, resolvePath(cwd, path)) ? path : undefined
+          const file = keep(typeof named === 'string' ? named : undefined)
+          const where = file ? resolvePath(cwd, file).replace(/\/[^/]*$/, '') : command !== undefined ? cdTarget(command, cwd, dir) : undefined
+          const repo = keep(await workRepo($, where, cwd))
+          const repoName = repo ? await remoteName($, repo) : undefined
+          const entries: [string, Fields][] = [['tool', { ...ids, file, repo, repoName, commandChars: command?.length, outcome, durationMs }]]
+          if (outcome === 'ok' && EDIT_TOOLS.has(tool)) {
+            if (file) entries.push(['file_changed', { ...ids, path: file, via: 'tool' }])
+          } else if (command !== undefined && outcome !== 'denied') {
+            const paths = await filesChangedSince($, startedMs, repo).catch(err => {
+              $.ui.log(`${$.plugin.name}: ${String(err)}`)
+              return []
+            })
+            for (const path of paths) if (keep(path)) entries.push(['file_changed', { ...ids, path, via: 'bash-window' }])
+          }
+          await logAll($, entries, [], endedMs)
+        })().catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`)),
+      )
     }
   }).catch(($, e, next) => next(e))
 
