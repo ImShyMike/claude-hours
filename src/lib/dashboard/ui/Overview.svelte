@@ -5,7 +5,7 @@
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
   import { liveDigest, stored, whoIsLooking } from '../live.svelte'
-  import { HEAT_LABELS, hourLabel, longDay, modeName, series, shortDay, tipLines, toolName } from '../overview'
+  import { HEAT_LABELS, hourLabel, longDay, modeName, series, shortDay, streaks, tipLines, toolName } from '../overview'
   import {
     MIN,
     attachments,
@@ -127,6 +127,13 @@
   }
 
   const today = dayKey(Date.now())
+  // a streak only says something past a single day
+  function calendarNote(days: Summary['days']) {
+    const { longest, current } = streaks(days, today)
+    return ['All time, whatever the range', longest > 1 && `longest streak ${longest} days`, current > 1 && `${current} days in a row now`]
+      .filter(Boolean)
+      .join(' · ')
+  }
   const when = (ms: number) => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
   // the times can add up to more than Active: a stretch two projects shared counts in full for each
   const sharedTip = (ms: number) => `<strong>${duration(ms)} active</strong>time two projects shared counts for each`
@@ -280,7 +287,7 @@
       <Card.Root>
         <Card.Header>
           <Card.Title>Every day</Card.Title>
-          <Card.Description>All time, whatever the range</Card.Description>
+          <Card.Description>{calendarNote(ever.days)}</Card.Description>
           <Card.Action class="flex items-center gap-1 text-xs text-muted-foreground">
             less
             {#each HEAT_LABELS as label, k (label)}

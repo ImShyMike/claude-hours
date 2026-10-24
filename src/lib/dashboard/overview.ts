@@ -67,6 +67,22 @@ const HEAT_STEPS = [30 * MIN, 60 * MIN, 120 * MIN, 240 * MIN]
 const heatLevel = (ms: number) => (ms <= 0 ? 0 : 1 + HEAT_STEPS.filter(step => ms >= step).length)
 export const HEAT_LABELS = ['under 30m', '30m to 1h', '1h to 2h', '2h to 4h', '4h or more']
 
+// days in a row with any active time: the longest run ever, and the one
+// going now, which a quiet today doesn't break until it's over
+export function streaks(days: Summary['days'], today: string) {
+  const counted = days.at(-1)?.day === today && !days.at(-1)!.ms ? days.slice(0, -1) : days
+  let longest = 0
+  let run = 0
+  for (const d of counted) {
+    run = d.ms > 0 ? run + 1 : 0
+    longest = Math.max(longest, run)
+  }
+  const [y, m, d] = today.split('-').map(Number)
+  const yesterday = new Date(Date.UTC(y!, m! - 1, d! - 1)).toISOString().slice(0, 10)
+  const last = counted.at(-1)?.day
+  return { longest, current: last === today || last === yesterday ? run : 0 }
+}
+
 // A GitHub-style grid of days over all time: a column per week (Monday
 // first), a year of weeks when they fit at 10px or more, ending this week
 export function heatCells(width: number, colors: Palette, days: Summary['days']) {
