@@ -30,6 +30,7 @@
   import ProjectChip from './ProjectChip.svelte'
   import RangePicker from './RangePicker.svelte'
   import Stat from './Stat.svelte'
+  import Swatch from './Swatch.svelte'
 
   // the overview of someone logged in; the page shows a welcome otherwise
   const who = whoIsLooking()
@@ -204,6 +205,12 @@
           <Card.Header>
             <Card.Title>Languages</Card.Title>
             <Card.Description>By files changed</Card.Description>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span class="inline-flex items-center gap-1.5"><Swatch color="var(--primary)" />Claude's edits</span>
+              <span class="inline-flex items-center gap-1.5"
+                ><Swatch color="color-mix(in oklab, var(--primary) 35%, transparent)" />changed while a command ran</span
+              >
+            </div>
           </Card.Header>
           <Card.Content>
             {@const edits = s.languages.reduce((sum, l) => sum + l.edits, 0)}
@@ -212,8 +219,9 @@
               items={s.languages.map(l => ({
                 name: l.language,
                 value: l.edits,
+                part: l.byTool,
                 amount: String(l.edits),
-                tip: `<strong>${esc(l.language)}</strong>${plural(l.edits, 'file change')} · ${Math.round((l.edits / edits) * 100)}%`,
+                tip: `<strong>${esc(l.language)}</strong>${plural(l.edits, 'file change')} · ${Math.round((l.edits / edits) * 100)}%<span class="muted">${l.byTool} by Claude's edits · ${l.edits - l.byTool} while a command ran</span>`,
               }))}
             />
           </Card.Content>

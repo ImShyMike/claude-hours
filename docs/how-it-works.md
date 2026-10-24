@@ -187,7 +187,9 @@ on unchanged:
   `turn.start` / `turn.complete` also tell it whether a turn is open, which
   is how `midTurn` and `toolsRunning` work.
 - After a Bash call it runs `find` for files newer than the call's start, so
-  scripts that write files still show up in Languages.
+  scripts that write files still show up in Languages (paler than the files
+  Claude's edit tools wrote). A repo's gitignored files are left out, since
+  they're build output and caches.
 - A hot reload forgets in-memory state: a half-typed draft, or a turn that's
   already running.
 

@@ -41,7 +41,9 @@ export type Summary = {
   // Claude's working time and turns in the main loop by the model that
   // answered, most first; a turn cut off before any answer names none
   models: { model: string; ms: number; turns: number }[]
-  languages: { language: string; edits: number }[]
+  // edits: every file changed; byTool: those Claude's edit tools wrote,
+  // the rest changed while a Bash command ran
+  languages: { language: string; edits: number; byTool: number }[]
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
   // midTurn: sent while Claude was still working
   prompts: { count: number; avgWords: number; avgChars: number; typed: number; midTurn: number }
@@ -592,6 +594,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   const windowed = valid.filter(inWindow)
   const dayPrompts = new Map<string, number>()
   const languages = new Map<string, number>()
+  const toolLanguages = new Map<string, number>()
   const tools = new Map<string, { calls: number; errors: number; denied: number; totalMs: number }>()
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   const models = new Map<string, { ms: number; turns: number }>()
@@ -716,7 +719,9 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
         break
       }
       case 'file_changed':
-        if (typeof e.path === 'string') inc(languages, languageOf(e.path))
+        if (typeof e.path !== 'string') break
+        inc(languages, languageOf(e.path))
+        if (e.via === 'tool') inc(toolLanguages, languageOf(e.path))
         break
     }
   }
@@ -740,7 +745,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     projects: sorted(projectMs).map(([project, ms]) => ({ project, ms })),
     modes: sorted(modeMs).map(([mode, ms]) => ({ mode, ms })),
     models: [...models].map(([model, m]) => ({ model, ...m })).sort((a, b) => b.ms - a.ms),
-    languages: sorted(languages).map(([language, edits]) => ({ language, edits })),
+    languages: sorted(languages).map(([language, edits]) => ({ language, edits, byTool: toolLanguages.get(language) ?? 0 })),
     tools: [...tools]
       .map(([tool, t]) => ({ tool, calls: t.calls, errors: t.errors, denied: t.denied, avgMs: t.totalMs / t.calls }))
       .sort((a, b) => b.calls - a.calls),

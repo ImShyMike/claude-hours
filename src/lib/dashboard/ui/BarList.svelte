@@ -1,5 +1,6 @@
 <script lang="ts" module>
-  export type BarItem = { name: string; value: number; amount: string; tip: string; color?: string }
+  // part: how much of value to draw solid, the rest of the bar paler
+  export type BarItem = { name: string; value: number; amount: string; tip: string; color?: string; part?: number }
 </script>
 
 <script lang="ts">
@@ -34,10 +35,14 @@
         <span class="truncate" title={item.name}>{item.name}</span>
         <span class="h-2 rounded-full bg-muted">
           <span
-            class={['block h-full min-w-0.5 rounded-full', !item.color && 'bg-primary']}
+            class={['block h-full min-w-0.5 overflow-hidden rounded-full', !item.color && 'bg-primary', item.part !== undefined && 'bg-primary/35']}
             style:width="{(item.value / max) * 100}%"
             style:background={item.color}
-          ></span>
+          >
+            {#if item.part !== undefined}
+              <span class="block h-full bg-primary" style:width="{(item.part / Math.max(item.value, 1)) * 100}%"></span>
+            {/if}
+          </span>
         </span>
         <span class="text-right text-muted-foreground tabular-nums">{item.amount}</span>
       </div>

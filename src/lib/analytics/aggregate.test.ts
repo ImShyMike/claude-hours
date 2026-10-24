@@ -309,8 +309,8 @@ test('counts prompts, interrupts, tokens, tools and languages', () => {
     { tool: 'Edit', calls: 1, errors: 0, denied: 1, avgMs: 5 },
   ])
   expect(s.languages).toEqual([
-    { language: 'TypeScript', edits: 1 },
-    { language: 'Make', edits: 1 },
+    { language: 'TypeScript', edits: 1, byTool: 1 },
+    { language: 'Make', edits: 1, byTool: 0 },
   ])
   expect(s.days).toEqual([{ day: '2026-10-19', ms: 3 * MIN, prompts: 2, projects: { terra: 3 * MIN } }])
 })
