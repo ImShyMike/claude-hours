@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptEditInput, PromptSubmitAttachment, Register } from 'claude-code'
-import type { LastMode, SeenCompactions, StartedSessions } from '../types'
+import type { LastMode, SeenCompactions, StartedSessions, TranscriptRead } from '../types'
 
 // One JSON object per line, one file per session, under $HOME. Prompt text
 // and file contents are never written: only sizes, tool names and paths.
@@ -90,6 +90,7 @@ type Fields = Record<string, unknown>
 const startedSessions = atom({ plugin: 'time-track', key: 'startedSessions' } as const, [] as StartedSessions)
 const seenCompactions = atom({ plugin: 'time-track', key: 'seenCompactions' } as const, [] as SeenCompactions)
 const lastMode = atom({ plugin: 'time-track', key: 'lastMode' } as const, null as LastMode)
+const transcriptRead = atom({ plugin: 'time-track', key: 'transcriptRead' } as const, null as TranscriptRead)
 
 // `find -newermt` wants whole seconds on both GNU find and bfs
 const isoSeconds = (ms: number) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -372,7 +373,11 @@ const log = ($: EngineInterface, event: string, fields: Fields = {}) => logAll($
 // classic hooks too, so the permission mode comes from there as well: each
 // prompt's entry says which mode it was sent in. Grepped, as a transcript
 // runs to tens of MB, and for a prompt only its time and mode, never the
-// line, which holds its text. A subagent's are in its own file
+// line, which holds its text. A subagent's are in its own file. Only what was
+// added since the last look is read, from a little before where that ended,
+// so a line still being written then is read whole now; what's read twice is
+// already seen
+const TRANSCRIPT_OVERLAP = 64 * 1024
 const BOUNDARY = '"subtype":"compact_boundary"'
 const PROMPT_MODE = '","permissionMode":"'
 const PROMPT_MODE_PAIR = '"timestamp":"[^"]*","permissionMode":"[A-Za-z]*"'
@@ -380,13 +385,20 @@ type Boundary = { uuid: string; timestamp: string; compactMetadata?: Record<stri
 
 async function readTranscript($: EngineInterface) {
   const [configDir, home, sessionId] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), homeDir($), $.session.id()])
+  const done = await read($, transcriptRead)
+  const from = done?.sessionId === sessionId ? Math.max(1, done.bytes - TRANSCRIPT_OVERLAP + 1) : 1
+  // its size first, then the boundaries, then each prompt's time and mode
   const script =
-    'for f in "$2"/projects/*/"$3".jsonl; do [ -f "$f" ] || continue; grep -F -e "$1" "$f"; grep -F -e "$4" "$f" | grep -oE -e "$5"; done'
-  const argv = ['sh', '-c', script, 'sh', BOUNDARY, configDir || `${home}/.claude`, sessionId, PROMPT_MODE, PROMPT_MODE_PAIR]
+    'for f in "$2"/projects/*/"$3".jsonl; do [ -f "$f" ] || continue; wc -c < "$f"; ' +
+    'tail -c +"$6" "$f" | grep -F -e "$1"; tail -c +"$6" "$f" | grep -F -e "$4" | grep -oE -e "$5"; done'
+  const argv = ['sh', '-c', script, 'sh', BOUNDARY, configDir || `${home}/.claude`, sessionId, PROMPT_MODE, PROMPT_MODE_PAIR, String(from)]
   const { stdout } = await $.process.run(argv, { timeoutMs: 2_000 })
   const boundaries: Boundary[] = []
   const modes: { at: number; mode: string }[] = []
-  for (const line of stdout.split('\n')) {
+  const [size, ...lines] = stdout.split('\n')
+  const bytes = Number(size?.trim())
+  if (size?.trim() && Number.isInteger(bytes)) await update($, transcriptRead, () => ({ sessionId, bytes }))
+  for (const line of lines) {
     try {
       if (line.startsWith('"timestamp"')) {
         const { timestamp, permissionMode } = JSON.parse(`{${line}}`)

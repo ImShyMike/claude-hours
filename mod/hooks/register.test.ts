@@ -97,9 +97,12 @@ const setup = (on: On) => {
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
     // the grep for compaction boundaries, whole lines, then for each prompt's time and mode alone
+    // read from a byte on, after printing its size
     if (cmd === 'sh' && e.argv[2]?.includes('/projects/')) {
-      const lines = transcript.map(entry => JSON.stringify(entry))
+      const text = transcript.map(entry => `${JSON.stringify(entry)}\n`).join('')
+      const lines = text.slice(Number(e.argv[9]) - 1).split('\n')
       stdout = [
+        String(text.length),
         ...lines.filter(line => line.includes(e.argv[4]!)),
         ...lines.filter(line => line.includes(e.argv[7]!)).flatMap(line => line.match(new RegExp(e.argv[8]!, 'g')) ?? []),
       ].join('\n')
@@ -791,6 +794,20 @@ test('a mode the classic hooks logged is not logged again from the transcript, n
   await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
 
   expect(lines.filter(l => l.event === 'mode').map(l => l.mode)).toEqual(['plan', 'acceptEdits'])
+})
+
+test('each look at the transcript reads only what was added, from a little before', async ($, on) => {
+  const { runs, setTranscript, now } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  const filler = { type: 'assistant', message: { content: 'x'.repeat(100 * 1024) } }
+  setTranscript([filler, sent(now(), 'plan')])
+  const reads = () => runs.filter(argv => argv[0] === 'sh' && argv[2]?.includes('/projects/')).map(argv => Number(argv[9]))
+
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
+  const size = JSON.stringify(filler).length + JSON.stringify(sent(now(), 'plan')).length + 2
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
+
+  expect(reads()).toEqual([1, size - 64 * 1024 + 1])
 })
 
 test('a prompt sent while a turn runs is marked midTurn', async ($, on) => {

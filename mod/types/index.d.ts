@@ -10,8 +10,12 @@ export type SeenCompactions = string[]
 // transcript's prompts, so neither logs it again.
 export type LastMode = { sessionId: string; at: number; mode: string } | null
 
+// How far into its transcript the session has been read, in bytes, so the
+// next look reads only what was added.
+export type TranscriptRead = { sessionId: string; bytes: number } | null
+
 declare module 'claude-code' {
   interface PluginState {
-    'time-track': { startedSessions: StartedSessions; seenCompactions: SeenCompactions; lastMode: LastMode }
+    'time-track': { startedSessions: StartedSessions; seenCompactions: SeenCompactions; lastMode: LastMode; transcriptRead: TranscriptRead }
   }
 }
