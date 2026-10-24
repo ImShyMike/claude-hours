@@ -77,6 +77,16 @@ export function seconds(ms: number) {
   return duration(ms)
 }
 
+// claude-opus-5-5 reads better as "Opus 5.5", and so does an older
+// claude-3-5-sonnet-20241022 as "Sonnet 3.5"; anything else as is
+export function modelName(model: string) {
+  const named = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(model)
+  const old = /^claude-(\d+)(?:-(\d{1,2}))?-([a-z]+)(?:-\d{8})?$/.exec(model)
+  const [family, major, minor] = named ? [named[1]!, named[2], named[3]] : old ? [old[3]!, old[1], old[2]] : []
+  if (!family) return model
+  return `${family[0]!.toUpperCase()}${family.slice(1)} ${major}${minor ? `.${minor}` : ''}`
+}
+
 export const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 
 // what prompts carried besides text: "2 images, 1 file", or '' for none

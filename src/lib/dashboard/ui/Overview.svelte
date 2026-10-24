@@ -6,7 +6,21 @@
   import * as Table from '#lib/components/ui/table/index.js'
   import { liveDigest, stored, whoIsLooking } from '../live.svelte'
   import { HEAT_LABELS, hourLabel, longDay, modeName, series, shortDay, tipLines, toolName } from '../overview'
-  import { MIN, attachments, compact, duration, esc, hideTip, palette, rangeWindow, seconds, showTip, withPerson, type Range } from '../shared'
+  import {
+    MIN,
+    attachments,
+    compact,
+    duration,
+    esc,
+    hideTip,
+    modelName,
+    palette,
+    rangeWindow,
+    seconds,
+    showTip,
+    withPerson,
+    type Range,
+  } from '../shared'
   import BarList from './BarList.svelte'
   import Calendar from './Calendar.svelte'
   import Columns from './Columns.svelte'
@@ -34,6 +48,7 @@
   // most setups never let the mod see the mode, so its card waits for a
   // range that has some
   const modesSeen = $derived(!!s?.modes.some(m => m.mode !== 'unknown'))
+  const modelsSeen = $derived(!!s?.models.length)
   // all time picks each project's color and fills the calendar
   const ever = $derived(live.value)
   const colors = $derived(palette(ever?.projects ?? []))
@@ -257,7 +272,7 @@
         </Card.Content>
       </Card.Root>
 
-      <div class={['grid gap-4', modesSeen && 'lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]']}>
+      <div class={['grid gap-4', (modesSeen || modelsSeen) && 'lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]']}>
         <Card.Root>
           <Card.Header><Card.Title>Tools</Card.Title></Card.Header>
           <Card.Content>
@@ -273,24 +288,46 @@
             />
           </Card.Content>
         </Card.Root>
-        {#if modesSeen}
-          <Card.Root>
-            <Card.Header>
-              <Card.Title>Permission modes</Card.Title>
-              <Card.Description>Active time in each</Card.Description>
-            </Card.Header>
-            <Card.Content>
-              <BarList
-                items={s.modes.map(m => ({
-                  name: modeName(m.mode),
-                  value: m.ms,
-                  amount: duration(m.ms),
-                  color: m.mode === 'unknown' ? 'var(--muted-foreground)' : undefined,
-                  tip: `<strong>${esc(modeName(m.mode))}</strong>${duration(m.ms)} · ${Math.round((m.ms / s.totalMs) * 100)}%${m.mode === 'unknown' ? '<span class="muted">sessions where the mod could not see the mode</span>' : ''}`,
-                }))}
-              />
-            </Card.Content>
-          </Card.Root>
+        {#if modesSeen || modelsSeen}
+          <div class="flex flex-col gap-4">
+            {#if modesSeen}
+              <Card.Root>
+                <Card.Header>
+                  <Card.Title>Permission modes</Card.Title>
+                  <Card.Description>Active time in each</Card.Description>
+                </Card.Header>
+                <Card.Content>
+                  <BarList
+                    items={s.modes.map(m => ({
+                      name: modeName(m.mode),
+                      value: m.ms,
+                      amount: duration(m.ms),
+                      color: m.mode === 'unknown' ? 'var(--muted-foreground)' : undefined,
+                      tip: `<strong>${esc(modeName(m.mode))}</strong>${duration(m.ms)} · ${Math.round((m.ms / s.totalMs) * 100)}%${m.mode === 'unknown' ? '<span class="muted">sessions where the mod could not see the mode</span>' : ''}`,
+                    }))}
+                  />
+                </Card.Content>
+              </Card.Root>
+            {/if}
+            {#if modelsSeen}
+              <Card.Root>
+                <Card.Header>
+                  <Card.Title>Models</Card.Title>
+                  <Card.Description>Claude's working time with each</Card.Description>
+                </Card.Header>
+                <Card.Content>
+                  <BarList
+                    items={s.models.map(m => ({
+                      name: modelName(m.model),
+                      value: m.ms,
+                      amount: duration(m.ms),
+                      tip: `<strong>${esc(modelName(m.model))}</strong>${duration(m.ms)} · ${m.turns} ${m.turns === 1 ? 'turn' : 'turns'}<span class="muted">${esc(m.model)}</span>`,
+                    }))}
+                  />
+                </Card.Content>
+              </Card.Root>
+            {/if}
+          </div>
         {/if}
       </div>
 

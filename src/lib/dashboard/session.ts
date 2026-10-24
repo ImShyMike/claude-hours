@@ -4,7 +4,7 @@
 import { projectSpans, turnPieces, waitsOf, type Event, type Interval } from '../analytics/aggregate'
 import { apply, countGroups, describe, groupOf, initialState, pausesOf, type Source, type State, type Step, type Timeline } from '../analytics/replay'
 import { ROW, type Bar, type Mark, type Row } from './rows'
-import { MIN, attachments, clockTime, compact, duration, esc, seconds, type Palette } from './shared'
+import { MIN, attachments, clockTime, compact, duration, esc, modelName, seconds, type Palette } from './shared'
 
 // a draft as the main log tells it, with its replay if the sidecar has one
 export type Draft = {
@@ -151,7 +151,9 @@ export function laneRows(opts: {
     const end = time(t)
     const pieces = piecesOf.get(t)!
     const waited = end - pieces[0]![0] - num(t.durationMs)
-    const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}${waited ? ` working, ${seconds(waited)} waiting on you` : ''}, ended ${clockTime(end)}`
+    const model = (t.usage as { model?: unknown } | undefined)?.model
+    const by = typeof model === 'string' ? `<br>${esc(modelName(model))}` : ''
+    const tip = `<strong>Claude ${t.event === 'interrupt' ? 'interrupted' : 'turn'}</strong>${seconds(num(t.durationMs))}${waited ? ` working, ${seconds(waited)} waiting on you` : ''}, ended ${clockTime(end)}${by}`
     for (const [s, e] of pieces) claude.push(bar('bg-(--neutral-2)', s, e, { tip }))
     if (t.event !== 'interrupt') continue
     // a red line down from You into the turn it stopped

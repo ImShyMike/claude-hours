@@ -211,7 +211,9 @@ for (let back = DAYS; back >= 0; back--) {
           output_tokens: output,
           cache_read_input_tokens: output * 30,
           cache_creation_input_tokens: output * 2,
-          model: 'claude-opus-5-5',
+          // some sessions on Sonnet, and now and then a turn on Haiku (no
+          // rand() here either)
+          model: p % 13 === 5 ? 'claude-haiku-5-5' : (back + n) % 4 === 1 ? 'claude-sonnet-5-5' : 'claude-opus-5-5',
         },
       })
       // reading, thinking, sometimes wandering off

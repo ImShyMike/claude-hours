@@ -239,6 +239,22 @@ test('time splits by permission mode where it changed, from the start of the ses
   ])
 })
 
+test("Claude's main-loop time adds up by the model that answered", () => {
+  const usage = (model: string) => ({ input_tokens: 1, output_tokens: 1, model })
+  const events = [
+    at('2026-10-19T12:04:00Z', 'turn_end', { durationMs: 4 * MIN, usage: usage('claude-opus-5-5') }),
+    at('2026-10-19T12:10:00Z', 'turn_end', { durationMs: 5 * MIN, usage: usage('claude-opus-5-5') }),
+    at('2026-10-19T12:12:00Z', 'interrupt', { durationMs: 1 * MIN, usage: usage('claude-sonnet-5-5') }),
+    // a subagent's time sits inside the main turn's, and an Esc before any answer names no model
+    at('2026-10-19T12:09:00Z', 'turn_end', { durationMs: 3 * MIN, agentId: 'a1', usage: usage('claude-haiku-5-5') }),
+    at('2026-10-19T12:13:00Z', 'interrupt', { durationMs: 10_000 }),
+  ]
+  expect(summarize(events, { idleCapMs: 5 * MIN }).models).toEqual([
+    { model: 'claude-opus-5-5', ms: 9 * MIN, turns: 2 },
+    { model: 'claude-sonnet-5-5', ms: 1 * MIN, turns: 1 },
+  ])
+})
+
 test('file order across sessions does not matter', () => {
   const a = at('2026-10-19T12:00:00Z', 'tool')
   const b = at('2026-10-19T12:01:00Z', 'tool', { sessionId: 's2' })
@@ -287,6 +303,7 @@ test('an empty log summarizes to zeros', () => {
   expect(s.days).toEqual([])
   expect(s.sessions).toEqual([])
   expect(s.modes).toEqual([])
+  expect(s.models).toEqual([])
 })
 
 test('typing a prompt counts as active time, tea breaks do not', () => {

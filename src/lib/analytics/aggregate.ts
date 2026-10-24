@@ -38,6 +38,9 @@ export type Summary = {
   // bypassPermissions), most first; `unknown` for sessions the mod never saw
   // it in (older ones, or a setup that keeps those events from mods)
   modes: { mode: string; ms: number }[]
+  // Claude's working time and turns in the main loop by the model that
+  // answered, most first; a turn cut off before any answer names none
+  models: { model: string; ms: number; turns: number }[]
   languages: { language: string; edits: number }[]
   tools: { tool: string; calls: number; errors: number; denied: number; avgMs: number }[]
   // midTurn: sent while Claude was still working
@@ -586,6 +589,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   const languages = new Map<string, number>()
   const tools = new Map<string, { calls: number; errors: number; denied: number; totalMs: number }>()
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  const models = new Map<string, { ms: number; turns: number }>()
   const sessions = new Map<string, Summary['sessions'][number]>()
   let promptCount = 0,
     words = 0,
@@ -688,6 +692,13 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
           tokens.cacheRead += u.cache_read_input_tokens || 0
           tokens.cacheWrite += u.cache_creation_input_tokens || 0
         }
+        const model = (e.usage as { model?: unknown } | undefined)?.model
+        if (!e.agentId && typeof model === 'string') {
+          const m = models.get(model) ?? { ms: 0, turns: 0 }
+          m.ms += Number(e.durationMs) || 0
+          m.turns++
+          models.set(model, m)
+        }
         break
       }
       case 'tool': {
@@ -723,6 +734,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     hourProjects,
     projects: sorted(projectMs).map(([project, ms]) => ({ project, ms })),
     modes: sorted(modeMs).map(([mode, ms]) => ({ mode, ms })),
+    models: [...models].map(([model, m]) => ({ model, ...m })).sort((a, b) => b.ms - a.ms),
     languages: sorted(languages).map(([language, edits]) => ({ language, edits })),
     tools: [...tools]
       .map(([tool, t]) => ({ tool, calls: t.calls, errors: t.errors, denied: t.denied, avgMs: t.totalMs / t.calls }))
