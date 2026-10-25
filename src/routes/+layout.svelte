@@ -10,6 +10,7 @@
 <svelte:head>
   <link rel="icon" href={favicon} />
   <title>claude-hours</title>
+  <meta name="description" content="Detailed Claude Code time tracking: where your hours with Claude went, day by day and project by project" />
 </svelte:head>
 
 {@render children()}

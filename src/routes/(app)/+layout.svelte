@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../layout.css'
+  import inter from '@fontsource-variable/inter/files/inter-latin-wght-normal.woff2?url'
   import { goto } from '$app/navigation'
   import { page } from '$app/state'
   import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js'
@@ -28,6 +29,9 @@
   // the dashboard pages get the room their charts want
   const wide = $derived(['/(app)', '/(app)/timeline', '/(app)/session'].includes(page.route.id ?? ''))
 </script>
+
+<!-- the latin Inter fetched with the page, not once the CSS asks for it, so it's usually there for the first paint -->
+<svelte:head><link rel="preload" href={inter} as="font" type="font/woff2" crossorigin="anonymous" /></svelte:head>
 
 <header class="border-b">
   <!-- always the widest page's width, so the links never move between pages -->
