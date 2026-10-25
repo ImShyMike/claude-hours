@@ -1,9 +1,7 @@
 <script lang="ts">
   import '../layout.css'
   import plex from '@fontsource-variable/ibm-plex-sans/files/ibm-plex-sans-latin-wght-normal.woff2?url'
-  import { goto } from '$app/navigation'
   import { page } from '$app/state'
-  import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js'
   import { Button } from '#lib/components/ui/button/index.js'
   import ChartTip from '#lib/dashboard/ui/ChartTip.svelte'
   import type { LayoutProps } from './$types'
@@ -19,12 +17,6 @@
     { href: '/settings', route: '/(app)/settings', label: 'Settings' },
     ...(data.admin ? [{ href: '/admin', route: '/(app)/admin', label: 'Admin' }] : []),
   ])
-  // without a page load; the JSON content type gets it past SvelteKit's
-  // check on cross-site form posts, which a bodyless POST would trip
-  async function logout() {
-    await fetch('/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json' } })
-    await goto('/', { refreshAll: true })
-  }
 
   // the dashboard pages get the room their charts want
   const wide = $derived(['/(app)', '/(app)/timeline', '/(app)/session'].includes(page.route.id ?? ''))
@@ -46,24 +38,6 @@
           aria-current={page.route.id === link.route ? 'page' : undefined}>{link.label}</Button
         >
       {/each}
-      <!-- asked first, since the dashboard is one stray click from gone -->
-      <AlertDialog.Root>
-        <AlertDialog.Trigger>
-          {#snippet child({ props })}<Button {...props} variant="ghost" size="sm">Log out</Button>{/snippet}
-        </AlertDialog.Trigger>
-        <AlertDialog.Content>
-          <AlertDialog.Header>
-            <AlertDialog.Title>Log out?</AlertDialog.Title>
-            <AlertDialog.Description
-              >You'll need to log in with Hack Club again to see your dashboard. Your devices stay connected.</AlertDialog.Description
-            >
-          </AlertDialog.Header>
-          <AlertDialog.Footer>
-            <AlertDialog.Cancel>Stay</AlertDialog.Cancel>
-            <AlertDialog.Action onclick={logout}>Log out</AlertDialog.Action>
-          </AlertDialog.Footer>
-        </AlertDialog.Content>
-      </AlertDialog.Root>
     {/if}
   </nav>
 </header>
