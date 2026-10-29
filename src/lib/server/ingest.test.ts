@@ -241,8 +241,8 @@ describe('digest', () => {
     expect(second.range.sessions.map(s => s.sessionId).sort()).toEqual(['s1', 's2'])
 
     // the 3 minutes between s1's prompts count under the 5 min cap, not under 2
-    expect(await setIdleCap(db, 7)).toBe(false)
-    expect(await setIdleCap(db, 2)).toBe(true)
+    expect(await setIdleCap(db, person, 7)).toBe(false)
+    expect(await setIdleCap(db, person, 2)).toBe(true)
     const third = await digest(db, person, {})
     expect(third.idleCapMs).toBe(2 * 60_000)
     expect(third.range.totalMs).toBeLessThan(second.range.totalMs)

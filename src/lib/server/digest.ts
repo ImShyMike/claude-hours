@@ -141,7 +141,7 @@ export async function digest(
   timing?: Timing,
 ) {
   const { from, to, tz, counting = 'all' } = window
-  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db)])
+  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db, personId)])
   const key = `${version}|${tz}|${cap}`
   const entry = allTime(db, personId, key, sessions, { idleCapMs: cap, tz, counting }, timing)
   const ever = entry.ever
@@ -176,7 +176,7 @@ export async function digest(
 
 // one session's events, with what the page needs from all time to color them
 export async function sessionDigest(db: Db, personId: number, session: string, tz?: string) {
-  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId), idleCapMs(db)])
+  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId), idleCapMs(db, personId)])
   const { ever } = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz, counting: 'all' })
   return { events: sessions.get(session) ?? [], projects: ever.projects, idleCapMs: cap }
 }
