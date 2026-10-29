@@ -308,6 +308,14 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   keystroke and puts `typingMs` (pauses over 30 s left out) on the `prompt`
   line. Drafts that never get sent are logged as `draft_abandoned`. Both count
   as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
+- The overview can count only prompts instead (`/api/summary?time=prompts`),
+  the way Hackatime counts heartbeats: each prompt you wrote and each draft
+  you gave up is a span of its typing, and ones closer than the idle cap
+  merge, so reading an answer before the next prompt counts if it's short.
+  Claude's turns, tool calls and notifications make no time then, though
+  they still say which repo a thread was in. A backfilled prompt has no
+  typing, so it's just the moment it was sent. Models' time stays Claude's,
+  and project colors are still ranked by all of the time.
 - A project is named after the nearest git root above the event's `cwd` (or
   above the file or `repo` it worked in), so subdirectories don't split a
   repo. A worktree (like a subagent's under `.claude/worktrees`) counts as

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state'
-  import { dayKey, type Summary } from '#lib/analytics/aggregate.js'
+  import { dayKey, type Counting, type Summary } from '#lib/analytics/aggregate.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
@@ -38,7 +38,14 @@
   const range = stored<Range>('range', '7')
   // the rhythm card by hour, or by weekday once the range has more than a week
   const rhythm = stored<'hours' | 'weekdays'>('rhythm', 'hours')
-  const live = liveDigest(() => range.value)
+  // all the time, or only the time spent prompting, as Hackatime would count it
+  const counting = stored<Counting>('counting', 'all')
+  const prompting = $derived(counting.value === 'prompts')
+  const live = liveDigest(
+    () => range.value,
+    false,
+    () => counting.value,
+  )
   const person = $derived(page.url.searchParams.get('person') ?? '')
   // the sessions table a page at a time, back to the newest whenever the
   // range or whose dashboard it is changes
@@ -162,7 +169,17 @@
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <PersonPicker me={who.me} />
-      <RangePicker bind:range={range.value} />
+      <ToggleGroup.Root
+        type="single"
+        variant="outline"
+        size="sm"
+        aria-label="What counts as time"
+        bind:value={() => counting.value, (next: string) => next && (counting.value = next as Counting)}
+      >
+        <ToggleGroup.Item value="all">Prompts + Claude</ToggleGroup.Item>
+        <ToggleGroup.Item value="prompts">Prompts</ToggleGroup.Item>
+      </ToggleGroup.Root>
+      <RangePicker bind:range={range.value} counting={counting.value} />
     </div>
   </div>
 
@@ -176,7 +193,7 @@
     <div class="grid gap-4 md:max-lg:gap-y-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <Card.Root class="justify-center">
         <Card.Header>
-          <Card.Description>Active with Claude</Card.Description>
+          <Card.Description>{prompting ? 'Prompting Claude' : 'Active with Claude'}</Card.Description>
           <Card.Title class="text-5xl font-semibold tracking-tight tabular-nums">{duration(s.totalMs)}</Card.Title>
         </Card.Header>
         <Card.Content class="text-sm text-muted-foreground">

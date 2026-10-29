@@ -12,12 +12,20 @@ export type Event = {
   [field: string]: unknown
 }
 
+// What counts as active time: everything (your prompts and Claude's work
+// around them), or only your prompts, the way Hackatime counts: each draft
+// you wrote, sent or given up, is a heartbeat over its typing, and ones
+// closer than the idle cap merge
+export type Counting = 'all' | 'prompts'
+
 export type Options = {
   // window start/end in epoch ms; omit for everything
   from?: number
   to?: number
   // idle gaps up to this long between activity count as active time
   idleCapMs: number
+  // 'all' if omitted
+  counting?: Counting
   // the IANA time zone days and hours are counted in; omit for this machine's
   tz?: string
 }
@@ -158,6 +166,7 @@ export function languageOf(path: string) {
 // Remote Control, or `claude -p`. Notifications, peers and schedules are
 // still activity, but they aren't prompts anyone wrote
 const HUMAN_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
+const isPersonPrompt = (e: Event) => e.event === 'prompt' && !e.isMeta && !(typeof e.origin === 'string' && !HUMAN_ORIGINS.has(e.origin))
 
 // a draft_abandoned line is written late, so it carries its own end. Parsing
 // costs more than the rest of what's done with an event, and the hub keeps
@@ -442,8 +451,9 @@ function placed([start, end]: Interval, moves: Move[] = [], home: string): [stri
 // wherever it was working. A subagent's turn counts only where it worked
 // away from the main thread's project: alongside it, the main turn already
 // covers that time. So two projects can share a stretch (each gets it in
-// full), and activeIntervals' total counts it once
-export function projectSpans(events: Event[], idleCapMs: number): Map<string, Interval[]> {
+// full), and activeIntervals' total counts it once. Counting only prompts,
+// the rest still say where a thread was working, but make no time
+export function projectSpans(events: Event[], idleCapMs: number, counting: Counting = 'all'): Map<string, Interval[]> {
   const waits = waitsOf(events)
   const moves = movesOf(events)
   const raw = new Map<string, Interval[]>()
@@ -453,6 +463,7 @@ export function projectSpans(events: Event[], idleCapMs: number): Map<string, In
     else raw.set(project, [interval])
   }
   for (const e of events) {
+    if (counting === 'prompts' && !isPersonPrompt(e) && e.event !== 'draft_abandoned') continue
     const end = time(e)
     const home = projectOf(e)
     const thread = moves.get(threadOf(e))
@@ -602,7 +613,7 @@ function* weighted(intervals: Interval[], pieces: [Interval, number][]): Generat
 
 const inc = <K>(map: Map<K, number>, key: K, by = 1) => map.set(key, (map.get(key) ?? 0) + by)
 
-export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): Summary {
+export function summarize(all: Event[], { from, to, idleCapMs, counting, tz }: Options): Summary {
   const clock = clockOf(tz)
   const valid = all.filter(e => e && typeof e.ts === 'string' && !Number.isNaN(time(e)) && e.sessionId)
   // a turn's span starts before its own line, so the default window does too.
@@ -644,7 +655,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     // a session over before the window has nothing in it, so a short range
     // skips most of history
     if (lastAt(events) < lo) continue
-    const byProject = projectSpans(events, idleCapMs)
+    const byProject = projectSpans(events, idleCapMs, counting)
     const inside: [string, Interval[]][] = []
     for (const [project, intervals] of byProject) {
       const k = intervals.map(kept).filter((i): i is Interval => !!i)
@@ -766,7 +777,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
 
     switch (e.event) {
       case 'prompt':
-        if (e.isMeta || (typeof e.origin === 'string' && !HUMAN_ORIGINS.has(e.origin))) break
+        if (!isPersonPrompt(e)) break
         promptCount++
         s.prompts++
         words += Number(e.words) || 0

@@ -248,6 +248,25 @@ describe('digest', () => {
     expect(third.range.totalMs).toBeLessThan(second.range.totalMs)
   })
 
+  test('counting only prompts is kept apart from counting it all, with the same colors', async () => {
+    const { db, person } = await withPerson()
+    await ingest(db, person, [
+      run(0, [
+        { t: 60_000, event: 'prompt', origin: 'composer', typingMs: 60_000 },
+        { t: 20 * 60_000, event: 'turn_end', durationMs: 19 * 60_000 },
+      ]),
+    ])
+    const all = await digest(db, person, {})
+    const prompts = await digest(db, person, { counting: 'prompts' })
+    expect(all.range.totalMs).toBe(20 * 60_000)
+    expect(prompts.range.totalMs).toBe(60_000)
+    expect(prompts.days.reduce((sum, d) => sum + d.ms, 0)).toBe(60_000)
+    expect(prompts.projects).toEqual(all.projects)
+    // and neither is handed the other's summary of all of it
+    expect((await digest(db, person, {})).range).toEqual(all.range)
+    expect((await digest(db, person, { counting: 'prompts' })).range).toEqual(prompts.range)
+  })
+
   test('a time zone that does not exist is a RangeError', async () => {
     const { db, person } = await withPerson()
     await expect(digest(db, person, { tz: 'Mars/Olympus' })).rejects.toThrow(RangeError)
