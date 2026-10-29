@@ -215,7 +215,14 @@ test('an Esc after a long silence ends the turn at its last work, not days later
       typed(terra, 0, 'go'),
       useTool(terra, 10, 't1', 'Bash', { command: 'ls' }),
       result(terra, 12, 't1'),
-      // the laptop slept with the request open, and the Esc came days later
+      // the laptop slept with the request open, and the Esc came days later,
+      // a background task's notification landing as it woke
+      {
+        type: 'attachment',
+        timestamp: at(5 * 86_400),
+        cwd: terra,
+        attachment: { type: 'queued_command', commandMode: 'prompt', prompt: 'task done', origin: { kind: 'task-notification' } },
+      },
       esc(5 * 86_400),
       typed(terra, 5 * 86_400 + 60, 'again'),
       useTool(terra, 5 * 86_400 + 70, 't2', 'Bash', { command: 'ls' }),

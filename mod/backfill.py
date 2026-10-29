@@ -373,8 +373,9 @@ class Session:
                 "prompt",
                 [("words", count_words(text)), ("chars", len(text))] + fields + [("midTurn", True if mid_turn else None), ("pastedChars", pasted or None)],
             )
-            state["last_at"] = at
-            state["last_cwd"] = cwd
+            # one sent mid-turn after a long silence (a task's notification as
+            # the laptop woke) doesn't carry the turn's work up to it either
+            worked(at, cwd)
             state["interrupted"] = False
             return e
 
