@@ -64,7 +64,7 @@ test('loadEvents says which repo a tool call really worked in', async () => {
     // a Bash with no repo, and a tool that says nothing
     { t: 1, event: 'tool', tool: 'Bash', repo: join(code, 'hub') },
     { t: 2, event: 'tool', tool: 'Edit', file: join(code, 'hub/src/a.ts') },
-    { t: 3, event: 'tool', tool: 'Read', file: join(code, 'loose/notes.txt') },
+    { t: 3, event: 'tool', tool: 'Edit', file: join(code, 'loose/notes.txt') },
     { t: 4, event: 'file_changed', path: 'src/b.ts' },
     { t: 5, event: 'tool', tool: 'Bash' },
     { t: 6, event: 'tool', tool: 'WebFetch' },
@@ -75,6 +75,27 @@ test('loadEvents says which repo a tool call really worked in', async () => {
   // on the hub, only what the mod said counts: someone else's disk can't be read
   const remote = await loadEvents(dir, { remote: true })
   expect(remote.map(e => e.workProject)).toEqual(['hub', undefined, undefined, 'terra', 'terra', undefined])
+})
+
+test("reading a file, or Claude Code's own files in ~/.claude/projects, moves nothing", async () => {
+  const dir = scratch()
+  mkdirSync(join(dir, 'events'))
+  const claude = '/home/me/.claude'
+  const rows = [
+    { v: 1, event: 'session', start: Date.parse('2026-10-19T12:00:00Z'), cwd: '/code/terra', rootName: 'terra' },
+    // a read in another repo, and one at home
+    { t: 1, event: 'tool', tool: 'Read', file: '/code/hub/src/a.ts', repo: '/code/hub', repoName: 'hub' },
+    { t: 2, event: 'tool', tool: 'Read', file: '/code/terra/src/b.ts' },
+    // a memory written, and a long output read back
+    { t: 3, event: 'tool', tool: 'Write', file: `${claude}/projects/-code-terra/memory/m.md`, repo: claude, repoName: '.claude' },
+    { t: 4, event: 'file_changed', path: `${claude}/projects/-code-terra/memory/m.md` },
+    { t: 5, event: 'tool', tool: 'Read', file: `${claude}/projects/-code-terra/s1/tool-results/x.txt`, repo: claude, repoName: '.claude' },
+    // working on ~/.claude itself still counts
+    { t: 6, event: 'tool', tool: 'Edit', file: `${claude}/CLAUDE.md`, repo: claude, repoName: '.claude' },
+  ]
+  writeFileSync(join(dir, 'events', 'abc-1.jsonl'), rows.map(r => `${JSON.stringify(r)}\n`).join(''))
+  const events = await loadEvents(dir, { remote: true })
+  expect(events.map(e => e.workProject)).toEqual([undefined, undefined, undefined, undefined, undefined, '.claude'])
 })
 
 test('on the hub a project is the root the mod sent, else the cwd folder', async () => {

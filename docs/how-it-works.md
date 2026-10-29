@@ -275,9 +275,13 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   lane.
 - Time goes to the repo the work is in, not just the session's. Each thread
   (the main one, or a subagent) starts in the cwd's project, and a tool call
-  that touches a file in another git repo, or a Bash command that `cd`s into
+  that writes a file in another git repo, or a Bash command that `cd`s into
   one, moves that thread there until a call works back home (any Bash with
-  no `cd`, or a file under the cwd). Files in no repo at all don't move it.
+  no `cd`, or a file written under the cwd). Files in no repo at all don't
+  move it, and neither does reading a file (that's looking, not working
+  there) or anything in Claude Code's own `~/.claude/projects` (its memory,
+  a long output it saved to read back), so the hub counts those where the
+  thread already was, whatever the mod's rows say.
 - A subagent's turn adds time only where it works away from the main
   thread's project, like a fork sent off to another codebase. Then both
   projects get that stretch in full, while the total, days and hours count
