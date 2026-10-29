@@ -77,8 +77,9 @@ function placeTimeline(row: unknown): Placed {
 }
 
 // backfill.py before this stretched a turn Esc'd days after it hung over all
-// those days, so a new run it rebuilt has to come from this version or later
-const BACKFILL_FROM = 2
+// those days (1) or called every answered turn outside the terminal an
+// interrupt (2), so a new run it rebuilt has to come from this version or later
+const BACKFILL_FROM = 3
 
 // one insert per table, in slices that stay well under Postgres' 65535
 // parameters (the widest table has about 30 columns)

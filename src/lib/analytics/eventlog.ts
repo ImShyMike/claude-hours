@@ -121,7 +121,7 @@ export function encodeSession(events: Event[]): string {
     ...(typeof e.rootName === 'string' ? { rootName: e.rootName } : {}),
   })
   const rows: Record<string, unknown>[] = [
-    { v: FORMAT, event: 'session', start, cwd, ...rooted(events[0]!), ...(events[0]!.backfill ? { backfill: 2 } : {}) },
+    { v: FORMAT, event: 'session', start, cwd, ...rooted(events[0]!), ...(events[0]!.backfill ? { backfill: 3 } : {}) },
   ]
   for (const e of events) {
     const t = Date.parse(e.ts) - start

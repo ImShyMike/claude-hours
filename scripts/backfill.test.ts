@@ -97,7 +97,7 @@ test('a turn: its prompt, tool calls, edits and the turn with its tokens', () =>
     ),
   )
   expect(run()).toMatchObject({ written: 1, logged: 0, live: 0, sessions: ['s1'] })
-  expect(JSON.parse(written('s1').split('\n')[0]!)).toEqual({ v: 1, event: 'session', start, cwd, root: terra, backfill: 2 })
+  expect(JSON.parse(written('s1').split('\n')[0]!)).toEqual({ v: 1, event: 'session', start, cwd, root: terra, backfill: 3 })
   const all = events('s1')
   expect(all.map(e => e.event)).toEqual(['session_start', 'mode', 'prompt', 'tool', 'file_changed', 'tool', 'turn_end'])
   const [opened, mode, prompt, edit, changed, bash, turn] = all
@@ -235,6 +235,77 @@ test('an Esc after a long silence ends the turn at its last work, not days later
   expect(turns(events('s1')).map(e => [e.event, e.ts, e.durationMs])).toEqual([
     ['interrupt', at(12), 12_000],
     ['interrupt', at(5 * 86_400 + 70), 10_000],
+  ])
+})
+
+// Claude's message as it stopped, finished or calling a tool
+const stopped = (cwd: string, sec: number, id: string, stop_reason: string) => {
+  const line = assistant(cwd, sec, id, [{ type: 'text', text: 'done' }])
+  return { ...line, message: { ...line.message, stop_reason } }
+}
+
+test('outside the terminal there is no turn_duration, and a finished answer ends the turn', () => {
+  const { terra, transcript, run, events } = setup()
+  const vscode = { entrypoint: 'claude-vscode' }
+  transcript(
+    's1',
+    file(
+      typed(terra, 0, 'go', vscode),
+      useTool(terra, 5, 't1', 'Bash', { command: 'ls' }),
+      result(terra, 8, 't1'),
+      stopped(terra, 20, 'm1', 'end_turn'),
+      // a background task's notification, after the answer and not in it
+      typed(terra, 60, 'task done', { ...vscode, origin: { kind: 'task-notification' }, promptSource: undefined }),
+      stopped(terra, 70, 'm2', 'end_turn'),
+      typed(terra, 100, 'again', vscode),
+      stopped(terra, 110, 'm3', 'end_turn'),
+    ),
+  )
+  run()
+  const all = events('s1')
+  expect(turns(all).map(e => [e.event, e.ts, e.durationMs])).toEqual([
+    ['turn_end', at(20), 20_000],
+    ['turn_end', at(70), 10_000],
+    ['turn_end', at(110), 10_000],
+  ])
+  expect(all.filter(e => e.event === 'prompt').map(e => e.midTurn)).toEqual([undefined, undefined, undefined])
+})
+
+test("an answer before doesn't make the next turn's Esc or turned-down call an answer", () => {
+  const { terra, transcript, run, events } = setup()
+  const esc = typed(terra, 12, [{ type: 'text', text: '[Request interrupted by user]' }], { origin: undefined, promptSource: undefined })
+  transcript(
+    's1',
+    file(
+      typed(terra, 0, 'go'),
+      stopped(terra, 5, 'm1', 'end_turn'),
+      // Esc'd before Claude said a thing
+      typed(terra, 10, 'and this'),
+      esc,
+      // a call turned down, and nothing after it
+      typed(terra, 30, 'one more'),
+      useTool(terra, 32, 't1', 'Bash', { command: 'rm -rf /' }),
+      result(terra, 34, 't1', { toolDenialKind: 'user-rejected' }),
+      typed(terra, 300, 'fine'),
+      stopped(terra, 310, 'm3', 'end_turn'),
+    ),
+  )
+  run()
+  expect(turns(events('s1')).map(e => [e.event, e.ts, e.durationMs])).toEqual([
+    ['turn_end', at(5), 5000],
+    ['interrupt', at(12), 2000],
+    ['interrupt', at(34), 4000],
+    ['turn_end', at(310), 10_000],
+  ])
+})
+
+test("in the terminal an answer's turn_duration still ends it, once", () => {
+  const { terra, transcript, run, events } = setup()
+  transcript('s1', file(typed(terra, 0, 'go'), stopped(terra, 5, 'm1', 'end_turn'), turnEnd(terra, 6, 5500), typed(terra, 60, 'next')))
+  run()
+  expect(turns(events('s1')).map(e => [e.event, e.durationMs])).toEqual([
+    ['turn_end', 5500],
+    ['interrupt', 0],
   ])
 })
 

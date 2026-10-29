@@ -229,12 +229,16 @@ command changed. So a backfilled session comes out a little under what the mod
 would have counted, most of it the typing. A turn that never ends (an Esc
 right after sending, a call turned down) is an `interrupt` up to its last work
 before a silence over 15 minutes, and so is one Esc'd after such a silence (a
-request left hanging while the laptop slept). A call turned down is `denied`, where the
+request left hanging while the laptop slept). Only the terminal writes a
+`turn_duration` line, so in the VS Code extension, the desktop app or the SDK
+a turn whose last message from Claude finished (`stop_reason: end_turn`) is a
+`turn_end` instead, at that same last work. A call turned down is `denied`, where the
 mod's own rows say `error`.
 
-Each backfilled run's header says `backfill: 2` (the hub turns down a new run
+Each backfilled run's header says `backfill: 3` (the hub turns down a new run
 saying `1`, from the version that stretched a turn Esc'd days after it hung
-over all those days, and asks for `/time-track update`), its events carry
+over all those days, or `2`, which called every answered turn outside the
+terminal an interrupt, and asks for `/time-track update`), its events carry
 `backfill: true` once decoded, and the session page says it was rebuilt. A
 session the mod logged too is cut where the mod's log begins (less 2 s, for
 the prompt that woke it), twice over: `backfill.py` stops there when the mod's

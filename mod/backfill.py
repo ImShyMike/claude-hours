@@ -9,20 +9,21 @@ and prints a JSON summary; it never sends anything itself.
 
 Most of a session is in its transcript (<config>/projects/<dir>/<id>.jsonl,
 and a subagent's in <id>/subagents/agent-<agent>.jsonl): each turn's
-durationMs (a turn_duration line), tool calls from their tool_use to their
-tool_result, compactions, interrupts, the permission mode, the model and
-tokens. What isn't: typing (no drafts, so no typingMs), when the session was
+durationMs (a turn_duration line, written only by the terminal, so elsewhere
+from its prompt to Claude's finished answer), tool calls from their tool_use
+to their tool_result, compactions, interrupts, the permission mode, the model
+and tokens. What isn't: typing (no drafts, so no typingMs), when the session was
 opened and closed, permission dialogs inside a call, and files a Bash command
 changed. As in the mod, config.json's ignore list and file globs apply, and
 only counts come out, never a prompt's text, a command or a file's contents.
 
 A session the mod logged too is cut where the mod's log begins, so nothing
-counts twice, and every run says "backfill": 2 on its header (1 stretched
-a turn Esc'd days after it hung over all those days, and the hub turns it
-down now). Claude Code deletes transcripts after cleanupPeriodDays (30 by
-default), so this reaches back that far; a file already written stays once
-its transcript is gone. The
-same transcripts give the same rows, so it's safe to run again.
+counts twice, and every run says "backfill": 3 on its header (1 stretched
+a turn Esc'd days after it hung over all those days, 2 called every answered
+turn outside the terminal an interrupt, and the hub turns both down now).
+Claude Code deletes transcripts after cleanupPeriodDays (30 by default), so
+this reaches back that far; a file already written stays once its transcript
+is gone. The same transcripts give the same rows, so it's safe to run again.
 
     python3 backfill.py [out]
 """
@@ -330,6 +331,10 @@ class Session:
             # same turn)
             "turn_from": None,
             "interrupted": False,
+            # whether Claude's last message finished its answer: only the
+            # terminal writes turn_duration, so in the VS Code extension, the
+            # desktop app or the SDK that's all that says a turn ended
+            "answered": False,
             # the last thing the main thread did, and where
             "last_at": 0,
             "last_cwd": "",
@@ -360,12 +365,18 @@ class Session:
         # A turn cut short leaves no line saying so when it was an Esc right
         # after sending or a call turned down: it just never ends. It's over at
         # its last work, found at the next prompt sent between turns, an Esc
-        # or the transcript's end
+        # or the transcript's end. Outside the terminal an answered turn never
+        # ends either, and is over the same way
         def abandon_turn():
             if state["turn_from"] is not None:
                 last = state["last_at"]
-                push(last, state["last_cwd"], "interrupt", [("reason", "aborted"), ("durationMs", last - state["turn_from"]), ("usage", tokens.take())])
+                duration = last - state["turn_from"]
+                if state["answered"]:
+                    push(last, state["last_cwd"], "turn_end", [("reason", "answer"), ("durationMs", duration), ("usage", tokens.take())])
+                else:
+                    push(last, state["last_cwd"], "interrupt", [("reason", "aborted"), ("durationMs", duration), ("usage", tokens.take())])
             state["turn_from"] = None
+            state["answered"] = False
 
         def prompted(at, cwd, text, fields, mid_turn):
             pasted = folded_paste_chars(text) if dict(fields)["origin"] == "composer" else 0
@@ -431,6 +442,7 @@ class Session:
                 if state["command"] is not None and state["turn_from"] is None:
                     state["turn_from"] = state["command"]["at"]
                 state["command"] = None
+                state["answered"] = child(entry, "message").get("stop_reason") == "end_turn"
                 worked(at, cwd)
                 continue
             if not main:
@@ -445,12 +457,16 @@ class Session:
                     push(at, cwd, "turn_end", [("reason", "answer"), ("durationMs", field(entry, "durationMs")), ("usage", tokens.take())])
                 state["turn_from"] = None
                 state["interrupted"] = False
+                state["answered"] = False
                 continue
             # a prompt sent while Claude was working, handed to it mid-turn (a
             # task notification gets there the same way, but never as a prompt
             # the mod sees)
             queued = child(entry, "attachment")
             if kind_of_line == "attachment" and queued.get("type") == "queued_command" and queued.get("commandMode") == "prompt":
+                # one after an answer comes after the turn, not in it
+                if state["answered"]:
+                    abandon_turn()
                 origin = child(queued, "origin").get("kind")
                 text = queued["prompt"] if isinstance(queued.get("prompt"), str) else text_of(queued.get("prompt"))
                 fields = [("origin", "composer" if not origin or origin == "human" else origin), ("isMeta", queued.get("isMeta") is True)]
@@ -502,7 +518,7 @@ class Session:
                 continue
             drop_command()
             is_queued = entry.get("promptSource") == "queued"
-            if not is_queued and (not kind or kind == "human"):
+            if state["answered"] or (not is_queued and (not kind or kind == "human")):
                 abandon_turn()
             mode = entry.get("permissionMode")
             if isinstance(mode, str) and mode != state["mode"]:
@@ -597,7 +613,7 @@ def encode(events):
     """The session file as the mod writes it, its header saying backfill"""
     start = events[0]["at"]
     cwd = events[0]["cwd"]
-    rows = [dict([("v", FORMAT), ("event", "session"), ("start", start), ("cwd", cwd)] + rooted(events[0]) + [("backfill", 2)])]
+    rows = [dict([("v", FORMAT), ("event", "session"), ("start", start), ("cwd", cwd)] + rooted(events[0]) + [("backfill", 3)])]
     for e in events:
         t = e["at"] - start
         if e["cwd"] != cwd:
