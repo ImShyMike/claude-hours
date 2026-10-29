@@ -316,7 +316,10 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   still counts the cap, a gap between prompts in two repos goes to the
   later one, and nothing counts after the last prompt. Unlike Hackatime,
   the very first prompt gets the cap before it too, as if after a break,
-  so a range's time only ever depends on prompts near it. Claude's turns, tool calls and notifications make no time then, though
+  so a range's time only ever depends on prompts near it. A range or a day
+  takes its first prompt's gap from the one before it, like Hackatime's
+  boundary-aware sums; only a gap that crosses the edge itself is split
+  there, by the clock. Claude's turns, tool calls and notifications make no time then, though
   they still say which repo a thread was in. A backfilled prompt has no
   typing, so it's just the moment it was sent. Models' time stays Claude's,
   and project colors are still ranked by all of the time.

@@ -78,6 +78,21 @@ test('counting only prompts, the gap before one is from the last prompt in any s
   ])
 })
 
+test('counting only prompts, a range takes its first prompt\'s gap from the one before it, as Hackatime\'s boundary-aware sums do', () => {
+  const events = [
+    at('2026-10-19T11:59:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:11:00Z', 'prompt', { origin: 'composer' }),
+  ]
+  const from = Date.parse('2026-10-19T12:00:00Z')
+  const to = Date.parse('2026-10-19T13:00:00Z')
+  // 12:08 to 12:11: the 2 min before 12:10 (11 min after 11:59) and the minute before 12:11
+  expect(summarize(events, { from, to, idleCapMs: 2 * MIN, counting: 'prompts' }).totalMs).toBe(3 * MIN)
+  // and one just after the start keeps only what's inside: 12:00 to 12:01
+  const early = [at('2026-10-19T11:59:30Z', 'prompt', { origin: 'composer' }), at('2026-10-19T12:01:00Z', 'prompt', { origin: 'composer' })]
+  expect(summarize(early, { from, to, idleCapMs: 2 * MIN, counting: 'prompts' }).totalMs).toBe(MIN)
+})
+
 test('a turn that asked the person something works around the wait, judged like any gap', () => {
   const events = [
     at('2026-10-19T12:00:00Z', 'prompt'),
