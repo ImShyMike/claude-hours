@@ -67,15 +67,26 @@
     return `${duration(Math.abs(diff))} ${diff > 0 ? 'more' : 'less'} than ${then}`
   }
 
+  // the prompts sent with a paste in, out of all of them, and the share of
+  // chars sent that were pasted: out of every prompt, not typed plus pasted,
+  // since a backfilled prompt shows its pastes but never its typing
+  function pasted(s: Summary) {
+    const w = s.writing
+    const sentChars = Math.round(s.prompts.avgChars * s.prompts.count)
+    return {
+      value: s.prompts.count ? `${Math.round((w.pastedPrompts / s.prompts.count) * 100)}%` : '-',
+      chars: w.pastedPromptChars
+        ? `${compact(w.pastedPromptChars)} chars${sentChars ? `, ${Math.round((w.pastedPromptChars / sentChars) * 100)}% of all sent` : ''}`
+        : '',
+    }
+  }
+
   function tiles(s: Summary) {
     const w = s.writing
     const totalTurns = s.turns + s.interrupts
     const avgWords = Math.round(s.prompts.avgWords)
     // the usual 5 characters a word, over the time actually typing
     const wpm = w.typingMs ? Math.round(w.typedChars / 5 / (w.typingMs / MIN)) : 0
-    // out of every prompt sent, not typed plus pasted: a backfilled prompt
-    // shows its pastes but never its typing, which made those nearly all paste
-    const sentChars = Math.round(s.prompts.avgChars * s.prompts.count)
     return [
       { label: 'Prompts', value: compact(s.prompts.count), sub: s.prompts.count ? `avg ${plural(avgWords, 'word')}` : '' },
       { label: 'Turns', value: compact(s.turns), sub: s.prompts.midTurn ? `${plural(s.prompts.midTurn, 'prompt')} sent mid-turn` : '' },
@@ -91,20 +102,15 @@
         ? { label: 'Writing', value: duration(w.typingMs), sub: [`${w.abandoned} abandoned`, wpm && `${wpm} wpm`].filter(Boolean).join(' · ') }
         : { label: 'Writing', value: '-', sub: 'no typing data yet' },
       {
-        label: 'Pasted',
-        value: s.prompts.count ? `${Math.round((w.pastedPrompts / s.prompts.count) * 100)}%` : '-',
-        sub: [
-          'of prompts',
-          w.pastedPromptChars && `${compact(w.pastedPromptChars)} chars${sentChars ? `, ${Math.round((w.pastedPromptChars / sentChars) * 100)}% of all sent` : ''}`,
-          attachments(w),
-        ]
-          .filter(Boolean)
-          .join(' · '),
+        label: 'Pastes',
+        value: pasted(s).value,
+        sub: ['of prompts', attachments(w)].filter(Boolean).join(' · '),
       },
     ]
   }
 
-  function writingStats(w: Summary['writing']) {
+  function writingStats(s: Summary) {
+    const w = s.writing
     const per = (n: number) => (n / w.measured).toFixed(1)
     return [
       { label: 'Typo fixes', value: per(w.fixes), sub: `${w.fixes} in all, 3 chars or fewer` },
@@ -121,10 +127,8 @@
       },
       {
         label: 'Pastes',
-        value: `${Math.round((w.pastes / w.measured) * 100)}%`,
-        sub: [w.pastes ? `of prompts, ${compact(Math.round(w.pasteChars / w.pastes))} chars each` : 'of prompts', attachments(w)]
-          .filter(Boolean)
-          .join(' · '),
+        value: pasted(s).value,
+        sub: ['of prompts', pasted(s).chars, attachments(w)].filter(Boolean).join(' · '),
       },
       { label: 'Thinking pauses', value: per(w.pauses), sub: '2 to 30 seconds' },
       { label: 'Breaks', value: per(w.breaks), sub: 'pauses over 30 seconds' },
@@ -314,7 +318,7 @@
               <Card.Description>Per prompt, sent or not</Card.Description>
             </Card.Header>
             <Card.Content class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3">
-              {#each writingStats(s.writing) as stat (stat.label)}
+              {#each writingStats(s) as stat (stat.label)}
                 <div>
                   <div class="text-xs text-muted-foreground">{stat.label}</div>
                   <div class="text-xl font-semibold tabular-nums">{stat.value}</div>
