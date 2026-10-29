@@ -260,14 +260,44 @@ test('time splits by permission mode where it changed, from the start of the ses
     at('2026-10-19T12:05:00Z', 'prompt'),
     at('2026-10-19T12:07:00Z', 'mode', { mode: 'auto' }),
     at('2026-10-19T12:10:00Z', 'turn_end', { durationMs: 5 * MIN }),
-    // a session from before the mod logged modes
-    at('2026-10-19T12:00:00Z', 'prompt', { sessionId: 's2' }),
-    at('2026-10-19T12:03:00Z', 'turn_end', { sessionId: 's2', durationMs: 3 * MIN }),
+    // a session from before the mod logged modes, later on
+    at('2026-10-19T13:00:00Z', 'prompt', { sessionId: 's2' }),
+    at('2026-10-19T13:03:00Z', 'turn_end', { sessionId: 's2', durationMs: 3 * MIN }),
   ]
   expect(summarize(events, { idleCapMs: 5 * MIN }).modes).toEqual([
     { mode: 'plan', ms: 7 * MIN },
     { mode: 'auto', ms: 3 * MIN },
     { mode: 'unknown', ms: 3 * MIN },
+  ])
+})
+
+test('sessions at once count once, the stretch going to the one you last turned to', () => {
+  const hub = { sessionId: 's2', cwd: '/code/hub', project: 'hub' }
+  const events = [
+    // terra works from 12:00 to 12:30, hub from 12:10 on, typed into at 12:09
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    at('2026-10-19T12:30:00Z', 'turn_end', { durationMs: 30 * MIN }),
+    at('2026-10-19T12:10:00Z', 'prompt', { ...hub, typingMs: MIN }),
+    at('2026-10-19T12:30:00Z', 'turn_end', { ...hub, durationMs: 20 * MIN }),
+    // a notification isn't you turning back to terra
+    at('2026-10-19T12:20:00Z', 'prompt', { origin: 'task-notification', midTurn: true }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN })
+  expect(s.totalMs).toBe(30 * MIN)
+  expect(s.days.map(d => [d.ms, d.projects])).toEqual([[30 * MIN, { terra: 9 * MIN, hub: 21 * MIN }]])
+  expect(s.projects).toEqual([
+    { project: 'hub', ms: 21 * MIN },
+    { project: 'terra', ms: 9 * MIN },
+  ])
+  expect(s.sessions.map(x => [x.sessionId, x.activeMs])).toEqual([
+    ['s2', 21 * MIN],
+    ['s1', 9 * MIN],
+  ])
+  // with neither turned to, they split it
+  const quiet = events.filter(e => e.event === 'turn_end')
+  expect(summarize(quiet, { idleCapMs: 5 * MIN }).projects).toEqual([
+    { project: 'terra', ms: 20 * MIN },
+    { project: 'hub', ms: 10 * MIN },
   ])
 })
 

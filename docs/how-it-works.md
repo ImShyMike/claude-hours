@@ -294,6 +294,12 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   and doesn't.
 - Time is computed separately for each session and project, so a `cd` from
   one repo into another doesn't bridge them.
+- Wall-clock time counts once. A stretch several sessions were active at once
+  (three tabs, say) goes only to the one in the foreground: the one you last
+  started typing a prompt in, sent or not. One left working in another tab
+  meanwhile adds nothing then, and a notification arriving isn't you turning
+  to it. Where you hadn't typed in any of them yet, they split it evenly. A
+  session's own page still shows all of its time.
 - Typing a prompt counts too. time-track times each draft from its first
   keystroke and puts `typingMs` (pauses over 30 s left out) on the `prompt`
   line. Drafts that never get sent are logged as `draft_abandoned`. Both count

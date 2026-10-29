@@ -28,20 +28,42 @@ const MAX_PEOPLE = 50
 type Kept = { key: string; ever: AllTime; whole?: Summary }
 const kept = new WeakMap<Db, Map<number, Kept>>()
 
-// and when they do, it's mostly one session, the one being worked in. Each
-// session's own all time is kept for as long as history.ts keeps its events
-// (the same array until it changes), by zone and idle cap, and the person's
-// is those added up
-const ofSession = new WeakMap<Event[], Map<string, AllTime>>()
+// and when they do, it's mostly one session, the one being worked in.
+// Sessions only take time from each other where they ran at once (only the
+// one in the foreground counts then), so all time is worked out per cluster
+// of sessions that overlap, kept for as long as history.ts keeps their events
+// (the same arrays until one changes), by zone and idle cap, and the
+// person's is those added up
+type Cluster = { members: Event[][]; known: Map<string, AllTime> }
+const ofCluster = new WeakMap<Event[], Cluster>()
 
-function sessionAllTime(events: Event[], options: { idleCapMs: number; tz?: string }) {
+// sessions grouped where their stretches overlap, each group oldest first
+function clusters(sessions: Event[][]): Event[][][] {
+  const groups: Event[][][] = []
+  let end = -Infinity
+  for (const events of [...sessions].sort((a, b) => boundsOf(a).start - boundsOf(b).start)) {
+    const bounds = boundsOf(events)
+    if (groups.length && bounds.start < end) {
+      groups.at(-1)!.push(events)
+      end = Math.max(end, bounds.end)
+    } else {
+      groups.push([events])
+      end = bounds.end
+    }
+  }
+  return groups
+}
+
+function clusterAllTime(members: Event[][], options: { idleCapMs: number; tz?: string }) {
   const key = `${options.tz}|${options.idleCapMs}`
-  const known = ofSession.get(events) ?? new Map<string, AllTime>()
-  ofSession.set(events, known)
-  let ever = known.get(key)
+  let cluster = ofCluster.get(members[0]!)
+  if (!cluster || cluster.members.length !== members.length || cluster.members.some((events, i) => events !== members[i])) {
+    ofCluster.set(members[0]!, (cluster = { members, known: new Map() }))
+  }
+  let ever = cluster.known.get(key)
   if (!ever) {
-    const { projects, days, sessions } = summarize(events, options)
-    known.set(key, (ever = { projects, days, sessions }))
+    const { projects, days, sessions } = summarize(members.flat(), options)
+    cluster.known.set(key, (ever = { projects, days, sessions }))
   }
   return ever
 }
@@ -52,7 +74,7 @@ const nextDay = (day: string) => {
   return new Date(Date.UTC(y!, m! - 1, d! + 1)).toISOString().slice(0, 10)
 }
 
-// sessions' all times as one: projects and days summed, the days between
+// clusters' all times as one: projects and days summed, the days between
 // them filled in as summarize does
 function added(parts: AllTime[]): AllTime {
   const projects = new Map<string, number>()
@@ -91,7 +113,7 @@ function allTime(
   kept.set(db, people)
   let entry = people.get(personId)
   if (entry?.key !== key) {
-    const ever = timed(timing, 'ever', () => added([...sessions.values()].map(events => sessionAllTime(events, options))))
+    const ever = timed(timing, 'ever', () => added(clusters([...sessions.values()]).map(members => clusterAllTime(members, options))))
     entry = { key, ever }
   }
   people.delete(personId)

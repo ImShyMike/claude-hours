@@ -532,6 +532,70 @@ function dayRange(from: number, to: number, clock: Clock) {
   return days
 }
 
+// One session's time in a window: its projects' intervals, its active time
+// as one (in time order), its modes, and when you turned to it
+type Part = { sessionId: string; inside: [string, Interval[]][]; active: Interval[]; changes: { at: number; mode: string }[]; turnedTo: number[] }
+
+// The moments you turned to a session, in time order: when you started typing
+// a prompt you sent or gave up on. Notifications and skill bodies aren't you
+function turnedTo(events: Event[]): number[] {
+  return events
+    .filter(e => (e.event === 'prompt' && (e.origin === undefined || e.origin === 'composer') && !e.isMeta) || e.event === 'draft_abandoned')
+    .map(e => time(e) - (Number(e.typingMs) || 0))
+    .sort((a, b) => a - b)
+}
+
+// Wall-clock time counts once. A stretch several sessions were active in goes
+// to the one in the foreground, the one you last turned to, so a session left
+// working while you write in another adds nothing then. Where none of them
+// has been turned to yet, they split it evenly. Each part's pieces, in time
+// order, with the share of each it gets
+function foreground(parts: Part[]): [Interval, number][][] {
+  const owned: [Interval, number][][] = parts.map(() => [])
+  // 1 and -1 open and close a session's active time, 0 is a turn to it
+  const points: [at: number, part: number, step: 1 | -1 | 0][] = []
+  for (const [i, part] of parts.entries()) {
+    for (const [start, end] of part.active) points.push([start, i, 1], [end, i, -1])
+    for (const at of part.turnedTo) points.push([at, i, 0])
+  }
+  points.sort((a, b) => a[0] - b[0])
+  const open = new Set<number>()
+  const last = parts.map(() => -Infinity)
+  let prev = -Infinity
+  for (const [at, i, step] of points) {
+    if (at > prev && open.size) {
+      let latest = -Infinity
+      for (const j of open) latest = Math.max(latest, last[j]!)
+      const front = [...open].filter(j => last[j] === latest)
+      for (const j of front) {
+        const pieces = owned[j]!
+        const before = pieces.at(-1)
+        // a stretch it keeps goes on the piece before it
+        if (before && before[0][1] === prev && before[1] === 1 / front.length) before[0][1] = at
+        else pieces.push([[prev, at], 1 / front.length])
+      }
+    }
+    prev = at
+    if (step === 0) last[i] = at
+    else if (step === 1) open.add(i)
+    else open.delete(i)
+  }
+  return owned
+}
+
+// where intervals (in time order) overlap weighted pieces (in time order too),
+// each overlap with its piece's weight
+function* weighted(intervals: Interval[], pieces: [Interval, number][]): Generator<[Interval, number]> {
+  let j = 0
+  for (const interval of intervals) {
+    while (j < pieces.length && pieces[j]![0][1] <= interval[0]) j++
+    for (let k = j; k < pieces.length && pieces[k]![0][0] < interval[1]; k++) {
+      const piece = clip(interval, pieces[k]![0][0], pieces[k]![0][1])
+      if (piece) yield [piece, pieces[k]![1]]
+    }
+  }
+}
+
 const inc = <K>(map: Map<K, number>, key: K, by = 1) => map.set(key, (map.get(key) ?? 0) + by)
 
 export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): Summary {
@@ -550,8 +614,9 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   const inWindow = (e: Event) => time(e) >= lo && time(e) < hi
 
   // time: per session, and within it per project, so a cd between repos
-  // doesn't bridge them. A stretch two projects share counts in full for
-  // each, and once for the total, days and hours
+  // doesn't bridge them. A stretch two of a session's projects share counts
+  // in full for each, and once for the total, days and hours; one several
+  // sessions share counts only for the one in the foreground (see foreground)
   const sessionsOf = new Map<string, Event[]>()
   for (const e of valid) {
     const list = sessionsOf.get(e.sessionId)
@@ -570,40 +635,52 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   const sessionMs = new Map<string, number>()
   let totalMs = 0
   const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
+  const parts: Part[] = []
   for (const [sessionId, events] of sessionsOf) {
     // a session over before the window has nothing in it, so a short range
     // skips most of history
     if (lastAt(events) < lo) continue
     const byProject = projectSpans(events, idleCapMs)
     const inside: [string, Interval[]][] = []
-    const mine = new Map<string, number>()
     for (const [project, intervals] of byProject) {
       const k = intervals.map(kept).filter((i): i is Interval => !!i)
-      for (const [start, end] of k) {
-        inc(projectMs, project, end - start)
-        inc(mine, project, end - start)
-        spans.push({ sessionId, project, from: start, to: end })
-      }
+      for (const [start, end] of k) spans.push({ sessionId, project, from: start, to: end })
       if (k.length) inside.push([project, k])
+    }
+    const active = mergeWithin([...byProject.values()].flat(), 0)
+      .map(kept)
+      .filter((i): i is Interval => !!i)
+    parts.push({ sessionId, inside, active, changes: modesOf(events), turnedTo: turnedTo(events) })
+  }
+  // only what each session had in the foreground counts, so an hour spent
+  // across three sessions is an hour
+  const owned = foreground(parts)
+  for (const [i, { sessionId, inside, changes }] of parts.entries()) {
+    const pieces = owned[i]!
+    const mine = new Map<string, number>()
+    for (const [project, intervals] of inside) {
+      for (const [[start, end], weight] of weighted(intervals, pieces)) {
+        inc(projectMs, project, (end - start) * weight)
+        inc(mine, project, (end - start) * weight)
+      }
     }
     sessionProjects.set(sessionId, mine)
     for (const [project, interval, share] of shares(inside)) {
-      for (const [day, ms] of byDay(interval, clock)) {
-        const split = dayProjects.get(day) ?? {}
-        split[project] = (split[project] ?? 0) + ms * share
-        dayProjects.set(day, split)
+      for (const [piece, weight] of weighted([interval], pieces)) {
+        for (const [day, ms] of byDay(piece, clock)) {
+          const split = dayProjects.get(day) ?? {}
+          split[project] = (split[project] ?? 0) + ms * share * weight
+          dayProjects.set(day, split)
+        }
+        for (const [hour, ms] of byHour(piece, clock)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share * weight
       }
-      for (const [hour, ms] of byHour(interval, clock)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share
     }
-    const changes = modesOf(events)
-    for (const interval of mergeWithin([...byProject.values()].flat(), 0)) {
-      const k = kept(interval)
-      if (!k) continue
-      for (const [mode, ms] of byMode(k, changes)) inc(modeMs, mode, ms)
-      for (const [day, ms] of byDay(k, clock)) inc(dayMs, day, ms)
-      for (const [hour, ms] of byHour(k, clock)) hours[hour]! += ms
-      totalMs += k[1] - k[0]
-      inc(sessionMs, sessionId, k[1] - k[0])
+    for (const [k, weight] of pieces) {
+      for (const [mode, ms] of byMode(k, changes)) inc(modeMs, mode, ms * weight)
+      for (const [day, ms] of byDay(k, clock)) inc(dayMs, day, ms * weight)
+      for (const [hour, ms] of byHour(k, clock)) hours[hour]! += ms * weight
+      totalMs += (k[1] - k[0]) * weight
+      inc(sessionMs, sessionId, (k[1] - k[0]) * weight)
     }
   }
 
