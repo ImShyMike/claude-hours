@@ -638,12 +638,13 @@ let syncing: Promise<void> = Promise.resolve()
 let warned = false
 let version: Promise<string> | undefined
 
-function sentPath(dir: string, sessionId: string) {
-  return `${dir}/${SENT_DIR}/${sessionId}.json`
+// `base`: the folder of logs it's about, the mod's own or the backfill's
+function sentPath(dir: string, sessionId: string, base = LOG_DIR) {
+  return base === LOG_DIR ? `${dir}/${SENT_DIR}/${sessionId}.json` : `${dir}/${base}/sent/${sessionId}.json`
 }
 
-async function readSent($: EngineInterface, server: Server, dir: string, sessionId: string): Promise<Sent> {
-  const path = sentPath(dir, sessionId)
+async function readSent($: EngineInterface, server: Server, dir: string, sessionId: string, base = LOG_DIR): Promise<Sent> {
+  const path = sentPath(dir, sessionId, base)
   const fresh: Sent = { v: 2, url: server.url }
   if (!(await $.fs.exists(path).catch(() => false))) return fresh
   try {
@@ -726,9 +727,9 @@ async function sendRuns($: EngineInterface, server: Server, runs: RunOut[]) {
 // Sends one stream past what sent/ says the hub holds, a request at a time,
 // until it's all in. A hub that holds less than that (it lost rows, or the
 // file was sent from elsewhere) starts the stream over once: it skips what
-// it has
-async function pushStream($: EngineInterface, server: Server, dir: string, sessionId: string, sent: Sent, kind: Kind) {
-  const path = `${dir}/${LOG_DIR}/${kind}/${sessionId}.jsonl`
+// it has. `base` is the folder the stream's file is in (the backfill's, say)
+async function pushStream($: EngineInterface, server: Server, dir: string, sessionId: string, sent: Sent, kind: Kind, base = LOG_DIR) {
+  const path = `${dir}/${base}/${kind}/${sessionId}.jsonl`
   let restarted = false
   for (;;) {
     const at = sent[kind] ?? { lines: 0, acked: 0 }
@@ -760,7 +761,7 @@ async function pushStream($: EngineInterface, server: Server, dir: string, sessi
       restarted = true
       delete sent[kind]
     } else sent[kind] = kind === 'drafts' ? { lines: at.lines + lines.length, acked } : { lines: at.lines + lines.length, run, header, acked }
-    await $.fs.write(sentPath(dir, sessionId), JSON.stringify(sent))
+    await $.fs.write(sentPath(dir, sessionId, base), JSON.stringify(sent))
   }
 }
 
@@ -853,7 +854,7 @@ function sweep($: EngineInterface) {
 // the token once someone does, then sends everything not sent yet. A login
 // command copied from the hub's settings carries a code approved already,
 // swapped for the token straight away
-const USAGE = 'usage: /time-track login <hub url> [code] | status | stats | ignore | statusline | update | logout'
+const USAGE = 'usage: /time-track login <hub url> [code] | status | stats | ignore | statusline | backfill [send] | update | logout'
 // the newest login, so starting another stops the last one's poll
 let loginId = 0
 
@@ -1077,6 +1078,58 @@ async function updateMod($: EngineInterface) {
   return `updated ${$.plugin.name}. new sessions load it`
 }
 
+// Sessions from before the mod, rebuilt from Claude Code's own transcripts by
+// backfill.py beside this folder's hooks (python3, which the installer needs
+// anyway) into analytics/backfill, each run's header saying backfill. Only
+// counted at first; `send` sends them the way a session's own rows go, with
+// a sent/ of their own
+const BACKFILL_DIR = `${LOG_DIR}/backfill`
+const BACKFILL_TIMEOUT_MS = 10 * 60_000
+type Backfilled = { written: number; logged: number; live: number; ms: number; sessions: string[] }
+
+async function backfill($: EngineInterface, arg: string) {
+  if (arg && arg !== 'send') return USAGE
+  const [dir, configDir] = await Promise.all([homeDir($), $.env.get('CLAUDE_CONFIG_DIR')])
+  const server = await serverOf($, dir)
+  if (arg === 'send' && !server) return `not logged in, so there's nowhere to send them. ${USAGE}`
+  const run = await $.process
+    .run(['python3', `${$.plugin.root}/backfill.py`, `${dir}/${BACKFILL_DIR}`], {
+      env: { HOME: dir, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) },
+      timeoutMs: BACKFILL_TIMEOUT_MS,
+    })
+    .catch(err => err as Error)
+  if (run instanceof Error) return `backfill needs python3, which didn't run (${run.message})`
+  if (run.exitCode !== 0) return `backfill failed: ${(run.stderr.trim() || `python3 exited ${run.exitCode}`).slice(-300)}`
+  let found: Backfilled
+  try {
+    found = JSON.parse(run.stdout)
+  } catch {
+    return `backfill answered something odd: ${run.stdout.slice(0, 200)}`
+  }
+  const skipped = [found.logged && `${found.logged} the mod has already`, found.live && `${found.live} still going`].filter(Boolean)
+  const count = (n: number, what = 'session') => `${n} ${what}${n === 1 ? '' : 's'}`
+  if (arg !== 'send') {
+    if (!found.sessions.length) return 'no sessions from before time-track left in your transcripts'
+    return [
+      `rebuilt ${count(found.sessions.length)} from before time-track out of your transcripts, roughly ${hm(found.ms)} of work${skipped.length ? ` (left out: ${skipped.join(', ')})` : ''}`,
+      `typing isn't in a transcript, so they count a little under what the mod would have. they're in ~/${BACKFILL_DIR}`,
+      server
+        ? `/time-track backfill send sends them to ${server.url}, marked as backfilled`
+        : `log in with /time-track login, then /time-track backfill send sends them`,
+    ].join('\n')
+  }
+  let done = 0
+  try {
+    for (const sessionId of found.sessions) {
+      await pushStream($, server!, dir, sessionId, await readSent($, server!, dir, sessionId, BACKFILL_DIR), 'events', BACKFILL_DIR)
+      done++
+    }
+  } catch (err) {
+    return `sent ${done} of ${count(found.sessions.length, 'backfilled session')}, then: ${err instanceof Error ? err.message : String(err)}. run it again to go on`
+  }
+  return `sent ${count(found.sessions.length, 'backfilled session')} to ${server!.url}`
+}
+
 // forgets the token here and asks the hub to forget it too
 async function logout($: EngineInterface) {
   loginId++
@@ -1177,6 +1230,7 @@ async function runCommand($: EngineInterface, args: string) {
   if (verb === 'ignore') return toggleIgnore($)
   if (verb === 'update') return updateMod($)
   if (verb === 'statusline') return toggleStatusLine($)
+  if (verb === 'backfill') return backfill($, arg)
   return USAGE
 }
 
@@ -1384,7 +1438,7 @@ export const register: Register = on => {
       .register({
         name: 'time-track',
         description: 'Log in to a claude-hours hub to send it your analytics',
-        argumentHint: 'login <hub url> [code] | status | stats | ignore | statusline | update | logout',
+        argumentHint: 'login <hub url> [code] | status | stats | ignore | statusline | backfill [send] | update | logout',
       })
       .catch(err => $.ui.log(`${$.plugin.name}: ${String(err)}`))
     const sessionId = await $.session.id()

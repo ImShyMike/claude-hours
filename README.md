@@ -30,6 +30,7 @@ curl -fsSL https://claude-hours.k.hackclub.dev/install.sh | sh
 | `/time-track stats`                 | today, the last 7 days (with your top projects) and all time          |
 | `/time-track statusline`            | shows today's time on a line under the prompt, or hides it again      |
 | `/time-track ignore`                | stops logging the repo you're in; run it again to start again         |
+| `/time-track backfill [send]`       | finds sessions from before it in your transcripts; `send` uploads     |
 | `/time-track update`                | gets the server's newest mod (a toast tells you when there is one)    |
 | `/time-track login <server> [code]` | connects this computer; without a code it gives you a link to approve |
 | `/time-track logout`                | disconnects this computer, here and on the server                     |
@@ -40,6 +41,9 @@ curl -fsSL https://claude-hours.k.hackclub.dev/install.sh | sh
   text, and file contents are never logged at all.
 - Local paths are: the folder each session runs in and the files tools touch.
 - Nothing leaves your computer until you log in to a server.
+- `/time-track backfill` reads Claude Code's transcripts on your computer and
+  keeps the same counts from them, never their text. Nothing it finds goes up
+  until you run `/time-track backfill send`.
 - `/time-track ignore` leaves a whole repo out, and
   `~/.claude/analytics/config.json` can leave out single files
   ([how](docs/how-it-works.md#choosing-which-files-get-logged)).

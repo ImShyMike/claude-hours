@@ -32,6 +32,7 @@ Running Claude Code inside WSL works like Linux.
      hooks/register.ts            # every hook; the whole mod
      hooks/register.test.ts       # tests (claude plugin test)
      types/index.d.ts             # the mod's own state type
+     backfill.py                  # rebuilds older sessions from transcripts (/time-track backfill)
      TODO.md                      # what it logs, field by field, and open todos
    ```
 
@@ -205,6 +206,38 @@ anyone's. How the mod's rows get there is the
 Session files from before the login, or from another computer, can go up
 with `HUB=<url> TOKEN=hct_... bun scripts/import.ts [dir]`; the hub keeps each
 row once, so sending something twice is fine.
+
+### Backfilling from transcripts
+
+Sessions from before time-track was installed can be rebuilt from Claude
+Code's own transcripts (`~/.claude/projects`). `/time-track backfill` runs the
+mod's `backfill.py` (python3, which the installer needs anyway), which writes
+them as session files to `~/.claude/analytics/backfill/events` and says how
+many it found; `/time-track backfill send` then sends them like the mod's own
+rows, keeping track in `backfill/sent`. It only reaches back as far as the
+transcripts do, `cleanupPeriodDays` (30 by default), and leaves out sessions
+still going. A file it wrote stays once its transcript is gone, and the same
+transcripts give the same rows, so running it again is fine.
+
+A transcript has each turn's `durationMs`, the tool calls, compactions,
+interrupts, the permission mode and the tokens, so `backfill.py` turns it into
+the rows the mod would have logged. `config.json`'s `ignore` and file globs
+apply the same way, and only counts come out, never text. What it can't have:
+typing (no drafts, so no `typingMs`), when the session was opened and closed,
+permission dialogs inside a call (they stay part of it), and files a Bash
+command changed. So a backfilled session comes out a little under what the mod
+would have counted, most of it the typing. A turn that never ends (an Esc
+right after sending, a call turned down) is an `interrupt` up to its last work
+before a silence over 15 minutes. A call turned down is `denied`, where the
+mod's own rows say `error`.
+
+Each backfilled run's header says `backfill: 1`, its events carry
+`backfill: true` once decoded, and the session page says it was rebuilt. A
+session the mod logged too is cut where the mod's log begins (less 2 s, for
+the prompt that woke it), twice over: `backfill.py` stops there when the mod's
+file is on this computer, and `decodeSession` drops a backfilled row from
+there on whenever the session has a run of the mod's own, so a backfill made
+after `uninstall --purge` doesn't count anything twice either.
 
 ### Draft timelines
 

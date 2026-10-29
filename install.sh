@@ -60,7 +60,7 @@ case "${1:-install}" in
     if [ -n "$hub" ]; then
       # the same files the hub's /install route hands out
       # (release.json names this build, for /time-track update)
-      for file in .claude-plugin/plugin.json hooks/hooks.json hooks/register.ts types/index.d.ts tsconfig.json .claude-plugin/release.json; do
+      for file in .claude-plugin/plugin.json hooks/hooks.json hooks/register.ts types/index.d.ts tsconfig.json backfill.py .claude-plugin/release.json; do
         fetch "mod/$file"
       done
       rm -rf "$mod"

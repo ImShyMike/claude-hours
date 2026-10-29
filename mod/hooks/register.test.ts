@@ -68,6 +68,7 @@ const setup = (on: On) => {
     '/tmp/scratch/ts-clone': 'https://github.com/hackclub/telescreen.git',
   }
   let sweepOutput = ''
+  let backfill: { exitCode: number; stdout: string; stderr: string } | Error = { exitCode: 0, stdout: '', stderr: '' }
   // the session's transcript, for the grep that finds its compactions
   let transcript: Record<string, unknown>[] = []
   let cwd = '/proj'
@@ -123,6 +124,13 @@ const setup = (on: On) => {
     if (cmd === 'sh' && e.argv[2]?.includes('umask 077')) files.set(e.argv[4]!, e.init?.stdin ?? '')
     if (cmd === 'uname') stdout = 'miggys-laptop\n'
     let exitCode = 0
+    // backfill.py: what it prints, or how it fails
+    if (cmd === 'python3') {
+      if (backfill instanceof Error) throw backfill
+      return {
+        value: { exitCode: backfill.exitCode, stdout: backfill.stdout, stderr: backfill.stderr, isStdoutTruncated: false, isStderrTruncated: false },
+      }
+    }
     // gitignored paths are whatever sits under a build/ or .cache/ folder
     if (cmd === 'git' && e.argv[3] === 'check-ignore') {
       stdout = (e.init?.stdin ?? '')
@@ -179,6 +187,7 @@ const setup = (on: On) => {
     timelineFiles,
     setFind: (out: string) => (findOutput = out),
     setSweep: (out: string) => (sweepOutput = out),
+    setBackfill: (out: typeof backfill) => (backfill = out),
     setTranscript: (entries: Record<string, unknown>[]) => (transcript = entries),
     now: () => now,
     cd: (dir: string) => (cwd = dir),
@@ -1628,4 +1637,60 @@ test("today's time sits under the prompt once turned on, asked at most once a mi
   await command($, 'statusline')
   await command($, 'logout')
   expect(status.line).toBeUndefined()
+})
+
+const BACKFILL = `${DIR}/backfill`
+const backfilled = (sessions: string[], extra = {}) => ({
+  exitCode: 0,
+  stdout: `${JSON.stringify({ written: sessions.length, logged: 2, live: 1, empty: 0, ms: 5_400_000, dir: BACKFILL, sessions, ...extra })}\n`,
+  stderr: '',
+})
+
+test('backfill runs backfill.py into its own folder and says what it found', async ($, on) => {
+  const { runs, setBackfill } = setup(on)
+  hub(on)
+  setBackfill(backfilled(['old-1', 'old-2']))
+  const { text } = await command($, 'backfill')
+  const run = runs.find(argv => argv[0] === 'python3')!
+  expect(run.slice(1)).toEqual([expect.stringMatching(/\/backfill\.py$/), BACKFILL])
+  expect(text).toContain('rebuilt 2 sessions from before time-track out of your transcripts, roughly 1h 30m of work')
+  expect(text).toContain('left out: 2 the mod has already, 1 still going')
+  expect(text).toContain('log in with /time-track login')
+
+  setBackfill(backfilled([]))
+  expect((await command($, 'backfill')).text).toBe('no sessions from before time-track left in your transcripts')
+  expect((await command($, 'backfill now')).text).toStartWith('usage:')
+})
+
+test("backfill says when python3 won't run or the script fails", async ($, on) => {
+  const { setBackfill } = setup(on)
+  setBackfill(new Error('spawn python3 ENOENT'))
+  expect((await command($, 'backfill')).text).toStartWith("backfill needs python3, which didn't run (")
+  setBackfill({ exitCode: 1, stdout: '', stderr: 'backfill: no space left\n' })
+  expect((await command($, 'backfill')).text).toBe('backfill failed: backfill: no space left')
+})
+
+test('backfill send sends the backfilled runs, once, with sent/ of their own', async ($, on) => {
+  const { files, setBackfill } = setup(on)
+  const { stored, posts } = hub(on)
+  expect((await command($, 'backfill send')).text).toContain('not logged in')
+
+  files.set(CONFIG, JSON.stringify(SERVER))
+  const old =
+    '{"v":1,"event":"session","start":5,"cwd":"/proj","backfill":1}\n{"t":0,"event":"prompt","words":2}\n{"t":9,"event":"turn_end","durationMs":8}\n'
+  files.set(`${BACKFILL}/events/old-1.jsonl`, old)
+  setBackfill(backfilled(['old-1']))
+  expect((await command($, 'backfill')).text).toContain('/time-track backfill send sends them to https://hub.test, marked as backfilled')
+  expect(posts()).toHaveLength(0)
+
+  expect((await command($, 'backfill send')).text).toBe('sent 1 backfilled session to https://hub.test')
+  expect(posts()[0]!.body.runs).toEqual([
+    { session: 'old-1', stream: 'events', run: 5, header: expect.objectContaining({ backfill: 1 }), from: 0, rows: [...runsIn(old).values()][0] },
+  ])
+  expect(stored.get('old-1/events/5')).toHaveLength(2)
+  expect(JSON.parse(files.get(`${BACKFILL}/sent/old-1.json`)!)).toMatchObject({ events: { lines: 3, run: 5, acked: 2 } })
+  expect(files.has(`${DIR}/sent/old-1.json`)).toBe(false)
+  // again, nothing new to send
+  await command($, 'backfill send')
+  expect(posts()).toHaveLength(1)
 })

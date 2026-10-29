@@ -14,6 +14,7 @@ const INSTALLER: Record<string, string> = {
   'mod/hooks/hooks.json': 'mod/hooks/hooks.json',
   'mod/hooks/register.ts': 'mod/hooks/register.ts',
   'mod/types/index.d.ts': 'mod/types/index.d.ts',
+  'mod/backfill.py': 'mod/backfill.py',
   'mod/tsconfig.json': 'mod/tsconfig.json',
   'settings.py': 'scripts/settings.py',
 }
