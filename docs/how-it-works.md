@@ -228,7 +228,8 @@ permission dialogs inside a call (they stay part of it), and files a Bash
 command changed. So a backfilled session comes out a little under what the mod
 would have counted, most of it the typing. A turn that never ends (an Esc
 right after sending, a call turned down) is an `interrupt` up to its last work
-before a silence over 15 minutes. A call turned down is `denied`, where the
+before a silence over 15 minutes, and so is one Esc'd after such a silence (a
+request left hanging while the laptop slept). A call turned down is `denied`, where the
 mod's own rows say `error`.
 
 Each backfilled run's header says `backfill: 1`, its events carry

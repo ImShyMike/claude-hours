@@ -205,6 +205,32 @@ test('an Esc says so, and the turn_duration after it is the same turn', () => {
   expect(turns(events('s1')).map(e => [e.event, e.durationMs])).toEqual([['interrupt', 5000]])
 })
 
+test('an Esc after a long silence ends the turn at its last work, not days later', () => {
+  const { terra, transcript, run, events } = setup()
+  const esc = (sec: number) =>
+    typed(terra, sec, [{ type: 'text', text: '[Request interrupted by user]' }], { origin: undefined, promptSource: undefined })
+  transcript(
+    's1',
+    file(
+      typed(terra, 0, 'go'),
+      useTool(terra, 10, 't1', 'Bash', { command: 'ls' }),
+      result(terra, 12, 't1'),
+      // the laptop slept with the request open, and the Esc came days later
+      esc(5 * 86_400),
+      typed(terra, 5 * 86_400 + 60, 'again'),
+      useTool(terra, 5 * 86_400 + 70, 't2', 'Bash', { command: 'ls' }),
+      // a call whose result only came back after a sleep
+      result(terra, 6 * 86_400, 't2'),
+      esc(6 * 86_400 + 1),
+    ),
+  )
+  run()
+  expect(turns(events('s1')).map(e => [e.event, e.ts, e.durationMs])).toEqual([
+    ['interrupt', at(12), 12_000],
+    ['interrupt', at(5 * 86_400 + 70), 10_000],
+  ])
+})
+
 test('slash commands count once Claude answers them, local ones never', () => {
   const { terra, transcript, run, events } = setup()
   const plain = { origin: undefined, promptSource: undefined }

@@ -357,8 +357,8 @@ class Session:
 
         # A turn cut short leaves no line saying so when it was an Esc right
         # after sending or a call turned down: it just never ends. It's over at
-        # its last work, found at the next prompt sent between turns or the
-        # transcript's end
+        # its last work, found at the next prompt sent between turns, an Esc
+        # or the transcript's end
         def abandon_turn():
             if state["turn_from"] is not None:
                 last = state["last_at"]
@@ -480,10 +480,12 @@ class Session:
                 worked(at, cwd)
                 continue
             text = text_of(content)
+            # an Esc ends the turn at its last work too: one pressed days after
+            # the request hung isn't days of work
             if text.startswith(INTERRUPTED):
                 if state["turn_from"] is not None:
-                    push(at, cwd, "interrupt", [("reason", "aborted"), ("durationMs", at - state["turn_from"]), ("usage", tokens.take())])
-                state["turn_from"] = None
+                    worked(at, cwd)
+                abandon_turn()
                 state["interrupted"] = True
                 continue
             if entry.get("isCompactSummary") or LOCAL_OUTPUT.match(text):
