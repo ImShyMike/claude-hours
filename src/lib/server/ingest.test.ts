@@ -12,8 +12,11 @@ import { digest } from './digest'
 import { revokeDevice, sessionDevices } from './devices'
 import { draftsText, eventsOf, serverTiming, sessionTexts, type Timing } from './history'
 import { ingest, parseBatch, type RunIn } from './ingest'
-import { setIdleCap } from './settings'
+import { DEFAULT_IDLE_MIN, setIdleCap } from './settings'
 import { quickStats } from './stats'
+
+// the idle cap someone who hasn't picked one is counted with
+const CAP = DEFAULT_IDLE_MIN * 60_000
 
 async function withPerson() {
   const db = await testDb()
@@ -60,11 +63,11 @@ async function expectRoundTrip(dir: string) {
   // and the hub's summary is the one the browser worked out from them, in
   // another zone than this machine's too
   for (const tz of [undefined, 'Asia/Kolkata']) {
-    const ever = summarize(local, { idleCapMs: 5 * 60_000, tz })
+    const ever = summarize(local, { idleCapMs: CAP, tz })
     const from = ever.sessions.at(-1)!.start
     const to = from + 3 * 24 * 3600_000
     const got = await digest(db, person, { from, to, tz, spans: true })
-    expect(got.range).toEqual(summarize(local, { from, to, idleCapMs: 5 * 60_000, tz }))
+    expect(got.range).toEqual(summarize(local, { from, to, idleCapMs: CAP, tz }))
     expect(got.days).toEqual(ever.days)
     expect(got.projects).toEqual(ever.projects)
     expect(got.before).toBeUndefined()
@@ -77,7 +80,7 @@ async function expectRoundTrip(dir: string) {
     // session's spans start before its firstAt or end after its lastAt
     for (const s of ever.sessions) {
       const events = local.filter(e => e.sessionId === s.sessionId)
-      for (const [start, end] of [...projectSpans(events, 5 * 60_000).values()].flat()) {
+      for (const [start, end] of [...projectSpans(events, CAP).values()].flat()) {
         expect(start).toBeGreaterThanOrEqual(firstAt(events))
         expect(end).toBeLessThanOrEqual(lastAt(events))
       }
@@ -85,7 +88,7 @@ async function expectRoundTrip(dir: string) {
     // and check it where sessions start and end too
     for (const s of ever.sessions.slice(0, 20)) {
       for (const at of [s.start - 3600_000, s.start + 60_000, s.end - 60_000]) {
-        const earlier = { from: at - shift, to: at, idleCapMs: 5 * 60_000, tz }
+        const earlier = { from: at - shift, to: at, idleCapMs: CAP, tz }
         expect((await digest(db, person, { from: at, to: at + shift, tz })).before).toBe(summarize(local, earlier).totalMs)
       }
     }
@@ -94,7 +97,7 @@ async function expectRoundTrip(dir: string) {
     const newest = ever.sessions[0]!.start
     for (const late of [newest - 2 * 24 * 3600_000, newest + 30 * 24 * 3600_000]) {
       const window = { from: late, to: late + 3 * 24 * 3600_000 }
-      expect((await digest(db, person, { ...window, tz, spans: true })).range).toEqual(summarize(local, { ...window, idleCapMs: 5 * 60_000, tz }))
+      expect((await digest(db, person, { ...window, tz, spans: true })).range).toEqual(summarize(local, { ...window, idleCapMs: CAP, tz }))
     }
   }
 }
@@ -229,7 +232,7 @@ describe('digest', () => {
     expect(serverTiming(timing)).toMatch(
       /^runs;dur=[\d.]+, rows;dur=[\d.]+;desc="1 of 1 sessions, 1 runs", decode;dur=[\d.]+, ever;dur=[\d.]+, sum;dur=[\d.]+;desc="2 events"$/,
     )
-    expect(first.idleCapMs).toBe(5 * 60_000)
+    expect(first.idleCapMs).toBe(CAP)
     // all of it again, with nothing new, is the summary already summed
     const again: Timing = new Map()
     expect((await digest(db, person, {}, again)).range).toEqual(first.range)
@@ -240,12 +243,12 @@ describe('digest', () => {
     expect(second.range.prompts.count).toBe(3)
     expect(second.range.sessions.map(s => s.sessionId).sort()).toEqual(['s1', 's2'])
 
-    // the 3 minutes between s1's prompts count under the 5 min cap, not under 2
+    // the 3 minutes between s1's prompts count under a 5 min cap, not the default 2
     expect(await setIdleCap(db, person, 7)).toBe(false)
-    expect(await setIdleCap(db, person, 2)).toBe(true)
+    expect(await setIdleCap(db, person, 5)).toBe(true)
     const third = await digest(db, person, {})
-    expect(third.idleCapMs).toBe(2 * 60_000)
-    expect(third.range.totalMs).toBeLessThan(second.range.totalMs)
+    expect(third.idleCapMs).toBe(5 * 60_000)
+    expect(third.range.totalMs).toBeGreaterThan(second.range.totalMs)
   })
 
   test('counting only prompts is kept apart from counting it all, with the same colors', async () => {
@@ -259,12 +262,27 @@ describe('digest', () => {
     const all = await digest(db, person, {})
     const prompts = await digest(db, person, { counting: 'prompts' })
     expect(all.range.totalMs).toBe(20 * 60_000)
-    expect(prompts.range.totalMs).toBe(60_000)
-    expect(prompts.days.reduce((sum, d) => sum + d.ms, 0)).toBe(60_000)
+    // its minute of typing and the gap before it, up to the cap
+    expect(prompts.range.totalMs).toBe(60_000 + CAP)
+    expect(prompts.days.reduce((sum, d) => sum + d.ms, 0)).toBe(60_000 + CAP)
     expect(prompts.projects).toEqual(all.projects)
     // and neither is handed the other's summary of all of it
     expect((await digest(db, person, {})).range).toEqual(all.range)
     expect((await digest(db, person, { counting: 'prompts' })).range).toEqual(prompts.range)
+  })
+
+  test('counting only prompts, a session soon after another takes its first gap from it, in the calendar too', async () => {
+    const { db, person } = await withPerson()
+    // one prompt typed from 1 s to 61 s, then another session's typed from
+    // half a cap later
+    const next = 61_000 + CAP / 2 + 30_000
+    await ingest(db, person, [
+      run(0, [{ t: 60_000, event: 'prompt', origin: 'composer', typingMs: 60_000 }]),
+      run(0, [{ t: 0, event: 'prompt', origin: 'composer', typingMs: 30_000 }], { session: 's2', run: next, header: { ...header, start: next } }),
+    ])
+    const got = await digest(db, person, { counting: 'prompts' })
+    expect(got.range.totalMs).toBe(CAP + 60_000 + CAP / 2 + 30_000)
+    expect(got.days.reduce((sum, d) => sum + d.ms, 0)).toBe(got.range.totalMs)
   })
 
   test('a time zone that does not exist is a RangeError', async () => {

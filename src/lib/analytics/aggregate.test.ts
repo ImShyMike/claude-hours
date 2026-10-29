@@ -32,7 +32,7 @@ test('a long turn counts in full, idle gaps past the cap do not', () => {
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(41 * MIN)
 })
 
-test('counting only prompts, their typing is the time, merged within the cap like Hackatime heartbeats', () => {
+test('counting only prompts, each typing stretch also gets the gap before it, up to the cap, as on Hackatime', () => {
   const events = [
     // 2 min typing, then Claude works 20 min with a tool call in it
     at('2026-10-19T12:02:00Z', 'prompt', { origin: 'composer', typingMs: 2 * MIN }),
@@ -40,20 +40,42 @@ test('counting only prompts, their typing is the time, merged within the cap lik
     at('2026-10-19T12:22:00Z', 'turn_end', { durationMs: 20 * MIN, usage: { model: 'claude-opus-5-5' } }),
     // a notification isn't someone prompting, so it bridges nothing
     at('2026-10-19T12:24:00Z', 'prompt', { origin: 'task-notification' }),
-    // 1 min typing 4 min after the last Enter: the gap counts, as on Hackatime
+    // 1 min typing 4 min after the last Enter: the gap counts
     at('2026-10-19T12:07:00Z', 'draft_abandoned', { endedAt: '2026-10-19T12:07:00Z', typingMs: MIN }),
     // a backfilled prompt has no typing, only the moment it was sent
     at('2026-10-19T12:26:00Z', 'prompt', { origin: 'composer' }),
+    // and a minute's typing in another repo 3 min later: that gap goes to hub
+    at('2026-10-19T12:30:00Z', 'prompt', { origin: 'composer', typingMs: MIN, cwd: '/code/hub', project: 'hub' }),
   ]
   const all = summarize(events, { idleCapMs: 5 * MIN })
   const prompts = summarize(events, { idleCapMs: 5 * MIN, counting: 'prompts' })
-  expect(all.totalMs).toBe(26 * MIN)
-  // 12:00 to 12:07, then 12:26 alone (19 min after, past the cap)
-  expect(prompts.totalMs).toBe(7 * MIN)
-  expect(prompts.projects).toEqual([{ project: 'terra', ms: 7 * MIN }])
+  expect(all.totalMs).toBe(26 * MIN + MIN)
+  // the 5 min before the first, 12:00 to 12:07, then the 5 min before
+  // 12:26 (19 min after), then hub's minute and the 3 before it; nothing
+  // after the last
+  expect(prompts.projects).toEqual([
+    { project: 'terra', ms: 17 * MIN },
+    { project: 'hub', ms: 4 * MIN },
+  ])
+  expect(prompts.totalMs).toBe(21 * MIN)
   // Claude's time by model is its turns' either way
   expect(prompts.models).toEqual(all.models)
-  expect(prompts.prompts.count).toBe(2)
+  expect(prompts.prompts.count).toBe(3)
+})
+
+test('counting only prompts, the gap before one is from the last prompt in any session', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:01:00Z', 'prompt', { origin: 'composer', sessionId: 's2', cwd: '/code/hub', project: 'hub' }),
+    at('2026-10-19T12:03:00Z', 'prompt', { origin: 'composer' }),
+  ]
+  const s = summarize(events, { idleCapMs: 2 * MIN, counting: 'prompts' })
+  // the first gets the 2 min before it, as after any long break
+  expect(s.totalMs).toBe(5 * MIN)
+  expect(s.projects).toEqual([
+    { project: 'terra', ms: 4 * MIN },
+    { project: 'hub', ms: MIN },
+  ])
 })
 
 test('a turn that asked the person something works around the wait, judged like any gap', () => {

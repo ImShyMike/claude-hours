@@ -14,8 +14,8 @@ export type Event = {
 
 // What counts as active time: everything (your prompts and Claude's work
 // around them), or only your prompts, the way Hackatime counts: each draft
-// you wrote, sent or given up, is a heartbeat over its typing, and ones
-// closer than the idle cap merge
+// you wrote, sent or given up, is a heartbeat over its typing, and also
+// counts the gap before it, up to the idle cap
 export type Counting = 'all' | 'prompts'
 
 export type Options = {
@@ -452,8 +452,17 @@ function placed([start, end]: Interval, moves: Move[] = [], home: string): [stri
 // away from the main thread's project: alongside it, the main turn already
 // covers that time. So two projects can share a stretch (each gets it in
 // full), and activeIntervals' total counts it once. Counting only prompts,
-// the rest still say where a thread was working, but make no time
+// the rest still say where a thread was working, but make no time, and the
+// prompts' typing counts as heartbeats do
 export function projectSpans(events: Event[], idleCapMs: number, counting: Counting = 'all'): Map<string, Interval[]> {
+  const raw = rawSpans(events, counting)
+  if (counting === 'prompts') return regrouped(heartbeats([...raw].flatMap(([project, intervals]) => intervals.map((i): [string, Interval] => [project, i])), idleCapMs))
+  const elsewhere = (project: string) => [...raw].flatMap(([p, intervals]) => (p === project ? [] : intervals))
+  return new Map([...raw].map(([project, intervals]) => [project, mergeWithin(intervals, idleCapMs, elsewhere(project))]))
+}
+
+// a session's stretches by project, as they are, before any gap is bridged
+function rawSpans(events: Event[], counting: Counting): Map<string, Interval[]> {
   const waits = waitsOf(events)
   const moves = movesOf(events)
   const raw = new Map<string, Interval[]>()
@@ -475,8 +484,34 @@ export function projectSpans(events: Event[], idleCapMs: number, counting: Count
       }
     }
   }
-  const elsewhere = (project: string) => [...raw].flatMap(([p, intervals]) => (p === project ? [] : intervals))
-  return new Map([...raw].map(([project, intervals]) => [project, mergeWithin(intervals, idleCapMs, elsewhere(project))]))
+  return raw
+}
+
+// As Hackatime counts: each stretch also gets the gap before it, whatever
+// came before, up to capMs. So a break still counts capMs, before the
+// stretch that ends it, and nothing runs on after the last one. The first
+// one gets capMs too, as if after a long break (Hackatime gives it none), so
+// a stretch only ever depends on what's within capMs before it. New
+// intervals, each with its key, in time order
+function heartbeats<K>(pieces: [K, Interval][], capMs: number): [K, Interval][] {
+  const led = pieces.map(([key, [start, end]]): [K, Interval] => [key, [start, end]]).sort((a, b) => a[1][0] - b[1][0])
+  // where the stretches so far reach
+  let reach = -Infinity
+  for (const [, piece] of led) {
+    if (piece[0] > reach) piece[0] = Math.max(reach, piece[0] - capMs)
+    reach = Math.max(reach, piece[1])
+  }
+  return led
+}
+
+const regrouped = (pieces: [string, Interval][]) => {
+  const byProject = new Map<string, Interval[]>()
+  for (const [project, piece] of pieces) {
+    const list = byProject.get(project)
+    if (list) list.push(piece)
+    else byProject.set(project, [piece])
+  }
+  return new Map([...byProject].map(([project, intervals]): [string, Interval[]] => [project, mergeWithin(intervals, 0)]))
 }
 
 function clip([start, end]: Interval, from: number, to: number): Interval | undefined {
@@ -624,6 +659,8 @@ export function summarize(all: Event[], { from, to, idleCapMs, counting, tz }: O
     first = Math.min(first, time(e) - leadMs(e))
     last = Math.max(last, time(e))
   }
+  // counting only prompts, the first one's gap before it too
+  if (counting === 'prompts') first -= idleCapMs
   const lo = from ?? first
   const hi = to ?? last + 1
   const inWindow = (e: Event) => time(e) >= lo && time(e) < hi
@@ -651,11 +688,32 @@ export function summarize(all: Event[], { from, to, idleCapMs, counting, tz }: O
   let totalMs = 0
   const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
   const parts: Part[] = []
+  // counting only prompts, the gap before one is from the last one in any
+  // session, as Hackatime takes it from the last heartbeat, so a session over
+  // just before the window still gives the first prompt in it its gap (one
+  // over further back gives the whole cap, so it isn't needed)
+  const reach = counting === 'prompts' ? idleCapMs : 0
+  const counted = new Map<string, Map<string, Interval[]>>()
   for (const [sessionId, events] of sessionsOf) {
     // a session over before the window has nothing in it, so a short range
     // skips most of history
-    if (lastAt(events) < lo) continue
-    const byProject = projectSpans(events, idleCapMs, counting)
+    if (lastAt(events) + reach < lo) continue
+    counted.set(sessionId, counting === 'prompts' ? rawSpans(events, counting) : projectSpans(events, idleCapMs))
+  }
+  if (counting === 'prompts') {
+    const all = [...counted].flatMap(([sessionId, byProject]) =>
+      [...byProject].flatMap(([project, intervals]) => intervals.map((i): [[string, string], Interval] => [[sessionId, project], i])),
+    )
+    const bySession = new Map<string, [string, Interval][]>()
+    for (const [[sessionId, project], i] of heartbeats(all, idleCapMs)) {
+      const list = bySession.get(sessionId)
+      if (list) list.push([project, i])
+      else bySession.set(sessionId, [[project, i]])
+    }
+    for (const sessionId of counted.keys()) counted.set(sessionId, regrouped(bySession.get(sessionId) ?? []))
+  }
+  for (const [sessionId, byProject] of counted) {
+    const events = sessionsOf.get(sessionId)!
     const inside: [string, Interval[]][] = []
     for (const [project, intervals] of byProject) {
       const k = intervals.map(kept).filter((i): i is Interval => !!i)

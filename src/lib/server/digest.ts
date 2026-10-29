@@ -39,13 +39,16 @@ const kept = new WeakMap<Db, Map<string, Kept>>()
 type Cluster = { members: Event[][]; known: Map<string, AllTime> }
 const ofCluster = new WeakMap<Event[], Cluster>()
 
-// sessions grouped where their stretches overlap, each group oldest first
-function clusters(sessions: Event[][]): Event[][][] {
+// sessions grouped where their stretches overlap, each group oldest first.
+// gap: how far apart two sessions can still change each other's time, since
+// counting only prompts, the first one in a session takes its gap (up to the
+// cap) from the last one before
+function clusters(sessions: Event[][], gap: number): Event[][][] {
   const groups: Event[][][] = []
   let end = -Infinity
   for (const events of [...sessions].sort((a, b) => boundsOf(a).start - boundsOf(b).start)) {
     const bounds = boundsOf(events)
-    if (groups.length && bounds.start < end) {
+    if (groups.length && bounds.start < end + gap) {
       groups.at(-1)!.push(events)
       end = Math.max(end, bounds.end)
     } else {
@@ -109,7 +112,7 @@ function allTime(db: Db, personId: number, key: string, sessions: Map<string, Ev
   const whose = `${personId} ${options.counting}`
   let entry = people.get(whose)
   if (entry?.key !== key) {
-    const ever = timed(timing, 'ever', () => added(clusters([...sessions.values()]).map(members => clusterAllTime(members, options))))
+    const ever = timed(timing, 'ever', () => added(clusters([...sessions.values()], gapOf(options)).map(members => clusterAllTime(members, options))))
     entry = { key, ever }
   }
   people.delete(whose)
@@ -128,8 +131,11 @@ function boundsOf(events: Event[]) {
   if (!known) bounds.set(events, (known = { start: firstAt(events), end: lastAt(events) }))
   return known
 }
-const within = (sessions: Event[][], from: number, to = Infinity) =>
-  sessions.filter(events => boundsOf(events).end >= from && boundsOf(events).start < to).flat()
+const within = (sessions: Event[][], gap: number, from: number, to = Infinity) =>
+  sessions.filter(events => boundsOf(events).end + gap >= from && boundsOf(events).start < to).flat()
+
+// how far before a stretch its time can reach, counting only prompts (summarize's heartbeats)
+const gapOf = (options: Options) => (options.counting === 'prompts' ? options.idleCapMs : 0)
 
 // tz is the viewer's IANA zone, days and hours are theirs; a zone that
 // doesn't exist throws a RangeError. spans (every active stretch) only when
@@ -151,7 +157,8 @@ export async function digest(
   // only sessions still going when a window starts can add to it, and the
   // earlier window leaves out the ones that began after it too
   const all = [...sessions.values()]
-  const events = within(all, from ?? -Infinity)
+  const gap = gapOf({ idleCapMs: cap, counting })
+  const events = within(all, gap, from ?? -Infinity)
   const sum = () => {
     const summary = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, counting, tz }))
     timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
@@ -160,7 +167,7 @@ export async function digest(
   const range = from === undefined && to === undefined ? (entry.whole ??= sum()) : sum()
   const earlier = shift ? { from: from! - shift, to: to! - shift } : undefined
   const before =
-    earlier && timed(timing, 'before', () => summarize(within(all, earlier.from, earlier.to), { ...earlier, idleCapMs: cap, counting, tz }).totalMs)
+    earlier && timed(timing, 'before', () => summarize(within(all, gap, earlier.from, earlier.to), { ...earlier, idleCapMs: cap, counting, tz }).totalMs)
   const home = new Map(ever.sessions.map(s => [s.sessionId, s.project]))
   const ids = new Set([...range.sessions.map(s => s.sessionId), ...range.spans.map(s => s.sessionId)])
   const homes = Object.fromEntries([...ids].map(id => [id, home.get(id) ?? '']))

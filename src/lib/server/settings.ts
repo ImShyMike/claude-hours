@@ -6,7 +6,7 @@ import { people, type Db } from './db/index'
 const MIN = 60_000
 // the caps someone can pick from, in minutes
 export const IDLE_CAPS = [1, 2, 5, 10, 15]
-export const DEFAULT_IDLE_MIN = 5
+export const DEFAULT_IDLE_MIN = 2
 
 // read once per person and kept, since every dashboard request needs it;
 // setting it here updates the copy (one server process, like the rate limits)

@@ -269,7 +269,7 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   the middle.
 - Moments and spans closer together than the **idle cap** merge into active
   time. Longer gaps are idle. Each person picks their own on `/settings`
-  (1, 2, 5, 10 or 15 min; 5 until they do), and their dashboard counts with
+  (1, 2, 5, 10 or 15 min; 2 until they do), and their dashboard counts with
   theirs, an admin looking at it too.
 - Waiting on you isn't Claude working: a main-thread `AskUserQuestion` or
   `ExitPlanMode` call, or a permission dialog (the turn's `waits`). Claude
@@ -311,9 +311,12 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
 - The overview can count only prompts instead (`/api/summary?time=prompts`),
   the way Hackatime counts heartbeats: each prompt you wrote and each draft
-  you gave up is a span of its typing, and ones closer than the idle cap
-  merge, so reading an answer before the next prompt counts if it's short.
-  Claude's turns, tool calls and notifications make no time then, though
+  you gave up is a span of its typing, and it also gets the gap before it
+  (from the last prompt in any session), up to the idle cap. So a break
+  still counts the cap, a gap between prompts in two repos goes to the
+  later one, and nothing counts after the last prompt. Unlike Hackatime,
+  the very first prompt gets the cap before it too, as if after a break,
+  so a range's time only ever depends on prompts near it. Claude's turns, tool calls and notifications make no time then, though
   they still say which repo a thread was in. A backfilled prompt has no
   typing, so it's just the moment it was sent. Models' time stays Claude's,
   and project colors are still ranked by all of the time.
