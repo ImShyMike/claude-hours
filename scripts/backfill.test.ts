@@ -315,6 +315,24 @@ test('a subagent is one turn of its own, its calls tagged with it', () => {
   ])
 })
 
+test("a subagent's turn ends at its last work before a long silence", () => {
+  const { terra, transcript, run, events } = setup()
+  const side = (entry: object) => ({ ...entry, isSidechain: true })
+  transcript('s1', file(typed(terra, 0, 'go'), turnEnd(terra, 30, 29_000)), {
+    ab12: file(
+      side(useTool(terra, 5, 'a1', 'Bash', { command: 'bun run dev' })),
+      // a dev server it waited on until the laptop slept, its line days later
+      side(result(terra, 3 * 86_400, 'a1')),
+      side(assistant(terra, 3 * 86_400 + 10, 'm9', [{ type: 'text', text: 'done' }])),
+    ),
+  })
+  run()
+  expect(
+    events('s1')
+      .filter(e => e.agentId && e.event === 'turn_end')
+      .map(e => [e.ts, e.durationMs]),
+  ).toEqual([[at(5), 0]])
+})
 test("stops where the mod's own log begins, and skips sessions it has whole, can't read, or are still going", () => {
   const { home, terra, transcript, run, out, written, events } = setup()
   const twice = file(typed(terra, 0, 'one'), turnEnd(terra, 10, 9000), typed(terra, 100, 'two'), turnEnd(terra, 110, 9000))

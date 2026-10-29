@@ -530,9 +530,15 @@ class Session:
             abandon_turn()
 
         # a subagent's run as one turn, from its first line to its last
+        # before a long silence (one waiting on a dev server as the laptop
+        # slept), like the main thread's
         if not main and entries:
             first = parse_ms(entries[0]["timestamp"])
-            last = entries[-1]
+            last = entries[0]
+            for entry in entries[1:]:
+                if parse_ms(entry["timestamp"]) - parse_ms(last["timestamp"]) > SILENCE_MS:
+                    break
+                last = entry
             end = parse_ms(last["timestamp"])
             cwd = last["cwd"] if isinstance(last.get("cwd"), str) else ""
             push(end, cwd, "turn_end", [("reason", "answer"), ("durationMs", end - first), ("usage", tokens.take())])
