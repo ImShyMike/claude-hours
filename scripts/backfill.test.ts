@@ -97,7 +97,7 @@ test('a turn: its prompt, tool calls, edits and the turn with its tokens', () =>
     ),
   )
   expect(run()).toMatchObject({ written: 1, logged: 0, live: 0, sessions: ['s1'] })
-  expect(JSON.parse(written('s1').split('\n')[0]!)).toEqual({ v: 1, event: 'session', start, cwd, root: terra, backfill: 1 })
+  expect(JSON.parse(written('s1').split('\n')[0]!)).toEqual({ v: 1, event: 'session', start, cwd, root: terra, backfill: 2 })
   const all = events('s1')
   expect(all.map(e => e.event)).toEqual(['session_start', 'mode', 'prompt', 'tool', 'file_changed', 'tool', 'turn_end'])
   const [opened, mode, prompt, edit, changed, bash, turn] = all

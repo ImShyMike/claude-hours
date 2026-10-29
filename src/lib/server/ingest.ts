@@ -76,6 +76,10 @@ function placeTimeline(row: unknown): Placed {
   return { table: draftTimelines, values: splitRow(draftTimelines, row) }
 }
 
+// backfill.py before this stretched a turn Esc'd days after it hung over all
+// those days, so a new run it rebuilt has to come from this version or later
+const BACKFILL_FROM = 2
+
 // one insert per table, in slices that stay well under Postgres' 65535
 // parameters (the widest table has about 30 columns)
 const SLICE = 500
@@ -87,6 +91,16 @@ async function storeRun(db: Db, personId: number, r: RunIn, now: Date, deviceId?
     if (!run) {
       if (r.stream === 'events' && (r.header?.event !== 'session' || r.header.start !== r.run))
         return { result: { status: 'invalid', acked: 0, error: 'a new run needs its header, with start equal to run' }, quarantined: 0 }
+      const backfill = r.header?.backfill
+      if (backfill !== undefined && !(typeof backfill === 'number' && backfill >= BACKFILL_FROM))
+        return {
+          result: {
+            status: 'invalid',
+            acked: 0,
+            error: 'rebuilt by an older backfill with a bug, run /time-track update then /time-track backfill send again',
+          },
+          quarantined: 0,
+        }
       await tx
         .insert(runs)
         .values({ personId, deviceId, session: r.session, stream: r.stream, start: r.run, ...(r.header ? headerColumns(r.header) : {}) })

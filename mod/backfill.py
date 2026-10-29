@@ -17,9 +17,11 @@ changed. As in the mod, config.json's ignore list and file globs apply, and
 only counts come out, never a prompt's text, a command or a file's contents.
 
 A session the mod logged too is cut where the mod's log begins, so nothing
-counts twice, and every run says "backfill": 1 on its header. Claude Code
-deletes transcripts after cleanupPeriodDays (30 by default), so this reaches
-back that far; a file already written stays once its transcript is gone. The
+counts twice, and every run says "backfill": 2 on its header (1 stretched
+a turn Esc'd days after it hung over all those days, and the hub turns it
+down now). Claude Code deletes transcripts after cleanupPeriodDays (30 by
+default), so this reaches back that far; a file already written stays once
+its transcript is gone. The
 same transcripts give the same rows, so it's safe to run again.
 
     python3 backfill.py [out]
@@ -589,7 +591,7 @@ def encode(events):
     """The session file as the mod writes it, its header saying backfill"""
     start = events[0]["at"]
     cwd = events[0]["cwd"]
-    rows = [dict([("v", FORMAT), ("event", "session"), ("start", start), ("cwd", cwd)] + rooted(events[0]) + [("backfill", 1)])]
+    rows = [dict([("v", FORMAT), ("event", "session"), ("start", start), ("cwd", cwd)] + rooted(events[0]) + [("backfill", 2)])]
     for e in events:
         t = e["at"] - start
         if e["cwd"] != cwd:

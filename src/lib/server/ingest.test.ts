@@ -155,6 +155,16 @@ describe('acks', () => {
     expect(runs['s1/events/2000']!.status).toBe('invalid')
   })
 
+  test('a backfill from before backfill.py stopped stretching turns over days is turned down', async () => {
+    const { db, person } = await withPerson()
+    const { runs } = await ingest(db, person, [
+      run(0, [tool(1)], { header: { ...header, backfill: 1 } }),
+      run(0, [tool(1)], { session: 's2', header: { ...header, backfill: 2 } }),
+    ])
+    expect(runs['s1/events/1000']).toEqual({ status: 'invalid', acked: 0, error: expect.stringContaining('/time-track update') })
+    expect(runs['s2/events/1000']).toEqual({ status: 'ok', acked: 1 })
+  })
+
   test('a bad row is quarantined and still counted, so the run goes on', async () => {
     const { db, person } = await withPerson()
     const result = await ingest(db, person, [run(0, [tool(1), 'not json', { t: 3 }, tool(4)])])

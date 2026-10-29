@@ -8,7 +8,7 @@
 // origin remote names it something other than its folder. A field at its
 // usual value (DEFAULTS) is left out, and so is a typed draft's 0 counter.
 // draft_abandoned says when it ended, as epoch ms; it began composeMs before.
-// A run whose header says `backfill: 1` was rebuilt from Claude Code's
+// A run whose header says `backfill` was rebuilt from Claude Code's
 // transcript by the mod's backfill.py, for a session from before the mod.
 //
 // decodeSession turns a file back into the flat events the dashboard works
@@ -121,7 +121,7 @@ export function encodeSession(events: Event[]): string {
     ...(typeof e.rootName === 'string' ? { rootName: e.rootName } : {}),
   })
   const rows: Record<string, unknown>[] = [
-    { v: FORMAT, event: 'session', start, cwd, ...rooted(events[0]!), ...(events[0]!.backfill ? { backfill: 1 } : {}) },
+    { v: FORMAT, event: 'session', start, cwd, ...rooted(events[0]!), ...(events[0]!.backfill ? { backfill: 2 } : {}) },
   ]
   for (const e of events) {
     const t = Date.parse(e.ts) - start

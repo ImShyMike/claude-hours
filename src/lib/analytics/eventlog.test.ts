@@ -91,7 +91,7 @@ test('a root rides along with its cwd until the next cwd_changed, and back', () 
 })
 
 test("a backfilled run's events say so, and the mod's own log wins where both have the session", () => {
-  const backfill = (at: number) => ({ v: 1, event: 'session', start: at, cwd: '/code/terra', backfill: 1 })
+  const backfill = (at: number) => ({ v: 1, event: 'session', start: at, cwd: '/code/terra', backfill: 2 })
   // rebuilt from the transcript, whole, after the mod's files were deleted
   const text = file(
     backfill(start),
