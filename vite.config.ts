@@ -68,6 +68,10 @@ export default defineConfig({
           environment: 'node',
           include: ['src/**/*.{test,spec}.{js,ts}'],
           exclude: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+          // each database test starts its own PGlite and migrates it, a few
+          // seconds on a slow runner and more for a file's first, past the
+          // default 5 s
+          testTimeout: 30_000,
         },
       },
     ],
