@@ -388,6 +388,19 @@ test('a prompt that was only a paste adds its chars but no draft', () => {
   expect(s.writing).toMatchObject({ sent: 1, measured: 1, typedChars: 10, pastedChars: 3005 })
 })
 
+test('prompts with a paste count whether typed live or backfilled, and an abandoned paste never does', () => {
+  const events = [
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', chars: 15, typingMs: MIN, typedChars: 10, pastedChars: 5 }),
+    // backfilled: chars and pastes, no typing
+    at('2026-10-19T12:11:00Z', 'prompt', { origin: 'composer', chars: 400, pastedChars: 300 }),
+    at('2026-10-19T12:12:00Z', 'prompt', { origin: 'composer', chars: 85 }),
+    at('2026-10-19T12:13:00Z', 'draft_abandoned', { endedAt: '2026-10-19T12:13:00Z', typingMs: MIN, pastedChars: 900 }),
+  ]
+  const s = summarize(events, { idleCapMs: 1 * MIN })
+  expect(s.writing).toMatchObject({ pastedPrompts: 2, pastedPromptChars: 305, pastedChars: 1205 })
+  expect(s.prompts).toMatchObject({ count: 3, avgChars: 500 / 3 })
+})
+
 test('pasted images and files add up across every prompt sent, draft or not', () => {
   const events = [
     at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', typingMs: MIN, typedChars: 10, images: 2 }),

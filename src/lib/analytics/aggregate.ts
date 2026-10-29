@@ -55,6 +55,10 @@ export type Summary = {
     abandonedMs: number
     typedChars: number
     pastedChars: number
+    // sent prompts with a paste in and those pastes' chars, backfilled ones
+    // too (a transcript shows a paste, never the typing around it)
+    pastedPrompts: number
+    pastedPromptChars: number
     // pasted or attached to sent prompts, counted by kind
     images: number
     audio: number
@@ -707,6 +711,8 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     abandonedMs: 0,
     typedChars: 0,
     pastedChars: 0,
+    pastedPrompts: 0,
+    pastedPromptChars: 0,
     images: 0,
     audio: 0,
     documents: 0,
@@ -775,6 +781,10 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
           writing.sent++
           countTyping(e)
         } else writing.pastedChars += Number(e.pastedChars) || 0 // a prompt that was only a paste
+        if (Number(e.pastedChars) > 0) {
+          writing.pastedPrompts++
+          writing.pastedPromptChars += Number(e.pastedChars)
+        }
         break
       case 'draft_abandoned':
         writing.abandoned++

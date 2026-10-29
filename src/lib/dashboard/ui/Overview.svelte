@@ -73,7 +73,9 @@
     const avgWords = Math.round(s.prompts.avgWords)
     // the usual 5 characters a word, over the time actually typing
     const wpm = w.typingMs ? Math.round(w.typedChars / 5 / (w.typingMs / MIN)) : 0
-    const sent = w.typedChars + w.pastedChars
+    // out of every prompt sent, not typed plus pasted: a backfilled prompt
+    // shows its pastes but never its typing, which made those nearly all paste
+    const sentChars = Math.round(s.prompts.avgChars * s.prompts.count)
     return [
       { label: 'Prompts', value: compact(s.prompts.count), sub: s.prompts.count ? `avg ${plural(avgWords, 'word')}` : '' },
       { label: 'Turns', value: compact(s.turns), sub: s.prompts.midTurn ? `${plural(s.prompts.midTurn, 'prompt')} sent mid-turn` : '' },
@@ -90,8 +92,14 @@
         : { label: 'Writing', value: '-', sub: 'no typing data yet' },
       {
         label: 'Pasted',
-        value: compact(w.pastedChars),
-        sub: [sent && `${Math.round((w.pastedChars / sent) * 100)}% of chars`, attachments(w)].filter(Boolean).join(' · '),
+        value: s.prompts.count ? `${Math.round((w.pastedPrompts / s.prompts.count) * 100)}%` : '-',
+        sub: [
+          'of prompts',
+          w.pastedPromptChars && `${compact(w.pastedPromptChars)} chars${sentChars ? `, ${Math.round((w.pastedPromptChars / sentChars) * 100)}% of all sent` : ''}`,
+          attachments(w),
+        ]
+          .filter(Boolean)
+          .join(' · '),
       },
     ]
   }
