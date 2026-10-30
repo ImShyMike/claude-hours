@@ -93,6 +93,20 @@ test('counting only prompts, a range takes its first prompt\'s gap from the one 
   expect(summarize(early, { from, to, idleCapMs: 2 * MIN, counting: 'prompts' }).totalMs).toBe(MIN)
 })
 
+test('counting only prompts, a script\'s prompts count nothing, though Claude\'s work for it still does', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'session_start', { sessionId: 'p', isInteractive: false }),
+    at('2026-10-19T12:00:00Z', 'prompt', { sessionId: 'p', origin: 'composer' }),
+    at('2026-10-19T12:05:00Z', 'turn_end', { sessionId: 'p', durationMs: 5 * MIN }),
+    at('2026-10-19T13:00:00Z', 'prompt', { origin: 'sdk' }),
+    at('2026-10-19T13:03:00Z', 'turn_end', { durationMs: 3 * MIN }),
+  ]
+  expect(summarize(events, { idleCapMs: 2 * MIN }).totalMs).toBe(8 * MIN)
+  const s = summarize(events, { idleCapMs: 2 * MIN, counting: 'prompts' })
+  expect(s.totalMs).toBe(0)
+  expect(s.prompts.count).toBe(2)
+})
+
 test('a turn that asked the person something works around the wait, judged like any gap', () => {
   const events = [
     at('2026-10-19T12:00:00Z', 'prompt'),

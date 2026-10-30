@@ -461,18 +461,24 @@ export function projectSpans(events: Event[], idleCapMs: number, counting: Count
   return new Map([...raw].map(([project, intervals]) => [project, mergeWithin(intervals, idleCapMs, elsewhere(project))]))
 }
 
-// a session's stretches by project, as they are, before any gap is bridged
+// a scripted session: `claude -p` or the SDK, which a backfill finds as an
+// entrypoint other than the terminal's and the mod sees as origin `sdk`
+const isScripted = (events: Event[]) => events.some(e => e.event === 'session_start' && e.isInteractive === false)
+
+// a session's stretches by project, as they are, before any gap is bridged.
+// Counting only prompts, a script's prompts aren't anyone prompting
 function rawSpans(events: Event[], counting: Counting): Map<string, Interval[]> {
+  const raw = new Map<string, Interval[]>()
+  if (counting === 'prompts' && isScripted(events)) return raw
   const waits = waitsOf(events)
   const moves = movesOf(events)
-  const raw = new Map<string, Interval[]>()
   const add = (project: string, interval: Interval) => {
     const list = raw.get(project)
     if (list) list.push(interval)
     else raw.set(project, [interval])
   }
   for (const e of events) {
-    if (counting === 'prompts' && !isPersonPrompt(e) && e.event !== 'draft_abandoned') continue
+    if (counting === 'prompts' && (isPersonPrompt(e) ? e.origin === 'sdk' : e.event !== 'draft_abandoned')) continue
     const end = time(e)
     const home = projectOf(e)
     const thread = moves.get(threadOf(e))

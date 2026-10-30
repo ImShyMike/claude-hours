@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Counting } from '#lib/analytics/aggregate.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as ToggleGroup from '#lib/components/ui/toggle-group/index.js'
@@ -11,7 +12,13 @@
 
   const range = stored<Range>('range', '7')
   const hours = stored<Hours>('hours', 'fit')
-  const live = liveDigest(() => range.value, true)
+  // all the time, or only the time spent prompting, the same pick as the overview's
+  const counting = stored<Counting>('counting', 'all')
+  const live = liveDigest(
+    () => range.value,
+    true,
+    () => counting.value,
+  )
 
   // all time decides each project's color and each session's home
   const d = $derived(live.value)
@@ -52,9 +59,23 @@
   <div class="flex flex-wrap items-end justify-between gap-4">
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Timeline</h1>
-      <p class="text-sm text-muted-foreground">Every session, {rangeWindow(range.value).label}</p>
+      <p class="text-sm text-muted-foreground">
+        {counting.value === 'prompts' ? 'Time spent prompting' : 'Every session'}, {rangeWindow(range.value).label}
+      </p>
     </div>
-    <RangePicker bind:range={range.value} spans />
+    <div class="flex flex-wrap items-center gap-2">
+      <ToggleGroup.Root
+        type="single"
+        variant="outline"
+        size="sm"
+        aria-label="What counts as time"
+        bind:value={() => counting.value, (next: string) => next && (counting.value = next as Counting)}
+      >
+        <ToggleGroup.Item value="all">Prompts + Claude</ToggleGroup.Item>
+        <ToggleGroup.Item value="prompts">Prompts</ToggleGroup.Item>
+      </ToggleGroup.Root>
+      <RangePicker bind:range={range.value} spans counting={counting.value} />
+    </div>
   </div>
 
   {#if !tl}

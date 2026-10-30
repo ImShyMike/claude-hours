@@ -319,7 +319,10 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   so a range's time only ever depends on prompts near it. A range or a day
   takes its first prompt's gap from the one before it, like Hackatime's
   boundary-aware sums; only a gap that crosses the edge itself is split
-  there, by the clock. Claude's turns, tool calls and notifications make no time then, though
+  there, by the clock. A script's prompts don't count here: none from a
+  non-interactive session (`claude -p` or the SDK) and none with origin
+  `sdk`, though Claude's work for them still counts in the other mode.
+  Claude's turns, tool calls and notifications make no time then, though
   they still say which repo a thread was in. A backfilled prompt has no
   typing, so it's just the moment it was sent. Models' time stays Claude's,
   and project colors are still ranked by all of the time.
