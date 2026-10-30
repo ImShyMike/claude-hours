@@ -1,5 +1,7 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { goto } from '$app/navigation'
+  import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js'
   import * as Alert from '#lib/components/ui/alert/index.js'
   import TerminalIcon from '@lucide/svelte/icons/terminal'
   import { Badge } from '#lib/components/ui/badge/index.js'
@@ -13,6 +15,13 @@
   import type { PageProps } from './$types'
 
   let { data, form }: PageProps = $props()
+
+  // without a page load; the JSON content type gets it past SvelteKit's
+  // check on cross-site form posts, which a bodyless POST would trip
+  async function logout() {
+    await fetch('/auth/logout', { method: 'POST', headers: { 'content-type': 'application/json' } })
+    await goto('/', { refreshAll: true })
+  }
 </script>
 
 <div class="flex flex-col gap-6">
@@ -81,6 +90,58 @@
       {:else}
         <p class="text-sm text-muted-foreground">No devices yet. Connect one with the commands above.</p>
       {/if}
+    </Card.Content>
+  </Card.Root>
+
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>Idle timeout</Card.Title>
+      <Card.Description>A quiet stretch up to this long still counts as active in your time.</Card.Description>
+    </Card.Header>
+    <Card.Content>
+      <form method="post" action="?/idleCap" class="flex flex-wrap gap-2" use:enhance>
+        {#each data.idleCaps as minutes (minutes)}
+          <Button
+            type="submit"
+            name="minutes"
+            value={minutes}
+            size="sm"
+            variant={minutes === data.idleCapMin ? 'default' : 'outline'}
+            aria-pressed={minutes === data.idleCapMin}>{minutes} min</Button
+          >
+        {/each}
+      </form>
+    </Card.Content>
+  </Card.Root>
+
+  <Card.Root>
+    <Card.Header>
+      <Card.Title>Account</Card.Title>
+      <Card.Description>
+        Logged in with Hack Club as <span class="font-medium text-foreground">{data.person?.name}</span>{data.person?.email
+          ? ` (${data.person.email})`
+          : ''}.
+      </Card.Description>
+    </Card.Header>
+    <Card.Content>
+      <!-- asked first, since the dashboard is one stray click from gone -->
+      <AlertDialog.Root>
+        <AlertDialog.Trigger>
+          {#snippet child({ props })}<Button {...props} variant="outline" size="sm" class="self-start">Log out</Button>{/snippet}
+        </AlertDialog.Trigger>
+        <AlertDialog.Content>
+          <AlertDialog.Header>
+            <AlertDialog.Title>Log out?</AlertDialog.Title>
+            <AlertDialog.Description
+              >You'll need to log in with Hack Club again to see your dashboard. Your devices stay connected.</AlertDialog.Description
+            >
+          </AlertDialog.Header>
+          <AlertDialog.Footer>
+            <AlertDialog.Cancel>Stay</AlertDialog.Cancel>
+            <AlertDialog.Action onclick={logout}>Log out</AlertDialog.Action>
+          </AlertDialog.Footer>
+        </AlertDialog.Content>
+      </AlertDialog.Root>
     </Card.Content>
   </Card.Root>
 

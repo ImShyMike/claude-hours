@@ -60,12 +60,19 @@ export function projectFor(cwd: string, home = homedir()) {
 // saw it work in (a Bash cd, a file outside the cwd's repo), else a file's own
 // repo. A Bash call with no repo ran in the cwd. Undefined when it says
 // nothing, like a file in no repo at all. The dashboard moves the calling
-// thread's time there (aggregate's projectSpans)
+// thread's time there (aggregate's projectSpans). Reading a file is only
+// looking, and Claude Code's own files for a project (its memory, a long
+// output it saved to read back) aren't work in ~/.claude, so neither says
+// anything
+const CLAUDE_OWN = /\/\.claude\/projects\//
+
 function workProject(e: Event, remote: boolean) {
   if (e.event !== 'tool' && e.event !== 'file_changed') return undefined
+  if (e.tool === 'Read') return undefined
+  const path = typeof e.file === 'string' ? e.file : typeof e.path === 'string' ? e.path : undefined
+  if (path && CLAUDE_OWN.test(path)) return undefined
   if (typeof e.repoName === 'string') return e.repoName
   if (typeof e.repo === 'string') return remote ? repoName(e.repo) : repoFor(e.repo)
-  const path = typeof e.file === 'string' ? e.file : typeof e.path === 'string' ? e.path : undefined
   if (path) return path.startsWith(`${e.cwd}/`) ? e.project : remote ? undefined : repoFor(dirname(path))
   return e.tool === 'Bash' ? e.project : undefined
 }

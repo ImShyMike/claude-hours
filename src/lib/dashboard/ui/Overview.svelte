@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state'
-  import { dayKey, type Summary } from '#lib/analytics/aggregate.js'
+  import { dayKey, type Counting, type Summary } from '#lib/analytics/aggregate.js'
   import * as Card from '#lib/components/ui/card/index.js'
   import { Skeleton } from '#lib/components/ui/skeleton/index.js'
   import * as Table from '#lib/components/ui/table/index.js'
@@ -38,7 +38,14 @@
   const range = stored<Range>('range', '7')
   // the rhythm card by hour, or by weekday once the range has more than a week
   const rhythm = stored<'hours' | 'weekdays'>('rhythm', 'hours')
-  const live = liveDigest(() => range.value)
+  // all the time, or only the time spent prompting, as Hackatime would count it
+  const counting = stored<Counting>('counting', 'all')
+  const prompting = $derived(counting.value === 'prompts')
+  const live = liveDigest(
+    () => range.value,
+    false,
+    () => counting.value,
+  )
   const person = $derived(page.url.searchParams.get('person') ?? '')
   // the sessions table a page at a time, back to the newest whenever the
   // range or whose dashboard it is changes
@@ -67,13 +74,26 @@
     return `${duration(Math.abs(diff))} ${diff > 0 ? 'more' : 'less'} than ${then}`
   }
 
+  // the prompts sent with a paste in, out of all of them, and the share of
+  // chars sent that were pasted: out of every prompt, not typed plus pasted,
+  // since a backfilled prompt shows its pastes but never its typing
+  function pasted(s: Summary) {
+    const w = s.writing
+    const sentChars = Math.round(s.prompts.avgChars * s.prompts.count)
+    return {
+      value: s.prompts.count ? `${Math.round((w.pastedPrompts / s.prompts.count) * 100)}%` : '-',
+      chars: w.pastedPromptChars
+        ? `${compact(w.pastedPromptChars)} chars${sentChars ? `, ${Math.round((w.pastedPromptChars / sentChars) * 100)}% of all sent` : ''}`
+        : '',
+    }
+  }
+
   function tiles(s: Summary) {
     const w = s.writing
     const totalTurns = s.turns + s.interrupts
     const avgWords = Math.round(s.prompts.avgWords)
     // the usual 5 characters a word, over the time actually typing
     const wpm = w.typingMs ? Math.round(w.typedChars / 5 / (w.typingMs / MIN)) : 0
-    const sent = w.typedChars + w.pastedChars
     return [
       { label: 'Prompts', value: compact(s.prompts.count), sub: s.prompts.count ? `avg ${plural(avgWords, 'word')}` : '' },
       { label: 'Turns', value: compact(s.turns), sub: s.prompts.midTurn ? `${plural(s.prompts.midTurn, 'prompt')} sent mid-turn` : '' },
@@ -89,14 +109,15 @@
         ? { label: 'Writing', value: duration(w.typingMs), sub: [`${w.abandoned} abandoned`, wpm && `${wpm} wpm`].filter(Boolean).join(' · ') }
         : { label: 'Writing', value: '-', sub: 'no typing data yet' },
       {
-        label: 'Pasted',
-        value: compact(w.pastedChars),
-        sub: [sent && `${Math.round((w.pastedChars / sent) * 100)}% of chars`, attachments(w)].filter(Boolean).join(' · '),
+        label: 'Pastes',
+        value: pasted(s).value,
+        sub: ['of prompts', attachments(w)].filter(Boolean).join(' · '),
       },
     ]
   }
 
-  function writingStats(w: Summary['writing']) {
+  function writingStats(s: Summary) {
+    const w = s.writing
     const per = (n: number) => (n / w.measured).toFixed(1)
     return [
       { label: 'Typo fixes', value: per(w.fixes), sub: `${w.fixes} in all, 3 chars or fewer` },
@@ -113,10 +134,8 @@
       },
       {
         label: 'Pastes',
-        value: `${Math.round((w.pastes / w.measured) * 100)}%`,
-        sub: [w.pastes ? `of prompts, ${compact(Math.round(w.pasteChars / w.pastes))} chars each` : 'of prompts', attachments(w)]
-          .filter(Boolean)
-          .join(' · '),
+        value: pasted(s).value,
+        sub: ['of prompts', pasted(s).chars, attachments(w)].filter(Boolean).join(' · '),
       },
       { label: 'Thinking pauses', value: per(w.pauses), sub: '2 to 30 seconds' },
       { label: 'Breaks', value: per(w.breaks), sub: 'pauses over 30 seconds' },
@@ -150,7 +169,17 @@
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <PersonPicker me={who.me} />
-      <RangePicker bind:range={range.value} />
+      <ToggleGroup.Root
+        type="single"
+        variant="outline"
+        size="sm"
+        aria-label="What counts as time"
+        bind:value={() => counting.value, (next: string) => next && (counting.value = next as Counting)}
+      >
+        <ToggleGroup.Item value="all">Prompts + Claude</ToggleGroup.Item>
+        <ToggleGroup.Item value="prompts">Prompts</ToggleGroup.Item>
+      </ToggleGroup.Root>
+      <RangePicker bind:range={range.value} counting={counting.value} />
     </div>
   </div>
 
@@ -164,7 +193,7 @@
     <div class="grid gap-4 md:max-lg:gap-y-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <Card.Root class="justify-center">
         <Card.Header>
-          <Card.Description>Active with Claude</Card.Description>
+          <Card.Description>{prompting ? 'Prompting Claude' : 'Active with Claude'}</Card.Description>
           <Card.Title class="text-5xl font-semibold tracking-tight tabular-nums">{duration(s.totalMs)}</Card.Title>
         </Card.Header>
         <Card.Content class="text-sm text-muted-foreground">
@@ -306,7 +335,7 @@
               <Card.Description>Per prompt, sent or not</Card.Description>
             </Card.Header>
             <Card.Content class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3">
-              {#each writingStats(s.writing) as stat (stat.label)}
+              {#each writingStats(s) as stat (stat.label)}
                 <div>
                   <div class="text-xs text-muted-foreground">{stat.label}</div>
                   <div class="text-xl font-semibold tabular-nums">{stat.value}</div>

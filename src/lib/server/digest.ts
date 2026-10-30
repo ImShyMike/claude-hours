@@ -1,8 +1,9 @@
 // What the dashboard pages show, summed here instead of in the browser: a
 // range's summary, plus what all time decides whatever the range (each
 // project's color by rank, the calendar's days, each session's home project).
-// The browser gets these few numbers, not every event
-import { firstAt, lastAt, summarize, type Event, type Summary } from '../analytics/aggregate'
+// The browser gets these few numbers, not every event. Counting only prompts
+// changes every time in it but the colors, so a toggle doesn't repaint them
+import { firstAt, lastAt, summarize, type Counting, type Event, type Summary } from '../analytics/aggregate'
 import type { Db } from './db/index'
 import { sessionsOf, timed, type Timing } from './history'
 import { idleCapMs } from './settings'
@@ -20,28 +21,54 @@ export type Digest = {
 }
 
 type AllTime = Pick<Summary, 'projects' | 'days' | 'sessions'>
+type Options = { idleCapMs: number; tz?: string; counting: Counting }
 
 // all time changes only when the person's sessions do, so it's kept per
-// person until then, and so is the summary of the range that's all of it;
-// a range with ends is cheap next to them
-const MAX_PEOPLE = 50
+// person and counting until then, and so is the summary of the range that's
+// all of it; a range with ends is cheap next to them
+const MAX_KEPT = 100
 type Kept = { key: string; ever: AllTime; whole?: Summary }
-const kept = new WeakMap<Db, Map<number, Kept>>()
+const kept = new WeakMap<Db, Map<string, Kept>>()
 
-// and when they do, it's mostly one session, the one being worked in. Each
-// session's own all time is kept for as long as history.ts keeps its events
-// (the same array until it changes), by zone and idle cap, and the person's
-// is those added up
-const ofSession = new WeakMap<Event[], Map<string, AllTime>>()
+// and when they do, it's mostly one session, the one being worked in.
+// Sessions only take time from each other where they ran at once (only the
+// one in the foreground counts then), so all time is worked out per cluster
+// of sessions that overlap, kept for as long as history.ts keeps their events
+// (the same arrays until one changes), by zone, idle cap and counting, and the
+// person's is those added up
+type Cluster = { members: Event[][]; known: Map<string, AllTime> }
+const ofCluster = new WeakMap<Event[], Cluster>()
 
-function sessionAllTime(events: Event[], options: { idleCapMs: number; tz?: string }) {
-  const key = `${options.tz}|${options.idleCapMs}`
-  const known = ofSession.get(events) ?? new Map<string, AllTime>()
-  ofSession.set(events, known)
-  let ever = known.get(key)
+// sessions grouped where their stretches overlap, each group oldest first.
+// gap: how far apart two sessions can still change each other's time, since
+// counting only prompts, the first one in a session takes its gap (up to the
+// cap) from the last one before
+function clusters(sessions: Event[][], gap: number): Event[][][] {
+  const groups: Event[][][] = []
+  let end = -Infinity
+  for (const events of [...sessions].sort((a, b) => boundsOf(a).start - boundsOf(b).start)) {
+    const bounds = boundsOf(events)
+    if (groups.length && bounds.start < end + gap) {
+      groups.at(-1)!.push(events)
+      end = Math.max(end, bounds.end)
+    } else {
+      groups.push([events])
+      end = bounds.end
+    }
+  }
+  return groups
+}
+
+function clusterAllTime(members: Event[][], options: Options) {
+  const key = `${options.tz}|${options.idleCapMs}|${options.counting}`
+  let cluster = ofCluster.get(members[0]!)
+  if (!cluster || cluster.members.length !== members.length || cluster.members.some((events, i) => events !== members[i])) {
+    ofCluster.set(members[0]!, (cluster = { members, known: new Map() }))
+  }
+  let ever = cluster.known.get(key)
   if (!ever) {
-    const { projects, days, sessions } = summarize(events, options)
-    known.set(key, (ever = { projects, days, sessions }))
+    const { projects, days, sessions } = summarize(members.flat(), options)
+    cluster.known.set(key, (ever = { projects, days, sessions }))
   }
   return ever
 }
@@ -52,7 +79,7 @@ const nextDay = (day: string) => {
   return new Date(Date.UTC(y!, m! - 1, d! + 1)).toISOString().slice(0, 10)
 }
 
-// sessions' all times as one: projects and days summed, the days between
+// clusters' all times as one: projects and days summed, the days between
 // them filled in as summarize does
 function added(parts: AllTime[]): AllTime {
   const projects = new Map<string, number>()
@@ -79,24 +106,18 @@ function added(parts: AllTime[]): AllTime {
   }
 }
 
-function allTime(
-  db: Db,
-  personId: number,
-  key: string,
-  sessions: Map<string, Event[]>,
-  options: { idleCapMs: number; tz?: string },
-  timing?: Timing,
-) {
-  const people = kept.get(db) ?? new Map<number, Kept>()
+function allTime(db: Db, personId: number, key: string, sessions: Map<string, Event[]>, options: Options, timing?: Timing) {
+  const people = kept.get(db) ?? new Map<string, Kept>()
   kept.set(db, people)
-  let entry = people.get(personId)
+  const whose = `${personId} ${options.counting}`
+  let entry = people.get(whose)
   if (entry?.key !== key) {
-    const ever = timed(timing, 'ever', () => added([...sessions.values()].map(events => sessionAllTime(events, options))))
+    const ever = timed(timing, 'ever', () => added(clusters([...sessions.values()], gapOf(options)).map(members => clusterAllTime(members, options))))
     entry = { key, ever }
   }
-  people.delete(personId)
-  people.set(personId, entry)
-  if (people.size > MAX_PEOPLE) people.delete(people.keys().next().value!)
+  people.delete(whose)
+  people.set(whose, entry)
+  if (people.size > MAX_KEPT) people.delete(people.keys().next().value!)
   return entry
 }
 
@@ -110,37 +131,50 @@ function boundsOf(events: Event[]) {
   if (!known) bounds.set(events, (known = { start: firstAt(events), end: lastAt(events) }))
   return known
 }
-const within = (sessions: Event[][], from: number, to = Infinity) =>
-  sessions.filter(events => boundsOf(events).end >= from && boundsOf(events).start < to).flat()
+const within = (sessions: Event[][], gap: number, from: number, to = Infinity) =>
+  sessions.filter(events => boundsOf(events).end + gap >= from && boundsOf(events).start < to).flat()
+
+// how far before a stretch its time can reach, counting only prompts (summarize's heartbeats)
+const gapOf = (options: Options) => (options.counting === 'prompts' ? options.idleCapMs : 0)
 
 // tz is the viewer's IANA zone, days and hours are theirs; a zone that
 // doesn't exist throws a RangeError. spans (every active stretch) only when
 // asked, since only the timeline draws them
-export async function digest(db: Db, personId: number, window: { from?: number; to?: number; tz?: string; spans?: boolean }, timing?: Timing) {
-  const { from, to, tz } = window
-  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db)])
-  const entry = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz }, timing)
+export async function digest(
+  db: Db,
+  personId: number,
+  window: { from?: number; to?: number; tz?: string; spans?: boolean; counting?: Counting },
+  timing?: Timing,
+) {
+  const { from, to, tz, counting = 'all' } = window
+  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db, personId)])
+  const key = `${version}|${tz}|${cap}`
+  const entry = allTime(db, personId, key, sessions, { idleCapMs: cap, tz, counting }, timing)
   const ever = entry.ever
+  // colors rank by all of the time, whatever's counted
+  const ranked = counting === 'all' ? ever : allTime(db, personId, key, sessions, { idleCapMs: cap, tz, counting: 'all' }, timing).ever
   const shift = from !== undefined && to !== undefined && !window.spans ? Math.ceil((to - from) / DAY) * DAY : 0
   // only sessions still going when a window starts can add to it, and the
   // earlier window leaves out the ones that began after it too
   const all = [...sessions.values()]
-  const events = within(all, from ?? -Infinity)
+  const gap = gapOf({ idleCapMs: cap, counting })
+  const events = within(all, gap, from ?? -Infinity)
   const sum = () => {
-    const summary = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, tz }))
+    const summary = timed(timing, 'sum', () => summarize(events, { from, to, idleCapMs: cap, counting, tz }))
     timing?.set('sum', { ms: timing.get('sum')!.ms, note: `${events.length} events` })
     return summary
   }
   const range = from === undefined && to === undefined ? (entry.whole ??= sum()) : sum()
   const earlier = shift ? { from: from! - shift, to: to! - shift } : undefined
   const before =
-    earlier && timed(timing, 'before', () => summarize(within(all, earlier.from, earlier.to), { ...earlier, idleCapMs: cap, tz }).totalMs)
+    earlier &&
+    timed(timing, 'before', () => summarize(within(all, gap, earlier.from, earlier.to), { ...earlier, idleCapMs: cap, counting, tz }).totalMs)
   const home = new Map(ever.sessions.map(s => [s.sessionId, s.project]))
   const ids = new Set([...range.sessions.map(s => s.sessionId), ...range.spans.map(s => s.sessionId)])
   const homes = Object.fromEntries([...ids].map(id => [id, home.get(id) ?? '']))
   return {
     range: window.spans ? range : { ...range, spans: [] },
-    projects: ever.projects,
+    projects: ranked.projects,
     days: ever.days,
     homes,
     idleCapMs: cap,
@@ -150,7 +184,7 @@ export async function digest(db: Db, personId: number, window: { from?: number; 
 
 // one session's events, with what the page needs from all time to color them
 export async function sessionDigest(db: Db, personId: number, session: string, tz?: string) {
-  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId), idleCapMs(db)])
-  const { ever } = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz })
+  const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId), idleCapMs(db, personId)])
+  const { ever } = allTime(db, personId, `${version}|${tz}|${cap}`, sessions, { idleCapMs: cap, tz, counting: 'all' })
   return { events: sessions.get(session) ?? [], projects: ever.projects, idleCapMs: cap }
 }

@@ -122,6 +122,15 @@
     const from = live.value?.devices.length ? ` · from ${live.value.devices.join(', ')}` : ''
     return `${when}, ${duration(last - first)} long · ${sent} sent, ${drafts.length - sent} abandoned${from} · ${id.slice(0, 8)}`
   })
+
+  // a session from before time-track, rebuilt from Claude Code's transcript
+  // (/time-track backfill), all of it or its start
+  const rebuilt = $derived.by(() => {
+    const backfilled = events.filter(e => e.backfill).length
+    if (!backfilled) return ''
+    const which = backfilled === events.length ? 'This session' : 'The start of this session'
+    return `${which} is from before time-track, rebuilt from Claude Code's transcript. Typing isn't in a transcript, so it has no drafts and its time runs a little short.`
+  })
 </script>
 
 <svelte:head><title>{events.length ? `${project} session` : 'claude-hours session'}</title></svelte:head>
@@ -140,6 +149,9 @@
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">{project}</h1>
         <p class="text-sm text-muted-foreground">{subtitle}</p>
+        {#if rebuilt}
+          <p class="text-sm text-muted-foreground">{rebuilt}</p>
+        {/if}
       </div>
       {#if split.length}
         <div class="flex flex-wrap gap-1">

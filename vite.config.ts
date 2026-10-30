@@ -14,6 +14,7 @@ const INSTALLER: Record<string, string> = {
   'mod/hooks/hooks.json': 'mod/hooks/hooks.json',
   'mod/hooks/register.ts': 'mod/hooks/register.ts',
   'mod/types/index.d.ts': 'mod/types/index.d.ts',
+  'mod/backfill.py': 'mod/backfill.py',
   'mod/tsconfig.json': 'mod/tsconfig.json',
   'settings.py': 'scripts/settings.py',
 }
@@ -67,6 +68,10 @@ export default defineConfig({
           environment: 'node',
           include: ['src/**/*.{test,spec}.{js,ts}'],
           exclude: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+          // each database test starts its own PGlite and migrates it, a few
+          // seconds on a slow runner and more for a file's first, past the
+          // default 5 s
+          testTimeout: 30_000,
         },
       },
     ],

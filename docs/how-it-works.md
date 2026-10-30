@@ -32,6 +32,7 @@ Running Claude Code inside WSL works like Linux.
      hooks/register.ts            # every hook; the whole mod
      hooks/register.test.ts       # tests (claude plugin test)
      types/index.d.ts             # the mod's own state type
+     backfill.py                  # rebuilds older sessions from transcripts (/time-track backfill)
      TODO.md                      # what it logs, field by field, and open todos
    ```
 
@@ -206,6 +207,45 @@ Session files from before the login, or from another computer, can go up
 with `HUB=<url> TOKEN=hct_... bun scripts/import.ts [dir]`; the hub keeps each
 row once, so sending something twice is fine.
 
+### Backfilling from transcripts
+
+Sessions from before time-track was installed can be rebuilt from Claude
+Code's own transcripts (`~/.claude/projects`). `/time-track backfill` runs the
+mod's `backfill.py` (python3, which the installer needs anyway), which writes
+them as session files to `~/.claude/analytics/backfill/events` and says how
+many it found; `/time-track backfill send` then sends them like the mod's own
+rows, keeping track in `backfill/sent`. It only reaches back as far as the
+transcripts do, `cleanupPeriodDays` (30 by default), and leaves out sessions
+still going. A file it wrote stays once its transcript is gone, and the same
+transcripts give the same rows, so running it again is fine.
+
+A transcript has each turn's `durationMs`, the tool calls, compactions,
+interrupts, the permission mode and the tokens, so `backfill.py` turns it into
+the rows the mod would have logged. `config.json`'s `ignore` and file globs
+apply the same way, and only counts come out, never text. What it can't have:
+typing (no drafts, so no `typingMs`), when the session was opened and closed,
+permission dialogs inside a call (they stay part of it), and files a Bash
+command changed. So a backfilled session comes out a little under what the mod
+would have counted, most of it the typing. A turn that never ends (an Esc
+right after sending, a call turned down) is an `interrupt` up to its last work
+before a silence over 15 minutes, and so is one Esc'd after such a silence (a
+request left hanging while the laptop slept). Only the terminal writes a
+`turn_duration` line, so in the VS Code extension, the desktop app or the SDK
+a turn whose last message from Claude finished (`stop_reason: end_turn`) is a
+`turn_end` instead, at that same last work. A call turned down is `denied`, where the
+mod's own rows say `error`.
+
+Each backfilled run's header says `backfill: 3` (the hub turns down a new run
+saying `1`, from the version that stretched a turn Esc'd days after it hung
+over all those days, or `2`, which called every answered turn outside the
+terminal an interrupt, and asks for `/time-track update`), its events carry
+`backfill: true` once decoded, and the session page says it was rebuilt. A
+session the mod logged too is cut where the mod's log begins (less 2 s, for
+the prompt that woke it), twice over: `backfill.py` stops there when the mod's
+file is on this computer, and `decodeSession` drops a backfilled row from
+there on whenever the session has a run of the mod's own, so a backfill made
+after `uninstall --purge` doesn't count anything twice either.
+
 ### Draft timelines
 
 Replays are built from `~/.claude/analytics/drafts/<sessionId>.jsonl`, one
@@ -227,9 +267,10 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   `interrupt` without an `agentId`) is a span covering its full `durationMs`,
   so a long Bash call or a long think counts even though it logs nothing in
   the middle.
-- Moments and spans closer together than the **idle cap** (2 to 15 min, one
-  for everyone, set by an admin on the hub's `/admin`; 5 until then) merge
-  into active time. Longer gaps are idle.
+- Moments and spans closer together than the **idle cap** merge into active
+  time. Longer gaps are idle. Each person picks their own on `/settings`
+  (1, 2, 5, 10 or 15 min; 2 until they do), and their dashboard counts with
+  theirs, an admin looking at it too.
 - Waiting on you isn't Claude working: a main-thread `AskUserQuestion` or
   `ExitPlanMode` call, or a permission dialog (the turn's `waits`). Claude
   Code already leaves these out of the turn's `durationMs`, so a turn with one
@@ -239,9 +280,13 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   lane.
 - Time goes to the repo the work is in, not just the session's. Each thread
   (the main one, or a subagent) starts in the cwd's project, and a tool call
-  that touches a file in another git repo, or a Bash command that `cd`s into
+  that writes a file in another git repo, or a Bash command that `cd`s into
   one, moves that thread there until a call works back home (any Bash with
-  no `cd`, or a file under the cwd). Files in no repo at all don't move it.
+  no `cd`, or a file written under the cwd). Files in no repo at all don't
+  move it, and neither does reading a file (that's looking, not working
+  there) or anything in Claude Code's own `~/.claude/projects` (its memory,
+  a long output it saved to read back), so the hub counts those where the
+  thread already was, whatever the mod's rows say.
 - A subagent's turn adds time only where it works away from the main
   thread's project, like a fork sent off to another codebase. Then both
   projects get that stretch in full, while the total, days and hours count
@@ -254,10 +299,33 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   and doesn't.
 - Time is computed separately for each session and project, so a `cd` from
   one repo into another doesn't bridge them.
+- Wall-clock time counts once. A stretch several sessions were active at once
+  (three tabs, say) goes only to the one in the foreground: the one you last
+  started typing a prompt in, sent or not. One left working in another tab
+  meanwhile adds nothing then, and a notification arriving isn't you turning
+  to it. Where you hadn't typed in any of them yet, they split it evenly. A
+  session's own page still shows all of its time.
 - Typing a prompt counts too. time-track times each draft from its first
   keystroke and puts `typingMs` (pauses over 30 s left out) on the `prompt`
   line. Drafts that never get sent are logged as `draft_abandoned`. Both count
   as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
+- The overview can count only prompts instead (`/api/summary?time=prompts`),
+  the way Hackatime counts heartbeats: each prompt you wrote and each draft
+  you gave up is a span of its typing, and it also gets the gap before it
+  (from the last prompt in any session), up to the idle cap. So a break
+  still counts the cap, a gap between prompts in two repos goes to the
+  later one, and nothing counts after the last prompt. Unlike Hackatime,
+  the very first prompt gets the cap before it too, as if after a break,
+  so a range's time only ever depends on prompts near it. A range or a day
+  takes its first prompt's gap from the one before it, like Hackatime's
+  boundary-aware sums; only a gap that crosses the edge itself is split
+  there, by the clock. A script's prompts don't count here: none from a
+  non-interactive session (`claude -p` or the SDK) and none with origin
+  `sdk`, though Claude's work for them still counts in the other mode.
+  Claude's turns, tool calls and notifications make no time then, though
+  they still say which repo a thread was in. A backfilled prompt has no
+  typing, so it's just the moment it was sent. Models' time stays Claude's,
+  and project colors are still ranked by all of the time.
 - A project is named after the nearest git root above the event's `cwd` (or
   above the file or `repo` it worked in), so subdirectories don't split a
   repo. A worktree (like a subagent's under `.claude/worktrees`) counts as

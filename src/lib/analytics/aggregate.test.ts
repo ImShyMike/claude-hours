@@ -32,6 +32,81 @@ test('a long turn counts in full, idle gaps past the cap do not', () => {
   expect(summarize(events, { idleCapMs: 5 * MIN }).totalMs).toBe(41 * MIN)
 })
 
+test('counting only prompts, each typing stretch also gets the gap before it, up to the cap, as on Hackatime', () => {
+  const events = [
+    // 2 min typing, then Claude works 20 min with a tool call in it
+    at('2026-10-19T12:02:00Z', 'prompt', { origin: 'composer', typingMs: 2 * MIN }),
+    at('2026-10-19T12:10:00Z', 'tool', { tool: 'Bash', durationMs: 5 * MIN }),
+    at('2026-10-19T12:22:00Z', 'turn_end', { durationMs: 20 * MIN, usage: { model: 'claude-opus-5-5' } }),
+    // a notification isn't someone prompting, so it bridges nothing
+    at('2026-10-19T12:24:00Z', 'prompt', { origin: 'task-notification' }),
+    // 1 min typing 4 min after the last Enter: the gap counts
+    at('2026-10-19T12:07:00Z', 'draft_abandoned', { endedAt: '2026-10-19T12:07:00Z', typingMs: MIN }),
+    // a backfilled prompt has no typing, only the moment it was sent
+    at('2026-10-19T12:26:00Z', 'prompt', { origin: 'composer' }),
+    // and a minute's typing in another repo 3 min later: that gap goes to hub
+    at('2026-10-19T12:30:00Z', 'prompt', { origin: 'composer', typingMs: MIN, cwd: '/code/hub', project: 'hub' }),
+  ]
+  const all = summarize(events, { idleCapMs: 5 * MIN })
+  const prompts = summarize(events, { idleCapMs: 5 * MIN, counting: 'prompts' })
+  expect(all.totalMs).toBe(26 * MIN + MIN)
+  // the 5 min before the first, 12:00 to 12:07, then the 5 min before
+  // 12:26 (19 min after), then hub's minute and the 3 before it; nothing
+  // after the last
+  expect(prompts.projects).toEqual([
+    { project: 'terra', ms: 17 * MIN },
+    { project: 'hub', ms: 4 * MIN },
+  ])
+  expect(prompts.totalMs).toBe(21 * MIN)
+  // Claude's time by model is its turns' either way
+  expect(prompts.models).toEqual(all.models)
+  expect(prompts.prompts.count).toBe(3)
+})
+
+test('counting only prompts, the gap before one is from the last prompt in any session', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:01:00Z', 'prompt', { origin: 'composer', sessionId: 's2', cwd: '/code/hub', project: 'hub' }),
+    at('2026-10-19T12:03:00Z', 'prompt', { origin: 'composer' }),
+  ]
+  const s = summarize(events, { idleCapMs: 2 * MIN, counting: 'prompts' })
+  // the first gets the 2 min before it, as after any long break
+  expect(s.totalMs).toBe(5 * MIN)
+  expect(s.projects).toEqual([
+    { project: 'terra', ms: 4 * MIN },
+    { project: 'hub', ms: MIN },
+  ])
+})
+
+test("counting only prompts, a range takes its first prompt's gap from the one before it, as Hackatime's boundary-aware sums do", () => {
+  const events = [
+    at('2026-10-19T11:59:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:11:00Z', 'prompt', { origin: 'composer' }),
+  ]
+  const from = Date.parse('2026-10-19T12:00:00Z')
+  const to = Date.parse('2026-10-19T13:00:00Z')
+  // 12:08 to 12:11: the 2 min before 12:10 (11 min after 11:59) and the minute before 12:11
+  expect(summarize(events, { from, to, idleCapMs: 2 * MIN, counting: 'prompts' }).totalMs).toBe(3 * MIN)
+  // and one just after the start keeps only what's inside: 12:00 to 12:01
+  const early = [at('2026-10-19T11:59:30Z', 'prompt', { origin: 'composer' }), at('2026-10-19T12:01:00Z', 'prompt', { origin: 'composer' })]
+  expect(summarize(early, { from, to, idleCapMs: 2 * MIN, counting: 'prompts' }).totalMs).toBe(MIN)
+})
+
+test("counting only prompts, a script's prompts count nothing, though Claude's work for it still does", () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'session_start', { sessionId: 'p', isInteractive: false }),
+    at('2026-10-19T12:00:00Z', 'prompt', { sessionId: 'p', origin: 'composer' }),
+    at('2026-10-19T12:05:00Z', 'turn_end', { sessionId: 'p', durationMs: 5 * MIN }),
+    at('2026-10-19T13:00:00Z', 'prompt', { origin: 'sdk' }),
+    at('2026-10-19T13:03:00Z', 'turn_end', { durationMs: 3 * MIN }),
+  ]
+  expect(summarize(events, { idleCapMs: 2 * MIN }).totalMs).toBe(8 * MIN)
+  const s = summarize(events, { idleCapMs: 2 * MIN, counting: 'prompts' })
+  expect(s.totalMs).toBe(0)
+  expect(s.prompts.count).toBe(2)
+})
+
 test('a turn that asked the person something works around the wait, judged like any gap', () => {
   const events = [
     at('2026-10-19T12:00:00Z', 'prompt'),
@@ -260,14 +335,44 @@ test('time splits by permission mode where it changed, from the start of the ses
     at('2026-10-19T12:05:00Z', 'prompt'),
     at('2026-10-19T12:07:00Z', 'mode', { mode: 'auto' }),
     at('2026-10-19T12:10:00Z', 'turn_end', { durationMs: 5 * MIN }),
-    // a session from before the mod logged modes
-    at('2026-10-19T12:00:00Z', 'prompt', { sessionId: 's2' }),
-    at('2026-10-19T12:03:00Z', 'turn_end', { sessionId: 's2', durationMs: 3 * MIN }),
+    // a session from before the mod logged modes, later on
+    at('2026-10-19T13:00:00Z', 'prompt', { sessionId: 's2' }),
+    at('2026-10-19T13:03:00Z', 'turn_end', { sessionId: 's2', durationMs: 3 * MIN }),
   ]
   expect(summarize(events, { idleCapMs: 5 * MIN }).modes).toEqual([
     { mode: 'plan', ms: 7 * MIN },
     { mode: 'auto', ms: 3 * MIN },
     { mode: 'unknown', ms: 3 * MIN },
+  ])
+})
+
+test('sessions at once count once, the stretch going to the one you last turned to', () => {
+  const hub = { sessionId: 's2', cwd: '/code/hub', project: 'hub' }
+  const events = [
+    // terra works from 12:00 to 12:30, hub from 12:10 on, typed into at 12:09
+    at('2026-10-19T12:00:00Z', 'prompt'),
+    at('2026-10-19T12:30:00Z', 'turn_end', { durationMs: 30 * MIN }),
+    at('2026-10-19T12:10:00Z', 'prompt', { ...hub, typingMs: MIN }),
+    at('2026-10-19T12:30:00Z', 'turn_end', { ...hub, durationMs: 20 * MIN }),
+    // a notification isn't you turning back to terra
+    at('2026-10-19T12:20:00Z', 'prompt', { origin: 'task-notification', midTurn: true }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN })
+  expect(s.totalMs).toBe(30 * MIN)
+  expect(s.days.map(d => [d.ms, d.projects])).toEqual([[30 * MIN, { terra: 9 * MIN, hub: 21 * MIN }]])
+  expect(s.projects).toEqual([
+    { project: 'hub', ms: 21 * MIN },
+    { project: 'terra', ms: 9 * MIN },
+  ])
+  expect(s.sessions.map(x => [x.sessionId, x.activeMs])).toEqual([
+    ['s2', 21 * MIN],
+    ['s1', 9 * MIN],
+  ])
+  // with neither turned to, they split it
+  const quiet = events.filter(e => e.event === 'turn_end')
+  expect(summarize(quiet, { idleCapMs: 5 * MIN }).projects).toEqual([
+    { project: 'terra', ms: 20 * MIN },
+    { project: 'hub', ms: 10 * MIN },
   ])
 })
 
@@ -356,6 +461,19 @@ test('a prompt that was only a paste adds its chars but no draft', () => {
   ]
   const s = summarize(events, { idleCapMs: 1 * MIN })
   expect(s.writing).toMatchObject({ sent: 1, measured: 1, typedChars: 10, pastedChars: 3005 })
+})
+
+test('prompts with a paste count whether typed live or backfilled, and an abandoned paste never does', () => {
+  const events = [
+    at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer', chars: 15, typingMs: MIN, typedChars: 10, pastedChars: 5 }),
+    // backfilled: chars and pastes, no typing
+    at('2026-10-19T12:11:00Z', 'prompt', { origin: 'composer', chars: 400, pastedChars: 300 }),
+    at('2026-10-19T12:12:00Z', 'prompt', { origin: 'composer', chars: 85 }),
+    at('2026-10-19T12:13:00Z', 'draft_abandoned', { endedAt: '2026-10-19T12:13:00Z', typingMs: MIN, pastedChars: 900 }),
+  ]
+  const s = summarize(events, { idleCapMs: 1 * MIN })
+  expect(s.writing).toMatchObject({ pastedPrompts: 2, pastedPromptChars: 305, pastedChars: 1205 })
+  expect(s.prompts).toMatchObject({ count: 3, avgChars: 500 / 3 })
 })
 
 test('pasted images and files add up across every prompt sent, draft or not', () => {

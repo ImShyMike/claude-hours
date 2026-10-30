@@ -1,7 +1,7 @@
 // What the dashboard pages work from: the hub's summaries, fetched now and
 // every 30 s, who's looking, and a tick for redrawing charts on a theme flip
 import { page } from '$app/state'
-import type { Event } from '../analytics/aggregate'
+import type { Counting, Event } from '../analytics/aggregate'
 import type { Timeline } from '../analytics/replay'
 import type { Digest } from '../server/digest'
 import { api, apiText, load, rangeWindow, save, withPerson, type Me, type Range } from './shared'
@@ -93,34 +93,37 @@ function polled<T>(key: () => string | undefined, path: (key: string) => string)
   }
 }
 
-const digestKey = (range: Range, spans: boolean) => `digest ${range}${spans ? ' spans' : ''}`
+const digestKey = (range: Range, spans: boolean, counting: Counting) => `digest ${range}${spans ? ' spans' : ''} ${counting}`
 
-function digestPath(range: Range, spans: boolean) {
+function digestPath(range: Range, spans: boolean, counting: Counting) {
   const { from, to } = rangeWindow(range)
   const q = new URLSearchParams({ tz: tz() })
   if (from !== undefined) q.set('from', String(from))
   if (to !== undefined) q.set('to', String(to))
   if (spans) q.set('spans', '')
+  // anything else kept in the browser counts it all
+  if (counting === 'prompts') q.set('time', 'prompts')
   return `/api/summary?${q}`
 }
 
-// the hub's summary of a range, with what all time decides; spans for the timeline
-export function liveDigest(range: () => Range, spans = false) {
+// the hub's summary of a range, with what all time decides; spans for the
+// timeline, counting what the overview's toggle says counts as time
+export function liveDigest(range: () => Range, spans = false, counting: () => Counting = () => 'all') {
   return polled<Digest>(
-    () => digestKey(range(), spans),
-    () => digestPath(range(), spans),
+    () => digestKey(range(), spans, counting()),
+    () => digestPath(range(), spans, counting()),
   )
 }
 
 // for a page's load: the summary its stored range will ask for
-export function prefetchDigest(from: Ahead, spans = false) {
+export function prefetchDigest(from: Ahead, spans = false, counting: Counting = 'all') {
   const range = load<Range>('range', '7')
-  prefetch(from, digestKey(range, spans), digestPath(range, spans))
+  prefetch(from, digestKey(range, spans, counting), digestPath(range, spans, counting))
 }
 
 // for a range picker's option, pointed at or focused before it's picked
-export const prefetchRange = (range: Range, spans = false) =>
-  prefetch({ url: new URL(location.href), fetch }, digestKey(range, spans), digestPath(range, spans))
+export const prefetchRange = (range: Range, spans = false, counting: Counting = 'all') =>
+  prefetch({ url: new URL(location.href), fetch }, digestKey(range, spans, counting), digestPath(range, spans, counting))
 
 const sessionPath = (id: string) => `/api/session/${encodeURIComponent(id)}?tz=${encodeURIComponent(tz())}`
 

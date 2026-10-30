@@ -36,6 +36,13 @@
       "when": 1792766884328,
       "tag": "0004_device_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793308253868,
+      "tag": "0005_idle_cap",
+      "breakpoints": true
     }
   ]
 }

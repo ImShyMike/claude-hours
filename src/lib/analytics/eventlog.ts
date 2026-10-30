@@ -8,11 +8,17 @@
 // origin remote names it something other than its folder. A field at its
 // usual value (DEFAULTS) is left out, and so is a typed draft's 0 counter.
 // draft_abandoned says when it ended, as epoch ms; it began composeMs before.
+// A run whose header says `backfill` was rebuilt from Claude Code's
+// transcript by the mod's backfill.py, for a session from before the mod.
 //
 // decodeSession turns a file back into the flat events the dashboard works
 // on; encodeSession goes the other way, for the demo fixtures and the tests.
 
 import type { Event } from './aggregate'
+
+// a mod loaded mid-session opens its log with the prompt that woke it, which
+// a transcript stamped a moment before (backfill.py's OVERLAP_MS)
+const BACKFILL_OVERLAP_MS = 2_000
 
 export const FORMAT = 1
 
@@ -42,21 +48,32 @@ const DRAFT_COUNTERS = [
 
 const absolute = (path: unknown, cwd: string) => (typeof path === 'string' && path && !path.startsWith('/') ? `${cwd}/${path}` : path)
 
+function rowsOf(text: string) {
+  const rows: Record<string, unknown>[] = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const row = JSON.parse(line)
+      if (row && typeof row === 'object') rows.push(row)
+    } catch {}
+  }
+  return rows
+}
+
 export function decodeSession(text: string, sessionId: string): Event[] {
+  const rows = rowsOf(text)
+  // A session the mod logged too is cut where its log begins, wherever the
+  // backfill was made: one made after the mod's own files were deleted
+  // (uninstall --purge) has its whole run, and the hub the mod's
+  const logged = rows.filter(row => row.event === 'session' && !row.backfill && typeof row.start === 'number').map(row => row.start as number)
+  const cut = logged.length ? Math.min(...logged) - BACKFILL_OVERLAP_MS : Infinity
   const events: Event[] = []
   let start: number | undefined
   let cwd = ''
   let root: string | undefined
   let rootName: string | undefined
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    let row: Record<string, unknown>
-    try {
-      row = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (!row || typeof row !== 'object') continue
+  let backfill = false
+  for (const row of rows) {
     if (row.event === 'session') {
       // a file in some other format is skipped whole
       if (row.v !== FORMAT || typeof row.start !== 'number') return []
@@ -64,10 +81,12 @@ export function decodeSession(text: string, sessionId: string): Event[] {
       if (typeof row.cwd === 'string') cwd = row.cwd
       root = typeof row.root === 'string' ? row.root : undefined
       rootName = typeof row.rootName === 'string' ? row.rootName : undefined
+      backfill = !!row.backfill
       continue
     }
     const at = typeof row.at === 'number' ? row.at : start !== undefined && typeof row.t === 'number' ? start + row.t : undefined
     if (at === undefined || typeof row.event !== 'string') continue
+    if (backfill && at >= cut) continue
     if (typeof row.cwd === 'string') {
       cwd = row.cwd
       root = typeof row.root === 'string' ? row.root : undefined
@@ -83,6 +102,7 @@ export function decodeSession(text: string, sessionId: string): Event[] {
     for (const key of PATH_FIELDS) if (key in e) e[key] = absolute(e[key], cwd)
     if (root) e.root = root
     if (rootName) e.rootName = rootName
+    if (backfill) e.backfill = true
     events.push(e)
   }
   return events
@@ -91,6 +111,7 @@ export function decodeSession(text: string, sessionId: string): Event[] {
 const relative = (path: unknown, cwd: string) => (typeof path === 'string' && path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path)
 
 // One session's events, in time order, as the mod would have written them
+// (or backfill.py, when they say backfill)
 export function encodeSession(events: Event[]): string {
   if (!events.length) return ''
   const start = Date.parse(events[0]!.ts)
@@ -99,14 +120,16 @@ export function encodeSession(events: Event[]): string {
     ...(typeof e.root === 'string' ? { root: e.root } : {}),
     ...(typeof e.rootName === 'string' ? { rootName: e.rootName } : {}),
   })
-  const rows: Record<string, unknown>[] = [{ v: FORMAT, event: 'session', start, cwd, ...rooted(events[0]!) }]
+  const rows: Record<string, unknown>[] = [
+    { v: FORMAT, event: 'session', start, cwd, ...rooted(events[0]!), ...(events[0]!.backfill ? { backfill: 3 } : {}) },
+  ]
   for (const e of events) {
     const t = Date.parse(e.ts) - start
     if (e.cwd !== cwd) {
       cwd = e.cwd
       rows.push({ t, event: 'cwd_changed', cwd, ...rooted(e) })
     }
-    const { ts: _ts, sessionId: _s, cwd: _c, root: _r, rootName: _rn, project: _p, workProject: _w, event, ...rest } = e
+    const { ts: _ts, sessionId: _s, cwd: _c, root: _r, rootName: _rn, project: _p, workProject: _w, backfill: _b, event, ...rest } = e
     if (event === 'cwd_changed') continue
     const row: Record<string, unknown> = { t, event }
     const usual = DEFAULTS[event] ?? {}

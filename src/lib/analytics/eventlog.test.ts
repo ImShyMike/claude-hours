@@ -89,3 +89,28 @@ test('a root rides along with its cwd until the next cwd_changed, and back', () 
   ])
   expect(encodeSession(events)).toBe(text)
 })
+
+test("a backfilled run's events say so, and the mod's own log wins where both have the session", () => {
+  const backfill = (at: number) => ({ v: 1, event: 'session', start: at, cwd: '/code/terra', backfill: 3 })
+  // rebuilt from the transcript, whole, after the mod's files were deleted
+  const text = file(
+    backfill(start),
+    { t: 0, event: 'prompt', words: 1 },
+    { t: 60_000, event: 'turn_end', durationMs: 50_000 },
+    { t: 119_000, event: 'prompt', words: 2 },
+    { t: 200_000, event: 'turn_end', durationMs: 70_000 },
+    { v: 1, event: 'session', start: start + 120_000, cwd: '/code/terra' },
+    { t: 0, event: 'prompt', words: 2 },
+    { t: 80_000, event: 'turn_end', durationMs: 70_000 },
+  )
+  const events = decodeSession(text, 's1')
+  expect(events.map(e => [e.event, e.ts, e.backfill])).toEqual([
+    ['prompt', '2026-10-19T12:00:00.000Z', true],
+    ['turn_end', '2026-10-19T12:01:00.000Z', true],
+    ['prompt', '2026-10-19T12:02:00.000Z', undefined],
+    ['turn_end', '2026-10-19T12:03:20.000Z', undefined],
+  ])
+  // and it goes back the way it came
+  const rebuilt = decodeSession(file(backfill(start), { t: 0, event: 'prompt', words: 1 }), 's1')
+  expect(encodeSession(rebuilt)).toBe(file(backfill(start), { t: 0, event: 'prompt', words: 1 }))
+})

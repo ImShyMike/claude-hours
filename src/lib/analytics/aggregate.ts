@@ -12,12 +12,20 @@ export type Event = {
   [field: string]: unknown
 }
 
+// What counts as active time: everything (your prompts and Claude's work
+// around them), or only your prompts, the way Hackatime counts: each draft
+// you wrote, sent or given up, is a heartbeat over its typing, and also
+// counts the gap before it, up to the idle cap
+export type Counting = 'all' | 'prompts'
+
 export type Options = {
   // window start/end in epoch ms; omit for everything
   from?: number
   to?: number
   // idle gaps up to this long between activity count as active time
   idleCapMs: number
+  // 'all' if omitted
+  counting?: Counting
   // the IANA time zone days and hours are counted in; omit for this machine's
   tz?: string
 }
@@ -55,6 +63,10 @@ export type Summary = {
     abandonedMs: number
     typedChars: number
     pastedChars: number
+    // sent prompts with a paste in and those pastes' chars, backfilled ones
+    // too (a transcript shows a paste, never the typing around it)
+    pastedPrompts: number
+    pastedPromptChars: number
     // pasted or attached to sent prompts, counted by kind
     images: number
     audio: number
@@ -154,6 +166,7 @@ export function languageOf(path: string) {
 // Remote Control, or `claude -p`. Notifications, peers and schedules are
 // still activity, but they aren't prompts anyone wrote
 const HUMAN_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
+const isPersonPrompt = (e: Event) => e.event === 'prompt' && !e.isMeta && !(typeof e.origin === 'string' && !HUMAN_ORIGINS.has(e.origin))
 
 // a draft_abandoned line is written late, so it carries its own end. Parsing
 // costs more than the rest of what's done with an event, and the hub keeps
@@ -438,17 +451,40 @@ function placed([start, end]: Interval, moves: Move[] = [], home: string): [stri
 // wherever it was working. A subagent's turn counts only where it worked
 // away from the main thread's project: alongside it, the main turn already
 // covers that time. So two projects can share a stretch (each gets it in
-// full), and activeIntervals' total counts it once
-export function projectSpans(events: Event[], idleCapMs: number): Map<string, Interval[]> {
+// full), and activeIntervals' total counts it once. Counting only prompts,
+// the rest still say where a thread was working, but make no time, and the
+// prompts' typing counts as heartbeats do
+export function projectSpans(events: Event[], idleCapMs: number, counting: Counting = 'all'): Map<string, Interval[]> {
+  const raw = rawSpans(events, counting)
+  if (counting === 'prompts')
+    return regrouped(
+      heartbeats(
+        [...raw].flatMap(([project, intervals]) => intervals.map((i): [string, Interval] => [project, i])),
+        idleCapMs,
+      ),
+    )
+  const elsewhere = (project: string) => [...raw].flatMap(([p, intervals]) => (p === project ? [] : intervals))
+  return new Map([...raw].map(([project, intervals]) => [project, mergeWithin(intervals, idleCapMs, elsewhere(project))]))
+}
+
+// a scripted session: `claude -p` or the SDK, which a backfill finds as an
+// entrypoint other than the terminal's and the mod sees as origin `sdk`
+const isScripted = (events: Event[]) => events.some(e => e.event === 'session_start' && e.isInteractive === false)
+
+// a session's stretches by project, as they are, before any gap is bridged.
+// Counting only prompts, a script's prompts aren't anyone prompting
+function rawSpans(events: Event[], counting: Counting): Map<string, Interval[]> {
+  const raw = new Map<string, Interval[]>()
+  if (counting === 'prompts' && isScripted(events)) return raw
   const waits = waitsOf(events)
   const moves = movesOf(events)
-  const raw = new Map<string, Interval[]>()
   const add = (project: string, interval: Interval) => {
     const list = raw.get(project)
     if (list) list.push(interval)
     else raw.set(project, [interval])
   }
   for (const e of events) {
+    if (counting === 'prompts' && (isPersonPrompt(e) ? e.origin === 'sdk' : e.event !== 'draft_abandoned')) continue
     const end = time(e)
     const home = projectOf(e)
     const thread = moves.get(threadOf(e))
@@ -460,8 +496,34 @@ export function projectSpans(events: Event[], idleCapMs: number): Map<string, In
       }
     }
   }
-  const elsewhere = (project: string) => [...raw].flatMap(([p, intervals]) => (p === project ? [] : intervals))
-  return new Map([...raw].map(([project, intervals]) => [project, mergeWithin(intervals, idleCapMs, elsewhere(project))]))
+  return raw
+}
+
+// As Hackatime counts: each stretch also gets the gap before it, whatever
+// came before, up to capMs. So a break still counts capMs, before the
+// stretch that ends it, and nothing runs on after the last one. The first
+// one gets capMs too, as if after a long break (Hackatime gives it none), so
+// a stretch only ever depends on what's within capMs before it. New
+// intervals, each with its key, in time order
+function heartbeats<K>(pieces: [K, Interval][], capMs: number): [K, Interval][] {
+  const led = pieces.map(([key, [start, end]]): [K, Interval] => [key, [start, end]]).sort((a, b) => a[1][0] - b[1][0])
+  // where the stretches so far reach
+  let reach = -Infinity
+  for (const [, piece] of led) {
+    if (piece[0] > reach) piece[0] = Math.max(reach, piece[0] - capMs)
+    reach = Math.max(reach, piece[1])
+  }
+  return led
+}
+
+const regrouped = (pieces: [string, Interval][]) => {
+  const byProject = new Map<string, Interval[]>()
+  for (const [project, piece] of pieces) {
+    const list = byProject.get(project)
+    if (list) list.push(piece)
+    else byProject.set(project, [piece])
+  }
+  return new Map([...byProject].map(([project, intervals]): [string, Interval[]] => [project, mergeWithin(intervals, 0)]))
 }
 
 function clip([start, end]: Interval, from: number, to: number): Interval | undefined {
@@ -532,9 +594,73 @@ function dayRange(from: number, to: number, clock: Clock) {
   return days
 }
 
+// One session's time in a window: its projects' intervals, its active time
+// as one (in time order), its modes, and when you turned to it
+type Part = { sessionId: string; inside: [string, Interval[]][]; active: Interval[]; changes: { at: number; mode: string }[]; turnedTo: number[] }
+
+// The moments you turned to a session, in time order: when you started typing
+// a prompt you sent or gave up on. Notifications and skill bodies aren't you
+function turnedTo(events: Event[]): number[] {
+  return events
+    .filter(e => (e.event === 'prompt' && (e.origin === undefined || e.origin === 'composer') && !e.isMeta) || e.event === 'draft_abandoned')
+    .map(e => time(e) - (Number(e.typingMs) || 0))
+    .sort((a, b) => a - b)
+}
+
+// Wall-clock time counts once. A stretch several sessions were active in goes
+// to the one in the foreground, the one you last turned to, so a session left
+// working while you write in another adds nothing then. Where none of them
+// has been turned to yet, they split it evenly. Each part's pieces, in time
+// order, with the share of each it gets
+function foreground(parts: Part[]): [Interval, number][][] {
+  const owned: [Interval, number][][] = parts.map(() => [])
+  // 1 and -1 open and close a session's active time, 0 is a turn to it
+  const points: [at: number, part: number, step: 1 | -1 | 0][] = []
+  for (const [i, part] of parts.entries()) {
+    for (const [start, end] of part.active) points.push([start, i, 1], [end, i, -1])
+    for (const at of part.turnedTo) points.push([at, i, 0])
+  }
+  points.sort((a, b) => a[0] - b[0])
+  const open = new Set<number>()
+  const last = parts.map(() => -Infinity)
+  let prev = -Infinity
+  for (const [at, i, step] of points) {
+    if (at > prev && open.size) {
+      let latest = -Infinity
+      for (const j of open) latest = Math.max(latest, last[j]!)
+      const front = [...open].filter(j => last[j] === latest)
+      for (const j of front) {
+        const pieces = owned[j]!
+        const before = pieces.at(-1)
+        // a stretch it keeps goes on the piece before it
+        if (before && before[0][1] === prev && before[1] === 1 / front.length) before[0][1] = at
+        else pieces.push([[prev, at], 1 / front.length])
+      }
+    }
+    prev = at
+    if (step === 0) last[i] = at
+    else if (step === 1) open.add(i)
+    else open.delete(i)
+  }
+  return owned
+}
+
+// where intervals (in time order) overlap weighted pieces (in time order too),
+// each overlap with its piece's weight
+function* weighted(intervals: Interval[], pieces: [Interval, number][]): Generator<[Interval, number]> {
+  let j = 0
+  for (const interval of intervals) {
+    while (j < pieces.length && pieces[j]![0][1] <= interval[0]) j++
+    for (let k = j; k < pieces.length && pieces[k]![0][0] < interval[1]; k++) {
+      const piece = clip(interval, pieces[k]![0][0], pieces[k]![0][1])
+      if (piece) yield [piece, pieces[k]![1]]
+    }
+  }
+}
+
 const inc = <K>(map: Map<K, number>, key: K, by = 1) => map.set(key, (map.get(key) ?? 0) + by)
 
-export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): Summary {
+export function summarize(all: Event[], { from, to, idleCapMs, counting, tz }: Options): Summary {
   const clock = clockOf(tz)
   const valid = all.filter(e => e && typeof e.ts === 'string' && !Number.isNaN(time(e)) && e.sessionId)
   // a turn's span starts before its own line, so the default window does too.
@@ -545,13 +671,16 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     first = Math.min(first, time(e) - leadMs(e))
     last = Math.max(last, time(e))
   }
+  // counting only prompts, the first one's gap before it too
+  if (counting === 'prompts') first -= idleCapMs
   const lo = from ?? first
   const hi = to ?? last + 1
   const inWindow = (e: Event) => time(e) >= lo && time(e) < hi
 
   // time: per session, and within it per project, so a cd between repos
-  // doesn't bridge them. A stretch two projects share counts in full for
-  // each, and once for the total, days and hours
+  // doesn't bridge them. A stretch two of a session's projects share counts
+  // in full for each, and once for the total, days and hours; one several
+  // sessions share counts only for the one in the foreground (see foreground)
   const sessionsOf = new Map<string, Event[]>()
   for (const e of valid) {
     const list = sessionsOf.get(e.sessionId)
@@ -570,40 +699,73 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
   const sessionMs = new Map<string, number>()
   let totalMs = 0
   const kept = (interval: Interval) => (valid.length ? clip(interval, lo, hi) : undefined)
+  const parts: Part[] = []
+  // counting only prompts, the gap before one is from the last one in any
+  // session, as Hackatime takes it from the last heartbeat, so a session over
+  // just before the window still gives the first prompt in it its gap (one
+  // over further back gives the whole cap, so it isn't needed)
+  const reach = counting === 'prompts' ? idleCapMs : 0
+  const counted = new Map<string, Map<string, Interval[]>>()
   for (const [sessionId, events] of sessionsOf) {
     // a session over before the window has nothing in it, so a short range
     // skips most of history
-    if (lastAt(events) < lo) continue
-    const byProject = projectSpans(events, idleCapMs)
+    if (lastAt(events) + reach < lo) continue
+    counted.set(sessionId, counting === 'prompts' ? rawSpans(events, counting) : projectSpans(events, idleCapMs))
+  }
+  if (counting === 'prompts') {
+    const all = [...counted].flatMap(([sessionId, byProject]) =>
+      [...byProject].flatMap(([project, intervals]) => intervals.map((i): [[string, string], Interval] => [[sessionId, project], i])),
+    )
+    const bySession = new Map<string, [string, Interval][]>()
+    for (const [[sessionId, project], i] of heartbeats(all, idleCapMs)) {
+      const list = bySession.get(sessionId)
+      if (list) list.push([project, i])
+      else bySession.set(sessionId, [[project, i]])
+    }
+    for (const sessionId of counted.keys()) counted.set(sessionId, regrouped(bySession.get(sessionId) ?? []))
+  }
+  for (const [sessionId, byProject] of counted) {
+    const events = sessionsOf.get(sessionId)!
     const inside: [string, Interval[]][] = []
-    const mine = new Map<string, number>()
     for (const [project, intervals] of byProject) {
       const k = intervals.map(kept).filter((i): i is Interval => !!i)
-      for (const [start, end] of k) {
-        inc(projectMs, project, end - start)
-        inc(mine, project, end - start)
-        spans.push({ sessionId, project, from: start, to: end })
-      }
+      for (const [start, end] of k) spans.push({ sessionId, project, from: start, to: end })
       if (k.length) inside.push([project, k])
+    }
+    const active = mergeWithin([...byProject.values()].flat(), 0)
+      .map(kept)
+      .filter((i): i is Interval => !!i)
+    parts.push({ sessionId, inside, active, changes: modesOf(events), turnedTo: turnedTo(events) })
+  }
+  // only what each session had in the foreground counts, so an hour spent
+  // across three sessions is an hour
+  const owned = foreground(parts)
+  for (const [i, { sessionId, inside, changes }] of parts.entries()) {
+    const pieces = owned[i]!
+    const mine = new Map<string, number>()
+    for (const [project, intervals] of inside) {
+      for (const [[start, end], weight] of weighted(intervals, pieces)) {
+        inc(projectMs, project, (end - start) * weight)
+        inc(mine, project, (end - start) * weight)
+      }
     }
     sessionProjects.set(sessionId, mine)
     for (const [project, interval, share] of shares(inside)) {
-      for (const [day, ms] of byDay(interval, clock)) {
-        const split = dayProjects.get(day) ?? {}
-        split[project] = (split[project] ?? 0) + ms * share
-        dayProjects.set(day, split)
+      for (const [piece, weight] of weighted([interval], pieces)) {
+        for (const [day, ms] of byDay(piece, clock)) {
+          const split = dayProjects.get(day) ?? {}
+          split[project] = (split[project] ?? 0) + ms * share * weight
+          dayProjects.set(day, split)
+        }
+        for (const [hour, ms] of byHour(piece, clock)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share * weight
       }
-      for (const [hour, ms] of byHour(interval, clock)) hourProjects[hour]![project] = (hourProjects[hour]![project] ?? 0) + ms * share
     }
-    const changes = modesOf(events)
-    for (const interval of mergeWithin([...byProject.values()].flat(), 0)) {
-      const k = kept(interval)
-      if (!k) continue
-      for (const [mode, ms] of byMode(k, changes)) inc(modeMs, mode, ms)
-      for (const [day, ms] of byDay(k, clock)) inc(dayMs, day, ms)
-      for (const [hour, ms] of byHour(k, clock)) hours[hour]! += ms
-      totalMs += k[1] - k[0]
-      inc(sessionMs, sessionId, k[1] - k[0])
+    for (const [k, weight] of pieces) {
+      for (const [mode, ms] of byMode(k, changes)) inc(modeMs, mode, ms * weight)
+      for (const [day, ms] of byDay(k, clock)) inc(dayMs, day, ms * weight)
+      for (const [hour, ms] of byHour(k, clock)) hours[hour]! += ms * weight
+      totalMs += (k[1] - k[0]) * weight
+      inc(sessionMs, sessionId, (k[1] - k[0]) * weight)
     }
   }
 
@@ -630,6 +792,8 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
     abandonedMs: 0,
     typedChars: 0,
     pastedChars: 0,
+    pastedPrompts: 0,
+    pastedPromptChars: 0,
     images: 0,
     audio: 0,
     documents: 0,
@@ -683,7 +847,7 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
 
     switch (e.event) {
       case 'prompt':
-        if (e.isMeta || (typeof e.origin === 'string' && !HUMAN_ORIGINS.has(e.origin))) break
+        if (!isPersonPrompt(e)) break
         promptCount++
         s.prompts++
         words += Number(e.words) || 0
@@ -698,6 +862,10 @@ export function summarize(all: Event[], { from, to, idleCapMs, tz }: Options): S
           writing.sent++
           countTyping(e)
         } else writing.pastedChars += Number(e.pastedChars) || 0 // a prompt that was only a paste
+        if (Number(e.pastedChars) > 0) {
+          writing.pastedPrompts++
+          writing.pastedPromptChars += Number(e.pastedChars)
+        }
         break
       case 'draft_abandoned':
         writing.abandoned++

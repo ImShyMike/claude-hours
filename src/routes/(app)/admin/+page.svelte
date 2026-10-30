@@ -20,27 +20,6 @@
 
   <Card.Root>
     <Card.Header>
-      <Card.Title>Idle cap</Card.Title>
-      <Card.Description>A quiet stretch up to this long still counts as active, for everyone's time.</Card.Description>
-    </Card.Header>
-    <Card.Content>
-      <form method="post" action="?/idleCap" class="flex flex-wrap gap-2" use:enhance>
-        {#each data.idleCaps as minutes (minutes)}
-          <Button
-            type="submit"
-            name="minutes"
-            value={minutes}
-            size="sm"
-            variant={minutes === data.idleCapMin ? 'default' : 'outline'}
-            aria-pressed={minutes === data.idleCapMin}>{minutes} min</Button
-          >
-        {/each}
-      </form>
-    </Card.Content>
-  </Card.Root>
-
-  <Card.Root>
-    <Card.Header>
       <Card.Title>Deletion requests</Card.Title>
       <Card.Description>Approving deletes the person's account and everything they've sent, at once and for good.</Card.Description>
     </Card.Header>
