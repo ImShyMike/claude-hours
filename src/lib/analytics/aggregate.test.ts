@@ -78,7 +78,7 @@ test('counting only prompts, the gap before one is from the last prompt in any s
   ])
 })
 
-test('counting only prompts, a range takes its first prompt\'s gap from the one before it, as Hackatime\'s boundary-aware sums do', () => {
+test("counting only prompts, a range takes its first prompt's gap from the one before it, as Hackatime's boundary-aware sums do", () => {
   const events = [
     at('2026-10-19T11:59:00Z', 'prompt', { origin: 'composer' }),
     at('2026-10-19T12:10:00Z', 'prompt', { origin: 'composer' }),
@@ -93,7 +93,7 @@ test('counting only prompts, a range takes its first prompt\'s gap from the one 
   expect(summarize(early, { from, to, idleCapMs: 2 * MIN, counting: 'prompts' }).totalMs).toBe(MIN)
 })
 
-test('counting only prompts, a script\'s prompts count nothing, though Claude\'s work for it still does', () => {
+test("counting only prompts, a script's prompts count nothing, though Claude's work for it still does", () => {
   const events = [
     at('2026-10-19T12:00:00Z', 'session_start', { sessionId: 'p', isInteractive: false }),
     at('2026-10-19T12:00:00Z', 'prompt', { sessionId: 'p', origin: 'composer' }),

@@ -456,7 +456,13 @@ function placed([start, end]: Interval, moves: Move[] = [], home: string): [stri
 // prompts' typing counts as heartbeats do
 export function projectSpans(events: Event[], idleCapMs: number, counting: Counting = 'all'): Map<string, Interval[]> {
   const raw = rawSpans(events, counting)
-  if (counting === 'prompts') return regrouped(heartbeats([...raw].flatMap(([project, intervals]) => intervals.map((i): [string, Interval] => [project, i])), idleCapMs))
+  if (counting === 'prompts')
+    return regrouped(
+      heartbeats(
+        [...raw].flatMap(([project, intervals]) => intervals.map((i): [string, Interval] => [project, i])),
+        idleCapMs,
+      ),
+    )
   const elsewhere = (project: string) => [...raw].flatMap(([p, intervals]) => (p === project ? [] : intervals))
   return new Map([...raw].map(([project, intervals]) => [project, mergeWithin(intervals, idleCapMs, elsewhere(project))]))
 }

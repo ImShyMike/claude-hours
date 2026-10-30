@@ -167,7 +167,8 @@ export async function digest(
   const range = from === undefined && to === undefined ? (entry.whole ??= sum()) : sum()
   const earlier = shift ? { from: from! - shift, to: to! - shift } : undefined
   const before =
-    earlier && timed(timing, 'before', () => summarize(within(all, gap, earlier.from, earlier.to), { ...earlier, idleCapMs: cap, counting, tz }).totalMs)
+    earlier &&
+    timed(timing, 'before', () => summarize(within(all, gap, earlier.from, earlier.to), { ...earlier, idleCapMs: cap, counting, tz }).totalMs)
   const home = new Map(ever.sessions.map(s => [s.sessionId, s.project]))
   const ids = new Set([...range.sessions.map(s => s.sessionId), ...range.spans.map(s => s.sessionId)])
   const homes = Object.fromEntries([...ids].map(id => [id, home.get(id) ?? '']))
