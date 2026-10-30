@@ -71,6 +71,7 @@ const setup = (on: On) => {
   let backfill: { exitCode: number; stdout: string; stderr: string } | Error = { exitCode: 0, stdout: '', stderr: '' }
   // the session's transcript, for the grep that finds its compactions
   let transcript: Record<string, unknown>[] = []
+  let transcriptFails = false
   let cwd = '/proj'
   let now = 1_790_000_000_000
   on('clock.now', () => ({ value: now }))
@@ -109,16 +110,19 @@ const setup = (on: On) => {
       if (e.argv[2].includes('wc -lc')) stdout = `      ${next.endsWith('\n') ? 1 : 0} ${new TextEncoder().encode(next).length}\n`
     }
     if (cmd === 'sh' && e.argv[2]?.includes('*.jsonl.gz')) stdout = sweepOutput
-    // the grep for compaction boundaries, whole lines, then for each prompt's time and mode alone
-    // read from a byte on, after printing its size
-    if (cmd === 'sh' && e.argv[2]?.includes('/projects/')) {
-      const text = transcript.map(entry => `${JSON.stringify(entry)}\n`).join('')
-      const lines = text.slice(Number(e.argv[9]) - 1).split('\n')
-      stdout = [
-        String(text.length),
-        ...lines.filter(line => line.includes(e.argv[4]!)),
-        ...lines.filter(line => line.includes(e.argv[7]!)).flatMap(line => line.match(new RegExp(e.argv[8]!, 'g')) ?? []),
-      ].join('\n')
+    // the transcript's path and size, then the grep from a byte on: compaction
+    // boundaries as whole lines, each prompt's time and mode alone
+    const text = transcript.map(entry => `${JSON.stringify(entry)}\n`).join('')
+    if (cmd === 'sh' && e.argv[2]?.includes('/projects/') && transcript.length)
+      stdout = `/home/test/.claude/projects/-proj/sess-1.jsonl\n${text.length}\n`
+    if (cmd === 'sh' && e.argv[2]?.includes('tail -c')) {
+      if (transcriptFails) throw new Error('$.process.run(sh) aborted: still running after 2000ms')
+      const [, from, boundary, mode, , pair] = e.argv.slice(4) as string[]
+      stdout = text
+        .slice(Number(from) - 1)
+        .split('\n')
+        .flatMap(line => (line.includes(boundary!) ? [line] : line.includes(mode!) ? (line.match(new RegExp(pair!, 'g')) ?? []) : []))
+        .join('\n')
     }
     // the config, written where only its owner can read it
     if (cmd === 'sh' && e.argv[2]?.includes('umask 077')) files.set(e.argv[4]!, e.init?.stdin ?? '')
@@ -189,6 +193,7 @@ const setup = (on: On) => {
     setSweep: (out: string) => (sweepOutput = out),
     setBackfill: (out: typeof backfill) => (backfill = out),
     setTranscript: (entries: Record<string, unknown>[]) => (transcript = entries),
+    failTranscript: (fails: boolean) => (transcriptFails = fails),
     now: () => now,
     cd: (dir: string) => (cwd = dir),
     tick: (ms: number) => (now += ms),
@@ -793,13 +798,43 @@ test('each look at the transcript reads only what was added, from a little befor
   on('turn.complete', () => ({ text: '' }))
   const filler = { type: 'assistant', message: { content: 'x'.repeat(100 * 1024) } }
   setTranscript([filler, sent(now(), 'plan')])
-  const reads = () => runs.filter(argv => argv[0] === 'sh' && argv[2]?.includes('/projects/')).map(argv => Number(argv[9]))
+  const reads = () => runs.filter(argv => argv[0] === 'sh' && argv[2]?.includes('tail -c')).map(argv => Number(argv[5]))
 
   await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
   const size = JSON.stringify(filler).length + JSON.stringify(sent(now(), 'plan')).length + 2
   await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
 
   expect(reads()).toEqual([1, size - 64 * 1024 + 1])
+})
+
+test('a look at the transcript that runs out of time still moves on, so the next reads only what was added', async ($, on) => {
+  const { runs, setTranscript, failTranscript, now } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  const filler = { type: 'assistant', message: { content: 'x'.repeat(100 * 1024) } }
+  setTranscript([filler, sent(now(), 'plan')])
+  const reads = () => runs.filter(argv => argv[0] === 'sh' && argv[2]?.includes('tail -c')).map(argv => Number(argv[5]))
+
+  failTranscript(true)
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
+  failTranscript(false)
+  const size = JSON.stringify(filler).length + JSON.stringify(sent(now(), 'plan')).length + 2
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't2', reason: 'answer', isAborted: false })
+
+  expect(reads()).toEqual([1, size - 64 * 1024 + 1])
+})
+
+test('the first look at a long transcript starts near its end', async ($, on) => {
+  const { lines, runs, setTranscript, now } = setup(on)
+  on('turn.complete', () => ({ text: '' }))
+  const filler = { type: 'assistant', message: { content: 'x'.repeat(5 * 1024 * 1024) } }
+  setTranscript([sent(now() - 1_000, 'default'), filler, sent(now(), 'plan')])
+  const reads = () => runs.filter(argv => argv[0] === 'sh' && argv[2]?.includes('tail -c')).map(argv => Number(argv[5]))
+  const size = JSON.stringify(sent(now() - 1_000, 'default')).length + JSON.stringify(filler).length + JSON.stringify(sent(now(), 'plan')).length + 3
+
+  await $.turn.complete({ answer: '', durationMs: 1_000, turnId: 't1', reason: 'answer', isAborted: false })
+
+  expect(reads()).toEqual([size - 4 * 1024 * 1024 + 1])
+  expect(lines.filter(l => l.event === 'mode')).toEqual([{ event: 'mode', t: 0, mode: 'plan' }])
 })
 
 test('a prompt sent while a turn runs is marked midTurn', async ($, on) => {

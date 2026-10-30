@@ -371,29 +371,37 @@ const settled = () => Promise.all([...working])
 // line, which holds its text. A subagent's are in its own file. Only what was
 // added since the last look is read, from a little before where that ended,
 // so a line still being written then is read whole now; what's read twice is
-// already seen
+// already seen. A session this process hasn't looked at yet is read from
+// near its end, as what's older belongs to an earlier file (backfill has
+// it). Where a look ends is kept before it reads, so one that runs out of
+// time skips its stretch instead of every later look reading it again
 const TRANSCRIPT_OVERLAP = 64 * 1024
+const TRANSCRIPT_FIRST_LOOK = 4 * 1024 * 1024
 const BOUNDARY = '"subtype":"compact_boundary"'
+const BOUNDARY_LINE = '^.*"subtype":"compact_boundary".*$'
 const PROMPT_MODE = '","permissionMode":"'
 const PROMPT_MODE_PAIR = '"timestamp":"[^"]*","permissionMode":"[A-Za-z]*"'
 type Boundary = { uuid: string; timestamp: string; compactMetadata?: Record<string, unknown> }
 
 async function readTranscript($: EngineInterface) {
   const [configDir, home, sessionId] = await Promise.all([$.env.get('CLAUDE_CONFIG_DIR'), homeDir($), $.session.id()])
-  const done = await read($, transcriptRead)
-  const from = done?.sessionId === sessionId ? Math.max(1, done.bytes - TRANSCRIPT_OVERLAP + 1) : 1
-  // its size first, then the boundaries, then each prompt's time and mode
-  const script =
-    'for f in "$2"/projects/*/"$3".jsonl; do [ -f "$f" ] || continue; wc -c < "$f"; ' +
-    'tail -c +"$6" "$f" | grep -F -e "$1"; tail -c +"$6" "$f" | grep -F -e "$4" | grep -oE -e "$5"; done'
-  const argv = ['sh', '-c', script, 'sh', BOUNDARY, configDir || `${home}/.claude`, sessionId, PROMPT_MODE, PROMPT_MODE_PAIR, String(from)]
-  const { stdout } = await $.process.run(argv, { timeoutMs: 2_000 })
   const boundaries: Boundary[] = []
   const modes: { at: number; mode: string }[] = []
-  const [size, ...lines] = stdout.split('\n')
-  const bytes = Number(size?.trim())
-  if (size?.trim() && Number.isInteger(bytes)) await update($, transcriptRead, () => ({ sessionId, bytes }))
-  for (const line of lines) {
+  // where it is and its size first
+  const find = 'for f in "$1"/projects/*/"$2".jsonl; do [ -f "$f" ] || continue; echo "$f"; wc -c < "$f"; break; done'
+  const found = await $.process.run(['sh', '-c', find, 'sh', configDir || `${home}/.claude`, sessionId], { timeoutMs: 2_000 })
+  const [path, size] = found.stdout.split('\n').map(line => line.trim())
+  const bytes = Number(size)
+  if (!path || !size || !Number.isInteger(bytes)) return { boundaries, modes, sessionId }
+  const done = await read($, transcriptRead)
+  const from = Math.max(1, (done?.sessionId === sessionId ? done.bytes - TRANSCRIPT_OVERLAP : bytes - TRANSCRIPT_FIRST_LOOK) + 1)
+  await update($, transcriptRead, () => ({ sessionId, bytes }))
+  // one pass for the lines with either, then the boundaries whole and each
+  // prompt's time and mode alone
+  const script = 'tail -c +"$2" "$1" | grep -F -e "$3" -e "$4" | grep -oE -e "$5" -e "$6"'
+  const argv = ['sh', '-c', script, 'sh', path, String(from), BOUNDARY, PROMPT_MODE, BOUNDARY_LINE, PROMPT_MODE_PAIR]
+  const { stdout } = await $.process.run(argv, { timeoutMs: 2_000 })
+  for (const line of stdout.split('\n')) {
     try {
       if (line.startsWith('"timestamp"')) {
         const { timestamp, permissionMode } = JSON.parse(`{${line}}`)
